@@ -15,16 +15,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import {
-  Bell, Building2, CarFront, ChevronsLeft, Home, LayoutGrid, LogOut, Moon, Search, Smartphone, Sun,
+  Bell, Building2, CarFront, Check, ChevronsLeft, Home, Languages, LayoutGrid, LogOut, Moon, Search, Smartphone, Sun,
   Truck, Users, Wallet, ShieldCheck, Boxes,
 } from "lucide-react";
-
-const GROUP_LABELS: Record<string, string> = {
-  MAIN: "Overview",
-  MANPOWER: "Manpower Business",
-  TRANSPORT: "Transport Business",
-  SYSTEM: "Manage",
-};
+import { useLang, t, viewLabel } from "@/lib/i18n";
 
 const GROUP_ICONS: Record<string, React.ReactNode> = {
   MAIN: <Home className="h-3 w-3" />,
@@ -44,6 +38,7 @@ const GROUP_ACCENT: Record<string, string> = {
 function SideNav({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onToggle?: () => void; onNavigate?: () => void }) {
   const { view, navigate } = useNav();
   const { scope } = useBusiness();
+  const { lang } = useLang();
 
   const groups = useMemo(() => {
     const order = ["MAIN", "MANPOWER", "TRANSPORT", "SYSTEM"] as const;
@@ -85,7 +80,7 @@ function SideNav({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onT
               {!collapsed && (
                 <p className={cn("mb-1.5 flex items-center gap-1.5 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground", GROUP_ACCENT[group.key])}>
                   {GROUP_ICONS[group.key]}
-                  {GROUP_LABELS[group.key]}
+                  {t(lang, `nav.group.${group.key}`)}
                 </p>
               )}
               <ul className="space-y-0.5">
@@ -105,10 +100,10 @@ function SideNav({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onT
                               ? "bg-primary/10 text-primary"
                               : "text-muted-foreground hover:bg-muted hover:text-foreground"
                           )}
-                          title={collapsed ? v.label : undefined}
+                          title={collapsed ? viewLabel(lang, v.id, v.label) : undefined}
                         >
                           <v.icon className={cn("h-4 w-4 shrink-0", active && GROUP_ACCENT[group.key], !active && "text-muted-foreground")} aria-hidden />
-                          {!collapsed && <span className="truncate">{v.label}</span>}
+                          {!collapsed && <span className="truncate">{viewLabel(lang, v.id, v.label)}</span>}
                         </button>
                       </li>
                     );
@@ -143,6 +138,7 @@ function ThemeToggle() {
 function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
   const { owner, logout } = useAuth();
   const { navigate } = useNav();
+  const { lang, setLang } = useLang();
   const [notifCount, setNotifCount] = useState(0);
   const { canInstall, install } = usePwaInstall();
   const prevCountRef = useRef(0);
@@ -202,8 +198,8 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
           aria-label="Global search"
         >
           <Search className="h-4 w-4 shrink-0" />
-          <span className="min-w-0 truncate whitespace-nowrap hidden md:inline">Search employees, properties, vehicles…</span>
-          <span className="md:hidden whitespace-nowrap">Search…</span>
+          <span className="min-w-0 truncate whitespace-nowrap hidden md:inline">{t(lang, "topbar.search")}</span>
+          <span className="md:hidden whitespace-nowrap">{t(lang, "topbar.searchShort")}</span>
           <kbd className="ml-auto hidden md:inline-flex shrink-0 rounded border bg-background px-1.5 font-mono text-[10px]">Ctrl K</kbd>
         </button>
 
@@ -225,6 +221,25 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
           <ThemeToggle />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-10 w-10" aria-label={t(lang, "topbar.language")} title={t(lang, "topbar.language")}>
+                <Languages className="h-5 w-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-40">
+              <DropdownMenuLabel>{t(lang, "topbar.language")}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setLang("en")} aria-checked={lang === "en"} role="menuitemradio">
+                {lang === "en" ? <Check className="mr-2 h-4 w-4 text-primary" /> : <span className="mr-2 inline-block h-4 w-4" aria-hidden />}
+                {t(lang, "lang.en")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setLang("hi")} aria-checked={lang === "hi"} role="menuitemradio">
+                {lang === "hi" ? <Check className="mr-2 h-4 w-4 text-primary" /> : <span className="mr-2 inline-block h-4 w-4" aria-hidden />}
+                {t(lang, "lang.hi")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
               <button className="ml-0.5 flex items-center gap-2 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Owner menu">
                 <Avatar className="h-9 w-9 border">
                   <AvatarFallback className="bg-emerald-100 text-emerald-800 text-xs font-bold dark:bg-emerald-900 dark:text-emerald-200">{initials}</AvatarFallback>
@@ -238,10 +253,10 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => navigate("owners")}>
-                <ShieldCheck className="mr-2 h-4 w-4" /> Owners
+                <ShieldCheck className="mr-2 h-4 w-4" /> {t(lang, "menu.owners")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => navigate("settings")}>
-                <Building2 className="mr-2 h-4 w-4" /> Business settings
+                <Building2 className="mr-2 h-4 w-4" /> {t(lang, "menu.settings")}
               </DropdownMenuItem>
               {canInstall && (
                 <DropdownMenuItem
@@ -251,12 +266,12 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
                     })
                   }
                 >
-                  <Smartphone className="mr-2 h-4 w-4" /> Install app
+                  <Smartphone className="mr-2 h-4 w-4" /> {t(lang, "menu.install")}
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => logout()} className="text-red-600 dark:text-red-400">
-                <LogOut className="mr-2 h-4 w-4" /> Log out
+                <LogOut className="mr-2 h-4 w-4" /> {t(lang, "menu.logout")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -269,21 +284,22 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
 function BusinessBanner() {
   const { scope, setScope } = useBusiness();
   const { navigate } = useNav();
+  const { lang } = useLang();
   const scopeInfo = {
-    ALL: { label: "All Businesses", cls: "bg-muted text-muted-foreground border" },
-    MANPOWER: { label: "Manpower Business", cls: "bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300" },
-    TRANSPORT: { label: "Transport Business", cls: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-300" },
+    ALL: { label: t(lang, "scope.badge.ALL"), cls: "bg-muted text-muted-foreground border" },
+    MANPOWER: { label: t(lang, "scope.badge.MANPOWER"), cls: "bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300" },
+    TRANSPORT: { label: t(lang, "scope.badge.TRANSPORT"), cls: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-300" },
   }[scope];
   const options: { key: BusinessScope; label: string }[] = [
-    { key: "ALL", label: "All" },
-    { key: "MANPOWER", label: "Manpower" },
-    { key: "TRANSPORT", label: "Transport" },
+    { key: "ALL", label: t(lang, "scope.ALL") },
+    { key: "MANPOWER", label: t(lang, "scope.MANPOWER") },
+    { key: "TRANSPORT", label: t(lang, "scope.TRANSPORT") },
   ];
   return (
     <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-2 px-3 pt-2.5 sm:px-5">
       <div className="flex items-center gap-2 overflow-hidden">
         <Badge variant="outline" className={cn("shrink-0 font-semibold", scopeInfo.cls)}>{scopeInfo.label}</Badge>
-        <span className="hidden text-xs text-muted-foreground truncate sm:inline">You are viewing {scopeInfo.label.toLowerCase()} — records never mix between businesses.</span>
+        <span className="hidden text-xs text-muted-foreground truncate sm:inline">{t(lang, `scope.hint.${scope}`)}</span>
       </div>
       <div className="flex shrink-0 items-center rounded-full border bg-card p-0.5" role="group" aria-label="Business scope">
         {options.map((o) => (
@@ -313,11 +329,12 @@ function BusinessBanner() {
 function BottomNav({ onOpenMore }: { onOpenMore: () => void }) {
   const { view, navigate } = useNav();
   const { setScope } = useBusiness();
+  const { lang } = useLang();
   const items = [
-    { key: "dashboard", label: "Home", icon: Home, action: () => { setScope("ALL"); navigate("dashboard"); } },
-    { key: "manpower", label: "Manpower", icon: Users, action: () => { setScope("MANPOWER"); navigate("manpower"); } },
-    { key: "transport", label: "Transport", icon: Truck, action: () => { setScope("TRANSPORT"); navigate("transport"); } },
-    { key: "payments", label: "Collections", icon: Wallet, action: () => navigate("payments") },
+    { key: "dashboard", label: t(lang, "nav.home"), icon: Home, action: () => { setScope("ALL"); navigate("dashboard"); } },
+    { key: "manpower", label: viewLabel(lang, "manpower", "Manpower"), icon: Users, action: () => { setScope("MANPOWER"); navigate("manpower"); } },
+    { key: "transport", label: viewLabel(lang, "transport", "Transport"), icon: Truck, action: () => { setScope("TRANSPORT"); navigate("transport"); } },
+    { key: "payments", label: viewLabel(lang, "payments", "Collections"), icon: Wallet, action: () => navigate("payments") },
   ];
   return (
     <nav aria-label="Bottom navigation" className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85 md:hidden pb-[env(safe-area-inset-bottom)]">
@@ -346,7 +363,7 @@ function BottomNav({ onOpenMore }: { onOpenMore: () => void }) {
           aria-label="More menu"
         >
           <LayoutGrid className="h-5 w-5" aria-hidden />
-          More
+          {t(lang, "nav.more")}
           <span className="h-0.5 w-6 rounded-full bg-transparent" aria-hidden />
         </button>
       </div>

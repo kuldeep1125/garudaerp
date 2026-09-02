@@ -15,7 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  CalendarRange, ClipboardCopy, Crown, EllipsisVertical, Info, KeyRound, Mail, Minus, Pencil,
+  CalendarRange, ClipboardCopy, Crown, EllipsisVertical, Info, KeyRound, Mail, MessageCircle, Minus, Pencil,
   Plus, Send, ShieldCheck, TrendingDown, TrendingUp, UserPlus,
 } from "lucide-react";
 import {
@@ -117,6 +117,14 @@ function MonthlyEmailDialog({ target, onClose }: { target: OwnerRow; onClose: ()
     );
     if (res.ok) onClose();
   };
+
+  // WhatsApp share — opens WhatsApp with the summary prefilled (mock, no server
+  // delivery). Prefers the owner's mobile number; falls back to a blank share sheet.
+  const waHref = (() => {
+    const digits = (target.mobile ?? "").replace(/\D/g, "");
+    const text = encodeURIComponent(data?.bodyText ?? "");
+    return digits ? `https://wa.me/${digits}?text=${text}` : `https://wa.me/?text=${text}`;
+  })();
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -224,6 +232,17 @@ function MonthlyEmailDialog({ target, onClose }: { target: OwnerRow; onClose: ()
 
         <DialogFooter className="gap-2">
           <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={onClose}>Close</Button>
+          {data && (
+            <Button
+              variant="outline"
+              className="min-h-10 flex-1 gap-1.5 border-emerald-300 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950 sm:flex-none"
+              asChild
+            >
+              <a href={waHref} target="_blank" rel="noreferrer" aria-label={`Share this summary with ${target.name} on WhatsApp`}>
+                <MessageCircle className="h-3.5 w-3.5" aria-hidden />WhatsApp
+              </a>
+            </Button>
+          )}
           <Button className="min-h-10 flex-1 gap-1.5 sm:flex-none" onClick={markSent} disabled={loading || !data || saving}>
             <Send className="h-3.5 w-3.5" aria-hidden />{saving ? "Logging…" : "Mark as sent"}
           </Button>

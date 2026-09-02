@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { RangeSelector, type RangeKey } from "@/components/shared/filters";
 import { MonthPicker, toMonth } from "@/components/shared/month-picker";
+import { t as tr, useLang } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -164,6 +165,7 @@ function monthShort(month: string): string {
 
 export default function DashboardView({ navigate }: ViewProps) {
   const { owner } = useAuth();
+  const { lang } = useLang();
   const [range, setRange] = useState<RangeKey>("today");
   const { data, loading, error, reload } = useAsync<SummaryResp>(
     () => api.get<SummaryResp>("/api/dashboard/summary" + (range !== "custom" ? `?range=${range}` : `?range=month`)),
@@ -207,10 +209,10 @@ export default function DashboardView({ navigate }: ViewProps) {
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={refreshAll} aria-label="Refresh dashboard">
               <RefreshCw className={cn("h-3.5 w-3.5", busy && "animate-spin")} aria-hidden />
-              <span className="hidden sm:inline">Refresh</span>
+              <span className="hidden sm:inline">{tr(lang, "common.refresh")}</span>
             </Button>
             <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => navigate("reports")}>
-              <Landmark className="h-3.5 w-3.5" aria-hidden />Reports
+              <Landmark className="h-3.5 w-3.5" aria-hidden />{tr(lang, "common.reports")}
             </Button>
           </div>
         }
@@ -251,11 +253,11 @@ export default function DashboardView({ navigate }: ViewProps) {
                 <div className="space-y-1">
                   <CardTitle className="flex items-center gap-2 text-base">
                     <Activity className="h-4 w-4 text-primary" aria-hidden />
-                    14-day performance
+                    {tr(lang, "dash.trend")}
                   </CardTitle>
                   <CardDescription className="text-xs">Manpower billing · collections · transport revenue</CardDescription>
                 </div>
-                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("reports")}>Reports</Button>
+                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("reports")}>{tr(lang, "common.reports")}</Button>
               </CardHeader>
               <CardContent>
                 {trendLoading ? (
@@ -279,7 +281,7 @@ export default function DashboardView({ navigate }: ViewProps) {
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2 text-base">
                   <PieChartIcon className="h-4 w-4 text-primary" aria-hidden />
-                  Expense split
+                  {tr(lang, "dash.expenseSplit")}
                 </CardTitle>
                 <CardDescription className="text-xs">This range, by business</CardDescription>
               </CardHeader>
@@ -416,10 +418,10 @@ export default function DashboardView({ navigate }: ViewProps) {
                   <div className="space-y-0.5">
                     <CardTitle className="flex items-center gap-2 text-base">
                       <CalendarRange className="h-4 w-4 text-primary" aria-hidden />
-                      Monthly business summary
+                      {tr(lang, "dash.monthlySummary")}
                     </CardTitle>
                     <CardDescription className="text-xs">
-                      {monthShort(monthly.prevMonth)} → {monthShort(monthly.month)} · both businesses
+                      {monthShort(monthly.prevMonth)} → {monthShort(monthly.month)} · {tr(lang, "dash.bothBusinesses")}
                     </CardDescription>
                   </div>
                   <div className="no-print flex items-center gap-1.5">
@@ -502,7 +504,7 @@ export default function DashboardView({ navigate }: ViewProps) {
           <section className="grid gap-3 lg:grid-cols-2" aria-label="Collections and attention">
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-base">Collections</CardTitle>
+                <CardTitle className="text-base">{tr(lang, "dash.collections")}</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-3 gap-2">
@@ -541,8 +543,8 @@ export default function DashboardView({ navigate }: ViewProps) {
 
             <Card>
               <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-base">Needs attention</CardTitle>
-                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("notifications")}>View all</Button>
+                <CardTitle className="text-base">{tr(lang, "dash.attention")}</CardTitle>
+                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("notifications")}>{tr(lang, "common.viewAll")}</Button>
               </CardHeader>
               <CardContent className="space-y-1.5">
                 {(data.attention ?? []).length === 0 && (
@@ -577,11 +579,11 @@ export default function DashboardView({ navigate }: ViewProps) {
                 <div className="space-y-1">
                   <CardTitle className="flex items-center gap-2 text-base">
                     <History className="h-4 w-4 text-primary" aria-hidden />
-                    Recent activity
+                    {tr(lang, "dash.activity")}
                   </CardTitle>
                   <CardDescription className="text-xs">Latest actions across both businesses — fully audited</CardDescription>
                 </div>
-                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("audit")}>View all</Button>
+                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("audit")}>{tr(lang, "common.viewAll")}</Button>
               </CardHeader>
               <CardContent>
                 {auditLoading ? (

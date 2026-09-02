@@ -211,3 +211,26 @@ Stage Summary:
 - Employee-detail panels must filter to the same 30-day window as their summary numbers (window30 Set pattern).
 - Known cosmetic: print output may include trailing blank pages (visibility-based print CSS). Acceptable; revisit only if users complain.
 - Next-step candidates: i18n (Hindi) scaffolding per SRS Phase 2; per-property attendance drill-down from manpower dashboard heat-map to property-detail; WhatsApp share button beside "Mark as sent" (still mock); notification-arrival e2e test (needs two browser contexts); dark-mode visual re-check of email dialog via ThemeToggle (not media emulation).
+
+---
+Task ID: 10
+Agent: main (orchestrator)
+Task: QA round; i18n (EN/Hindi) scaffolding; WhatsApp share on owner email dialog; dark-mode visual re-check.
+
+Work Log:
+- QA first: lint + tsc clean (src/), server 200, agent-browser sweep over 58 clickable nav elements — ZERO console errors. Stable → new features.
+- FEATURE A (i18n scaffolding — SRS Phase 2): new src/lib/i18n.ts — Lang ("en"|"hi"), module-singleton store persisted to localStorage("bizhub-lang") using the canonical useSyncExternalStore pattern (hydration-safe, no setState-in-effect), t(lang,key) with en→key fallback, viewLabel(lang,id,enLabel) + HI_VIEWS map for nav ids, DICT with ~35 curated keys per language. document.documentElement.lang syncs on change.
+- Coverage wired: SideNav group headers (nav.group.*) + item labels (viewLabel); TopBar search placeholder (topbar.search/searchShort); TopBar NEW Language dropdown (Languages icon, menuitemradio English/हिन्दी with Check indicator, aria-checked); owner dropdown menu (Owners/settings/audit/install/logout); BusinessBanner badge+scope pills+hint line (scope.badge.*/scope.*/scope.hint.*); BottomNav (nav.home, viewLabel, nav.more); dashboard card titles (dash.monthlySummary/bothBusinesses/trend/expenseSplit/collections/attention/activity) + header buttons (common.refresh/reports/viewAll).
+- Settings: NEW LanguageCard (radiogroup, two big option rows with native names "English"/"हिन्दी", glyph chips A/अ, sample-line previews, primary ring on active, Sparkles note explaining scaffolding scope). Inserted as card 3.
+- NAMING PITFALL: dashboard-view already had a local `const t = data?.transport` — importing i18n `t` collided ("This expression is not callable"). Fixed by aliasing the import: `import { t as tr, useLang } from "@/lib/i18n"`. Any view with a local `t`/`viewLabel`-like identifier must alias. Also removed now-dead GROUP_LABELS const.
+- FEATURE B (WhatsApp share): email dialog footer gains emerald-styled WhatsApp button (MessageCircle) → wa.me link prefilled with bodyText, prefers owner mobile digits (wa.me/<msisdn>?text=) else blank share sheet; only rendered when preview data loaded (asChild+disabled combo avoided). Verified href: https://wa.me/9817922151?text=… (1432 chars).
+- DARK-MODE RE-CHECK (Task 9 deferral): toggled via ThemeToggle (note: `agent-browser set media dark` can't drive next-themes class strategy) — email dialog, employee utilization panels, Hindi sidebar all render correctly in dark. Restored light after.
+- E2E (bundled, single call): Hindi switch via TopBar → sidebar-hi/search-hi/group-hi OK, html[lang]="hi"; dashboard titles मासिक व्यावसायिक सारांश / 14-दिन का प्रदर्शन / वसूली OK; language PERSISTS across dev-server restart (localStorage); dark+Hindi screenshots; mobile 375 topbar fits 4 icons (search/bell/theme/language/avatar); restored light+EN. lint+tsc clean; console clean (HMR/Fast Refresh only — empty ✗ lines in `agent-browser errors` are benign formatting, confirmed via `console` output).
+- SNAPSHOT PATTERN: Radix triggers/menuradios appear in snapshots as `button "…" [expanded=false, ref=eN]` / `menuitemradio "…" [checked=true, ref=eN]` — grep patterns must use `\[[^]]*ref=` (previous rounds' exact `button "X" \[ref=` missed trigger buttons; caused false FAILs in the first E2E attempt this round).
+
+Stage Summary:
+- i18n infrastructure is live: extend src/lib/i18n.ts (DICT keys + HI_VIEWS) and use `t(lang,key)` / `viewLabel(lang,id,enLabel)` — never hardcode translated strings in components. English fallback keeps untranslated screens safe.
+- Lang state survives restarts (localStorage); theme unchanged (next-themes). TopBar language dropdown is the quick switch; Settings LanguageCard is the discoverable one.
+- WhatsApp share is client-side mock only (wa.me deep link) — no server delivery, consistent with SRS Phase 2.
+- scripts/e2e-task10.sh kept as reference (note its first-run grep bug was fixed in-repo during verification).
+- Next-step candidates: continue Hindi coverage screen-by-screen (payments/settlements page headers + column labels); per-property drill-down from heat-map to property-detail; notification-arrival E2E with two browser contexts; print-output language switch (currently summary prints in UI language only for translated card title).

@@ -11,10 +11,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import {
-  Building2, Crown, History, Receipt, ReceiptText, Settings, Smartphone, Sparkles, Truck, Users,
+  Building2, Check, Crown, History, Languages, Receipt, ReceiptText, Settings, Smartphone, Sparkles, Truck, Users,
 } from "lucide-react";
 import { Field, useAsync, useMutation } from "./_shared";
 import { usePwaInstall } from "@/components/shared/pwa-install";
+import { useLang, t, type Lang } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
 // Settings shape (GET /api/settings → { business })
@@ -33,6 +35,71 @@ interface SettingsResp {
 }
 
 type SettingsForm = { name: string; address: string; contact: string; gstin: string; logoText: string };
+
+// ---------------------------------------------------------------------------
+// Language preference (i18n scaffolding — persisted in localStorage)
+// ---------------------------------------------------------------------------
+
+const LANG_OPTIONS: { key: Lang; nameKey: string; native: string; sample: string }[] = [
+  { key: "en", nameKey: "lang.en", native: "English", sample: "Dashboard · Reports · Settings" },
+  { key: "hi", nameKey: "lang.hi", native: "हिन्दी", sample: "डैशबोर्ड · रिपोर्ट · सेटिंग" },
+];
+
+function LanguageCard() {
+  const { lang, setLang } = useLang();
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Languages className="h-4 w-4 text-primary" aria-hidden />
+          {t(lang, "settings.language")}
+        </CardTitle>
+        <CardDescription>{t(lang, "settings.languageDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-2.5 sm:grid-cols-2" role="radiogroup" aria-label={t(lang, "settings.language")}>
+          {LANG_OPTIONS.map((o) => {
+            const active = lang === o.key;
+            return (
+              <button
+                key={o.key}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setLang(o.key)}
+                className={cn(
+                  "flex min-h-[64px] items-center gap-3 rounded-xl border p-3 text-left transition-all",
+                  active
+                    ? "border-primary/50 bg-primary/5 ring-1 ring-primary/30"
+                    : "border-border bg-card hover:border-primary/30 hover:bg-muted/40"
+                )}
+              >
+                <span
+                  className={cn(
+                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-sm font-bold",
+                    active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                  )}
+                  aria-hidden
+                >
+                  {o.key === "hi" ? "अ" : "A"}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-semibold">{o.native}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{o.sample}</span>
+                </span>
+                {active && <Check className="h-4 w-4 shrink-0 text-primary" aria-label="Selected" />}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2.5 flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+          <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-primary" aria-hidden />
+          {t(lang, "lang.note")}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function SettingsView({ navigate }: ViewProps) {
   const { canInstall, install, isStandalone } = usePwaInstall();
@@ -185,7 +252,10 @@ export default function SettingsView({ navigate }: ViewProps) {
           </CardContent>
         </Card>
 
-        {/* 3 — System shortcuts */}
+        {/* 3 — Language */}
+        <LanguageCard />
+
+        {/* 4 — System shortcuts */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">System shortcuts</CardTitle>
@@ -213,7 +283,7 @@ export default function SettingsView({ navigate }: ViewProps) {
           </CardContent>
         </Card>
 
-        {/* 4 — About */}
+        {/* 5 — About */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">About</CardTitle>
