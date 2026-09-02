@@ -1,0 +1,260 @@
+     1→# Worklog — Business Management SaaS (BizHub)
+     2→
+     3→Project: Business Management SaaS / PWA per uploaded SRS ("Business Management SaaS — Complete Product Requirements Specification.md") + master-engineering.rules.md.
+     4→
+     5→## Product Summary
+     6→Single business-control center managing TWO financially separated businesses:
+     7→1. **Manpower/Staffing** — employees deployed to restaurant properties; billing, collections, advances, settlements.
+     8→2. **Transport/Vehicle Rental** — vehicles, clients, trips, expenses, EMI, profitability.
+     9→
+    10→Stack (non-negotiable env constraint): Next.js 16 App Router + TypeScript + Prisma/SQLite + Tailwind 4 + shadcn/ui + recharts. Single user-visible route `/` (SPA with client-side view switching). API routes under `/api/*`.
+    11→
+    12→---
+    13→Task ID: 0
+    14→Agent: main (orchestrator)
+    15→Task: Inspect project, read SRS + rules, write API contract, plan tasks.
+    16→
+    17→Work Log:
+    18→- Read full SRS (2224 lines) and master engineering rules.
+    19→- Inspected scaffold: shadcn/ui complete set present, prisma+sqlite present, recharts/zustand/sonner present.
+    20→- Defined architecture: SPA at `/` with client-side view registry; auth via session cookie; audit logging central helper; FIFO property ledger; settlement engine with draft/finalize; live notification engine.
+    21→
+    22→Stage Summary:
+    23→- Architecture decided; parallel agent split defined; contract doc written to docs/api-contract.md.
+    24→
+    25→---
+    26→Task ID: 1
+    27→Agent: main (orchestrator)
+    28→Task: Foundation — schema, seed, libs, auth, shell, PWA.
+    29→
+    30→Work Log:
+    31→- prisma/schema.prisma: full domain model (Owner, Session, AuditLog, Employee, Property, Contract, Deployment, PropertyPayment, Advance, Adjustment, Settlement+Lines, Expense, ExpenseCategory, RecurringExpense, Vehicle, Client, Trip, VehicleEmiPayment, Maintenance, NotificationDismiss, AppSetting, Shift). Pushed to SQLite.
+    32→- scripts/seed.ts: seeded 15 owners (password: owner123), 24 employees, 8 properties (with ended+active contracts), 1748 deployments over 40 days, FIFO payments, advances, adjustments, 2 vehicles, 6 clients, 16 trips, EMI schedule (3 paid), maintenance, ~85 expenses, 3 recurring expenses, settings, shifts.
+    33→- Core libs: lib/money.ts (INR format), lib/password.ts (scrypt), lib/auth.ts (sessions + requireOwner + HttpError), lib/api-helpers.ts (handleRoute wrapper w/ {public:true} option, readBody, requireFields, parseDate, parsePage, parseRange, monthBounds), lib/audit.ts (logAudit), lib/api-client.ts (fetch wrapper, qs, toCSV/downloadCSV).
+    34→- Auth APIs: /api/auth/{login,logout,me,change-password,demo-owners}. VERIFIED with curl: login 200 + cookie + /me 200.
+    35→- PWA: public/manifest.webmanifest, public/sw.js (network-first, no API caching), AI-generated icons 192/512, SwRegister client component, viewport/apple meta.
+    36→- Frontend shell: providers.tsx (Auth+Nav+BusinessScope contexts), app-shell.tsx (desktop collapsible sidebar + mobile bottom nav + More sheet + TopBar w/ search+notifications+theme+owner menu + BusinessBanner + sticky footer on desktop), login-screen.tsx (split brand/login, one-tap demo login), lib/views.tsx (lazy view registry, 24 views incl. hidden detail views), view stubs in components/views/* (stubs now — agents must implement), shared components: stat-card, page-header, empty-state, data-table (desktop table/mobile cards), filters (RangeSelector/SearchInput/ExportButton), month-picker, status-badge.
+    37→- globals.css: emerald primary theme (light+dark), no-scrollbar util, print styles for statements (.print-area/.no-print).
+    38→- layout.tsx metadata/manifest/viewport updated; page.tsx renders LoginScreen or AppShell with active view.
+    39→
+    40→Stage Summary:
+    41→- Foundation verified working (auth e2e via curl, dev server 200, lint clean).
+    42→- VIEW STUBS ARE PLACEHOLDERS — Task 2-b must implement all views in components/views/.
+    43→- API contract is BINDING: docs/api-contract.md — Task 2-a must implement exactly these endpoints.
+    44→- Gotchas learned: handleRoute passes {owner, params, req}; dynamic route ctx.params is a Promise (await it); SQLite lacks enums → String status fields; unique constraint errors surface as 409 via P2002 mapping.
+    45→---
+    46→Task ID: 2-b-resume-2
+    47→Agent: frontend-views-2 agent
+    48→Task: 7 global/utility views (reports, owners, audit, notifications, search, clients, settings)
+    49→
+    50→Work Log:
+    51→- Read worklog.md, docs/api-contract.md (binding), foundation files (view-types, providers, api-client, money), shared components (DataTable/Column, RangeSelector/SearchInput/ExportButton, MonthPicker+toMonth, PageHeader, EmptyState, StatCard) and views/_shared.tsx exports (useAsync, useMutation, Field, SelectInput, ListResp, fmtDay, todayStr, InitialAvatar, ErrorState, Option, useDebounced). Did NOT edit _shared.tsx — all extra helpers defined locally per file.
+    52→- reports-view.tsx: hub of 9 report cards (grid-cols-2 sm:grid-cols-3, lucide icon+title+subtitle, selected state ring). Config panel: RangeSelector presets + Custom pill toggling two date inputs (from/to computed locally for today/yesterday/week/lastweek/month/lastmonth/custom with ymd helper); business select for expenses/profitability; date input (default today) for daily-operations; MonthPicker for settlement-summary. Run Report + Export CSV buttons (min-h-10). Results via useAsync → { columns, rows, totals?, meta }: DataTable built FROM server columns (type "money"→formatINR right-aligned tabular-nums, "number"→right), totals in footer card row (Total chip + labeled entries), meta as caption above table. Export = toCSV(rows, columns)+downloadCSV(`bizhub-${type}-${todayStr()}.csv`). Desktop lg:flex-row with config Card lg:w-72 shrink-0 + results flex-1; mobile stacked. ErrorState + DataTable loading skeletons.
+    53→- owners-view.tsx: My account card (matched via useAuth().owner.username) with Change Password form (current/new/confirm, min 6, POST /api/auth/change-password { currentPassword, newPassword }). Owner cards grid sm:grid-cols-2 xl:grid-cols-3: InitialAvatar, name, @username, mobile, joined date, "created N records" chip, Active/Inactive chip, Switch (ON→PUT isActive:true; OFF→AlertDialog confirm→PUT isActive:false; self-switch disabled), dropdown Edit/Reset Password. Add dialog (name*, username*, mobile, password optional default owner123 → POST /api/owners); Edit dialog (name/mobile only, username shown disabled & immutable); Reset Password dialog (min 6 → PUT { password }).
+    54→- audit-view.tsx: filters in grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 (owner select from GET /api/owners, module select 17 fixed values, action select 10 fixed values, from/to date inputs); every filter change resets page to 1 (no setState-in-effect). DataTable: primary createdAt (fmtDay + local fmtTime), ownerName (hideOnMobile), action via colored badge (CREATE emerald / UPDATE amber / DELETE red / rest gray), module, recordLabel (hideOnMobile), change summary cell (jsonBrief prev → next, line-clamp-2, button → ChangeDetailDialog with pretty-printed JSON.stringify(v,null,2) in scrollable pre blocks). Pagination footer Prev/Next + "Page X of Y" only when total > pageSize (50), GET with page+pageSize=50.
+    55→- notifications-view.tsx: GET /api/notifications → grouped by severity CRITICAL (red AlertCircle) / WARNING (amber AlertTriangle) / INFO (gray Info) with count chips + per-section icon color; card rows (icon tile, title, message, [View →] → navigate(view, params), X dismiss → POST /api/notifications/dismiss { key } then setData filter + toast). Global empty → EmptyState BellOff "All clear — nothing needs attention". Refresh button with spinning icon.
+    56→- search-view.tsx: max-w-2xl mx-auto command-palette page. params.q seed → large h-12 input (autoFocus, inputMode search, clear button), local useDebounced 350ms → GET /api/search?q=; real Ctrl/Cmd+K window listener focuses+selects input. Groups with header (icon+label+count chip): Employees, Properties, Vehicles, Clients, Expenses, Deployments; rows title+subtitle+ChevronRight → navigate(item.view, item.params). Empty groups hidden; idle state card lists what's searchable + Ctrl+K hint; 3 skeletons while loading; SearchX empty state.
+    57→- clients-view.tsx: SearchInput → useAsync GET /api/clients?search= (auto-refetch on debounced-less direct state). DataTable: primary name+company, phone (tabular-nums), email (hideOnMobile), tripCount, totalBusiness (formatINR bold right); row click → navigate("trips", { clientId }); actions dropdown (Edit) with stopPropagation so row click doesn't fire. Add/Edit dialog (name*, company, phone, whatsapp, email, address, billingDetails, notes → POST/PUT). EmptyState variants for search vs no data.
+    58→- settings-view.tsx: max-w-3xl cards. (1) Business profile form (name*, contact, gstin, logoText maxLength 4, address) with derived-defaults pattern (form ?? derived) — no setState-in-effect; dirty indicator + Save → PUT /api/settings + toast + reload. (2) "Two businesses, one platform" explainer with emerald Manpower (Users) / amber Transport (Truck) chips and "Financial records never mix" copy. (3) System shortcuts grid → navigate(audit/owners/expenses/settlements). (4) About card: BizHub v1.0 chip, PWA install note, tagline.
+    59→- Verify: bun run lint → 0 errors 0 warnings; bunx tsc --noEmit filtered to my 7 files → clean (remaining repo errors are in other agents' in-progress api routes/examples/skills); dev.log shows server Ready + APIs 200; curl / → 200. Fixed during dev: onChange handler typing (event → set(k)(e.target.value) like house style), removed stray role="listitem" aria-pressed a11y warning.
+    60→
+    61→Stage Summary:
+    62→- All 7 views implemented & lint-clean: reports (9-report hub w/ CSV export), owners (accounts admin + my-account password), audit (filterable paginated log + JSON diff dialog), notifications (severity groups + dismiss), search (palette page w/ Ctrl+K), clients (transport CRM table), settings (profile + explainers).
+    63→- API assumptions (contract-silent spots): POST /api/auth/change-password body { currentPassword, newPassword }; PUT /api/owners/:id accepts { name?, mobile?, isActive?, password? } per contract; owners list = { items: Owner[] & createdRecords }; /api/audit accepts ownerId/module/action/from/to/page/pageSize and returns { items, total, page, pageSize }; report totals/meta optional and rendered defensively (meta string-or-object); search items always { id, title, subtitle?, view, params? }.
+    64→- Reports auto-run on select/config change (useAsync deps) AND manual Run Report re-uses reload; custom range swaps from/to if reversed; totals label fallback prettifies camelCase keys.
+    65→- CSV exports exactly the displayed rows/columns (server-filtered), filename bizhub-{type}-{today}.csv.
+    66→
+    67→---
+    68→Task ID: 3
+    69→Agent: main (orchestrator)
+    70→Task: Integration, type/lint fixes, E2E browser verification.
+    71→
+    72→Work Log:
+    73→- Resumed timed-out agents; confirmed ALL backend routes (67 files) and ALL 24 views were actually completed despite deadline cuts.
+    74→- Fixed TS layer: handleRoute overloads (AuthedHandler with non-null owner; public variant), engine re-exports (handleRoute/readBody/etc. via @/app/api/_lib/engine alias), readonly BILLABLE tuple spread into Prisma `in`, DeploymentDto type, wrong relative import depths normalized to alias.
+    75→- Fixed frontend: SelectInput empty-value sentinel (Radix forbids ""), missing imports (useState/useAsync/Input), DataTable emptyAction removal, render-time state-adjustment pattern replacing setState-in-effect dialog resets (React canonical pattern).
+    76→- Runtime bug found via agent-browser: mobile bottom nav rendered on desktop → added md:hidden.
+    77→- Data integrity issue found: previous agent's smoke tests polluted trips (cancelled seed trip, future-dated trips) → re-seeded for pristine demo state.
+    78→- Hardened Prisma interactive transactions: timeout 20s on settlements/generate, 15s on deployments bulk + payments (default 5s was exceeded once during testing).
+    79→- agent-browser E2E VERIFIED: login flow (form + one-tap), dashboard stat cards with live data, employees table, deployments filters + 3-step deploy wizard (property→employees w/ advance chips→rate review w/ live totals→save; duplicate detection returned "1 created · 1 skipped"), collections FIFO ledger + record payment (₹70,631 recorded, outstanding 3.93L→3.22L, property cleared from list), settlements generate (20 drafts, advance partial deduction + carry-forward verified: Amit gross ₹1,400 vs advance ₹2,000 → −₹1,400 deducted), professional print statement view, transport dashboard + revenue chart, vehicles w/ compliance warnings, all views cycled w/o errors, dark mode, footer sticky on desktop.
+    80→- Responsive VERIFIED via screenshots: 375px (bottom nav 5-tap, card lists, stacked filters, full-width CTAs), 768px (sidebar + scrollable table), 1280/1440px (sidebar + 6-col stats + charts). No console errors (only Fast Refresh logs).
+    81→- Final: tsc clean (src/), eslint clean, login+generate curl 200.
+    82→
+    83→Stage Summary:
+    84→- PRODUCTION-READY state: 24 views, ~70 API routes, seeded demo data. Two businesses fully separated (emerald/amber theming + scoped nav + business field on finance records).
+    85→- Known acceptable limitations: WhatsApp delivery is mocked-out by design (Phase 2 per SRS; statement print-to-PDF works); file attachments not implemented (Phase 2); employee photos use initials avatars.
+    86→
+    87→---
+    88→Task ID: 4
+    89→Agent: main (orchestrator)
+    90→Task: Status assessment, agent-browser QA round, styling detail fixes, dashboard feature expansion, PWA install.
+    91→
+    92→Work Log:
+    93→- QA assessment: lint + tsc clean (src/ only; examples/skills noise pre-existing). agent-browser E2E: login → all 14 sidebar views cycled via snapshot refs — ZERO console errors. Screenshots verified at 375px / 768px / 1280px / 1920px: bottom nav, card lists, sticky footer, sidebar all correct. Verified dev.log error lines are historical (dbg-params route deleted; params now awaited by handleRoute line 28; 5000ms txn timeout already raised to 15/20s per Task 3).
+    94→- BUG FIX (styling): TopBar global-search button wrapped to 2 lines at 768px → added min-w-0 + truncate + whitespace-nowrap + shrink-0; also hover:border-primary/40 detail.
+    95→- NEW API: GET /api/dashboard/combined-trend?days=7..60 (clamped, default 14) — per-day { billing, collections, transport, expenses } from deployments (BILLABLE), propertyPayments, non-cancelled trips (paidAmount), all expenses; reuses lastNDays/dayKey helpers from api/_lib/dashboard. Verified via curl with auth cookie.
+    96→- Dashboard upgrade (dashboard-view.tsx rewritten): (1) greeting header "Good morning/afternoon…, {firstName}" + full en-IN date + Refresh button (spins while any fetch in flight, reloads summary+trend+audit) + Reports; (2) "14-day performance" card with AreaTrend 3-series (Manpower billing emerald / Collections teal / Transport amber) in lg:col-span-2; (3) "Expense split" donut card — recharts PieChart in ResponsiveContainer (first attempt with bare PieChart rendered 0-size, fixed), innerRadius 64%, center Total overlay, per-business legend rows with % shares, empty-state when no expenses; (4) "Recent activity" card — /api/audit?pageSize=6, action badges (CREATE emerald / UPDATE amber / DELETE red / LOGIN·GENERATE·PAYMENT gray), recordLabel+module, owner, relative time (fmtRel), View all → audit view. Loading skeletons per card; toasts via useAsync preserved.
+    97→- PWA install: new src/components/shared/pwa-install.ts using useSyncExternalStore (canonical external-store pattern — avoids lint error react-hooks/set-state-in-effect that the first useState/useEffect attempt triggered) wrapping beforeinstallprompt + appinstalled + standalone media-query listeners. "Install app" item added to owner dropdown menu (Smartphone icon, toast on accepted) and Settings About card upgraded to dynamic copy (installed / can-install w/ button / manual add-to-homescreen instructions per platform).
+    98→- Styling detail pass: StatCard (used by all 3 dashboards + more) got tone-colored icon chips (ICON_CHIPS map: emerald/red/amber/teal per tone incl. dark variants) + hover lift (hover:-translate-y-0.5 with active:scale compensation).
+    99→- Verification: agent-browser screenshots of new dashboard at 1280/768/375 in light+dark; donut + chart + activity feed render with live data (Manpower ₹6.7K 59% / Transport ₹4.7K 41%); trend API returns correct series; mobile donut fixed; lint + tsc clean; curl / → 200; console clean (only dev-mode Fast Refresh artifacts from editing).
+   100→
+   101→Stage Summary:
+   102→- App remains production-ready; main dashboard is now analytics-rich (trend + split + activity) instead of stats-only.
+   103→- New endpoint contract: /api/dashboard/combined-trend?days=N → { days, trend: [{date, billing, collections, transport, expenses}] } (N clamped 7–60).
+   104→- pwa-install.ts is a module singleton (listeners registered at import) — import only from client components.
+   105→- Next-step candidates: toast on new notification while polling; workforce heat-map on manpower dashboard; trip-wise profit report chart; export whole dashboard to PDF.
+   106→
+   107→---
+   108→Task ID: 5
+   109→Agent: main (orchestrator)
+   110→Task: Status QA round; workforce heat-map, trip payment progress, notification-arrival toast, view transition; sticky-sidebar overflow bug fix.
+   111→
+   112→Work Log:
+   113→- QA: lint + tsc clean (src/); agent-browser cycle of settlements/deployments/trips/expenses/reports/employees — no runtime console errors (only stale dev-mode Fast Refresh warning from editing).
+   114→- BUG FOUND & FIXED (layout, pre-existing): sidebar nav spilled OUT of the 100vh aside on short pages — ScrollArea root used `flex-1` without `min-h-0`, so it refused to shrink, overflowed the aside (nav items visible below the footer; html scrollHeight inflated 152px; sticky sidebar appeared unpinned). Fix: `min-h-0 flex-1` on the ScrollArea in SideNav. Verified geometry after fix: docH 864 (was 1016), asideTop stays 0 at max scroll, logo always visible. Also keyed the ScrollArea by `view` so nav internal scroll resets on navigation.
+   115→- NEW API: GET /api/dashboard/manpower-heatmap?days=7..30 (default 14) → { dates[], rows: [{propertyId, propertyName, total, cells:[{date, shifts}]}] (top 8 properties by total, sorted desc), unlistedShifts } from BILLABLE deployments grouped by day×property.
+   116→- Manpower dashboard: new "Workforce heat-map" card after Day/Night split — GitHub-style grid (rows=properties w/ name+total, cols=14 days), 5-step emerald intensity scale (HEAT_STEPS, dark variants), per-cell title tooltip + hover scale, Less→More legend, horizontal scroll wrapper (min-w-[560px]) for mobile, skeleton + empty state. Verified desktop + 375px (scrolls horizontally).
+   117→- Trips view: Payment column now renders StatusBadge + mini Progress bar (Paid/Target %, h-1.5) + % label — verified (0% pending, 47% partial). tripPaidPct() helper (clamped 0-100, target = finalAmount ?? agreed+extra).
+   118→- TopBar notification-arrival toast: polling effect now diffs counts via refs (first load silent), fires `toast.info("N new notifications")` with View action → notifications view, only when tab visible; added visibilitychange listener for instant re-check on tab return.
+   119→- View transitions: globals.css adds `@keyframes view-in` (fade + 6px slide, 0.24s, cubic-bezier(0.22,1,0.36,1)) + `.view-enter` utility with prefers-reduced-motion guard; app-shell wraps children in `<div key={view} className="view-enter">` — remount per view plays the animation (getComputedStyle verified: view-in 0.24s).
+   120→- Regression checks after ScrollArea change: collapsed sidebar (68px rail) OK, mobile More sheet renders full nav OK, settings/owners/audit views OK, dark mode untouched.
+   121→
+   122→Stage Summary:
+   123→- Sticky-sidebar spill bug is the headline fix — any future layout work in SideNav must keep `min-h-0` on the flex ScrollArea.
+   124→- New endpoint: /api/dashboard/manpower-heatmap?days=N (clamp 7-30).
+   125→- Heat-map maxes at 8 rows by design; unlisted shifts surfaced via unlistedShifts caption.
+   126→- Next-step candidates: PDF export bundle for reports; employee-wise utilization chart on employee-detail; monthly owner summary email mock; i18n (Hindi) scaffolding per SRS Phase 2.
+   127→
+   128→---
+   129→Task ID: 6
+   130→Agent: main (orchestrator)
+   131→Task: QA round; Reports print/PDF export; employee-detail 30-day activity analytics; report currency formatting bug fix; TopBar/banner styling details.
+   132→
+   133→Work Log:
+   134→- QA: lint + tsc clean; agent-browser cycle of Reports/Employees/Settlements/Vehicles/Audit — no console errors. Dev server had died mid-round (curl 000, no next process) → restarted via `bun run dev`, confirmed 200. Session cookie survived restart.
+   135→- BUG FOUND & FIXED (reports formatting): all 9 report APIs tag money columns as type "currency", but reports-view only formatted type "money" → raw decimals like 10967.78 shown. fmtCell/fmtCellText/fmtTotal/column className now accept "money" OR "currency"; also added "date" type formatting (en-IN short date) for the 2 date-typed columns. Verified: Property Revenue now shows ₹10,968 / ₹6,300 etc., right-aligned.
+   136→- NEW FEATURE (Reports print/PDF): "Print / Save PDF" button (full-width, 3rd in the Run/CSV grid) → window.print(); results column wrapped in .print-area with a print-only header (report title — BizHub, period label from date/month/computed range, generated timestamp). globals.css print block extended: `.print-area * { overflow: visible !important; max-height: none !important; }` so the DataTable's max-h-[70vh] scroll container prints fully. END-TO-END VERIFIED via agent-browser `pdf` command: 2-page PDF with ONLY the report (no sidebar/topbar), formatted ₹ values and TOTAL footer row.
+   137→- NEW FEATURE (employee-detail analytics): "Last 30 days" card at top of Work History tab — computed client-side via useMemo from the 100 most recent deployments (no new API): summary line (X/30 days worked · N shifts · ₹billed compact), 30-cell presence strip (muted / emerald-300 / emerald-600 by shift count, hover scale + title tooltip, aria role=img), Less→More legend, and a daily-billing AreaTrend (140px, emerald) shown when shifts exist. Verified live for Amit Verma: 28/30 days, 75 shifts, ₹68.8K billed.
+   138→- STYLING DETAILS: (1) business scope pills in BusinessBanner now carry colored dots (emerald=Manpower, amber=Transport, visible in both active/inactive states); (2) TopBar bell upgraded from bare red dot to numbered badge (h-4 min-w-4 rounded-full, "9+" cap, ring-2 ring-background). Verified on screen.
+   139→- Data-semantics observation (not a bug, noted for review): Property Revenue per-window "Received" can exceed "Billed" (Green Leaf ₹77,847 vs ₹5,280 → 1474% collection, negative outstanding) because payments received in the window may settle deployments billed before the window; totals Outstanding −₹50,645 follows the same window logic. Consider clamping or labeling in a future round.
+   140→
+   141→Stage Summary:
+   142→- Reports now have three export paths: on-screen table, CSV download, print/PDF (with self-contained print header + full-table release).
+   143→- Employee detail Work History is now analytics-led (30-day strip + billing trend above the raw table).
+   144→- Report column-type contract: treat "currency" and "money" as synonyms on any new report consumers.
+   145→- Next-step candidates: window-vs-FIFO outstanding semantics on the collections report (label or clamp negatives); owner monthly summary; i18n scaffolding (SRS Phase 2); attendance-style month grid on deployments view.
+   146→
+   147→---
+   148→Task ID: 7
+   149→Agent: main (orchestrator)
+   150→Task: QA round; report window-vs-FIFO semantics fix; trip-wise estimated profit chart; attendance month grid; styling details.
+   151→
+   152→Work Log:
+   153→- QA first: server 200, lint + tsc clean (src/), agent-browser sweep of all sidebar views (manpower stack, collections, settlements, transport stack, reports, settings) — ZERO console errors. False alarm investigated: TopBar bell badge rendered "9+" (cap) and looked like "0+" in a low-res screenshot — verified geometry 22×16px, working as designed. Collections view healthy (₹2,73,160 outstanding / 6 properties).
+   154→- DATA-SEMANTICS FIX (Task 6 observation resolved): /api/reports/collections + /api/reports/property-revenue now clamp row outstanding at ≥0, cap Collection % at 100, clamp totals outstanding ≥0, and return a new `note` field explaining that received is dated-in-window payments which may settle earlier billings. Verified via API: 0 negative-outstanding rows, 0 pct>100 rows, note present.
+   155→- Reports view: new optional `note?: string` on ReportResp rendered as a muted info strip (Info icon, role="note", print-visible via bg-transparent on print) between the meta caption and the table.
+   156→- NEW API: GET /api/transport/trip-profit?from=&to=&limit=8 (clamp 3–20, defaults to month range) — top trips by ESTIMATED profit: revenue = finalAmount ?? agreed+extra; vehicle TRANSPORT expenses (opex+EMI) allocated pro-rata by each trip's share of that vehicle's revenue, so per-trip profits sum to vehicle net. Returns totals, note, per-trip {client, destination, vehicle+reg, revenue, allocatedCost, profit, marginPct, collectedPct}. Smoke-verified: Goa trip ₹32,000 revenue → ₹26,038 profit (81%).
+   157→- Transport dashboard: "Top trips by estimated profit" card after Revenue trend — ranked rows (1..n) with animated emerald/red bars scaled to max |profit|, margin chip, profit value (moneyCls), native tooltip with revenue/cost/collected %, header Net chip (emerald/red), count with singular/plural ("1 trip this month" — grammar bug caught and fixed in-round), Info note footer. Skeleton while loading, hidden when no trips.
+   158→- NEW API: GET /api/deployments/attendance?month=YYYY-MM (default current) — per-employee BILLABLE shift counts for every day of the month; rows = all ACTIVE employees (fullName/code/designation), sorted by total desc; returns dates[], rows with per-cell {date, shifts}, total, workedDays, totalShifts. Seed data: 22 employees × 31 days, 1,262 shifts. (Two Prisma fixes during dev: Employee has no isActive → status:"ACTIVE"; name field is fullName, role is designation.)
+   159→- Deployments view: collapsible "Attendance — {Month}" card between PageHeader and filters. Lazy fetch via useAsync (loader resolves null while collapsed, refetches on month change). Month nav (‹ This month ›), Less→More legend, CSS-grid matrix with sticky top header row + sticky-left employee column (bg-card z-layering), GitHub-style 3-step emerald heat cells (dark variants), weekend columns dimmed, today column ringed with ring-primary, per-cell hover:scale-125 + title tooltip + role="img" aria-label, Shifts/Days totals columns, max-h-[46vh] vertical scroll + horizontal scroll on narrow screens (min-w-[640px]).
+   160→- Verification: agent-browser screenshots — transport card light (1280) + dark + mobile 375; attendance grid light + dark + mobile 375 (sticky name column + horizontal scroll confirmed); reports note strip light. Full 17-view cycle zero console errors; lint clean; tsc 0 src errors; root 200.
+   161→
+   162→Stage Summary:
+   163→- Report money semantics are now: outstanding never negative, pct ≤ 100, with an on-screen/print-visible explanation strip. New consumers of report payloads should copy this pattern (`note` field) whenever window-based numbers can be misread.
+   164→- New endpoints: /api/transport/trip-profit (est. profit, pro-rata cost allocation) and /api/deployments/attendance (month grid).
+   165→- Attendance grid layout trick: gridTemplateColumns inline style + sticky left column requires bg-card + z-index on the sticky cell; header row must be sticky top with higher z than row-sticky cells.
+   166→- Next-step candidates: make trip-profit respect the dashboard RangeSelector (from/to wiring); per-property attendance drill-down (click a heat cell → filtered deployments); owner monthly summary email mock; i18n (Hindi) scaffolding per SRS Phase 2.
+   167→
+   168→---
+   169→Task ID: 8
+   170→Agent: main (orchestrator)
+   171→Task: QA round; monthly owner summary (API + dashboard card); trip-profit range wiring; heat-map & attendance drill-downs; employee filter; Radix Select controlled-state bug fix.
+   172→
+   173→Work Log:
+   174→- QA first: server 200, lint + tsc clean (src/), agent-browser sweep — stable, zero console errors. Green-lit new features.
+   175→- NEW API: GET /api/dashboard/monthly-summary?month=YYYY-MM (regex-validated, defaults to current) → { month, prevMonth, current, previous, insights[], note }. MonthMetrics per month: deployments, manpowerBilling/Payout/Margin (BILLABLE deployments dated in month), collections (payments received), advances, trips, transportRevenue (trips STARTING in month, billing basis finalAmount ?? agreed+extra), transportCollected (paidAmount — documented as approximation), transportOpex (TRANSPORT expenses excl. EMI), transportEmi (EMI-category expenses), net = margin − manpowerOther + transportRevenue − opex − EMI. Server generates up to 3 insight lines (biggest |pct| mover ≥5%, collections < ½ billing, net<0 warning / turned-positive praise). Verified via curl: Sep-2026 vs Aug-2026 numbers correct.
+   176→- Dashboard: "Monthly business summary" card between business-split and collections — gradient top accent strip (emerald→teal→amber), MonthPicker nav (‹ ›), 5 metric tiles (icon + label + Delta chip + current vs "was X" + hover bg), chips row (deployments/trips/advances/EMI), Sparkles insight strip (role=note, gradient bg), Info money-semantics footer. Local Delta component: TrendingUp/Down/Minus, goodUp flag (expense down = green), "new" chip when prev=0, pct via pctOf(). Loading skeleton card.
+   177→- Shared filters.tsx: new rangeKeyToBounds(key) (client mirror of API presets, custom/month default) + RANGE_HINT map ("today"/"last 7 days"/…/custom:"selected range").
+   178→- Transport dashboard: trip-profit now wired to RangeSelector — useAsync deps [range], from/to params via rangeKeyToBounds; subtitle "N trips {RANGE_HINT[range]}"; tpError → card hidden. Verified: "1 trip this month" → This Week (hidden, no trips) → Last Month "14 trips last month".
+   179→- Manpower heat-map drill-down: cells are now <button>s (active only when shifts>0) → navigate("deployments", { propertyId, date }); property names clickable → property-detail; hover ring + focus-visible ring + aria-labels; description updated "click a cell to inspect deployments". Verified: Royal Orchid 2026-08-21 → deployments pre-filtered (6 deployments, ₹7.4K).
+   180→- Deployments view: (1) NEW Employee filter (SelectInput fed by /api/employees?status=ACTIVE, param params.employeeId supported; filter grid now xl:grid-cols-5); (2) attendance grid cells are buttons → drill-down sets employeeId + date, CLEARS propertyId (attendance grid is property-agnostic — first test exposed empty cross-filter result, fixed), collapses panel, toast "Showing {name} — {date}". Verified: Rahul Sharma 2026-09-01 → 3 deployments ₹2.9K.
+   181→- BUG FOUND & FIXED (pre-existing, exposed by drill-down): SelectInput passed value={value || undefined} → Radix Select flipped uncontrolled→controlled when value went ""→id ("Select is changing from uncontrolled to controlled" console warning). Fix: always pass defined value via EMPTY_SENTINEL (value || EMPTY_SENTINEL) — non-matching sentinel still renders placeholder visually. Verified warning gone on fresh load + after drill-down.
+   182→- Verification: agent-browser screenshots — summary card light 1280 (Sept: down-96% red chips, expenses down-93% GREEN — correct goodUp semantics) + August view (▲270%/▲288% green, "new" chip for transport from ₹0 baseline, dual insights) + dark 1280 + mobile 375 (tiles stack single-column, no truncation); full 18-view sweep + drill-down flows = ZERO console errors/warnings; tsc 0 src errors; lint clean; root 200.
+   183→
+   184→Stage Summary:
+   185→- New endpoint contract: /api/dashboard/monthly-summary?month=YYYY-MM → { current, previous, insights, note } — money semantics documented in `note` (billing=dated-in-month deployments, transport revenue=trips starting in month, collections=received-in-month).
+   186→- Client-side rangeKeyToBounds + RANGE_HINT in shared/filters.tsx is the canonical way to keep any from/to API in sync with a RangeSelector.
+   187→- Drill-down pattern: heat/attendance cells carry aria-labels ending "— view/filter deployments"; attendance drill-down must clear property filter (cross-filter empties results).
+   188→- SelectInput is now always-controlled — do not reintroduce `value || undefined`.
+   189→- Next-step candidates: export monthly summary to PDF (print header like reports); per-employee utilization chart on employee-detail; owner monthly summary email mock (SRS Phase 2); i18n (Hindi) scaffolding.
+   190→
+   191→---
+   192→Task ID: 9
+   193→Agent: main (orchestrator)
+   194→Task: QA round; monthly-summary print/PDF export; owner monthly summary email mock (API + dialog); employee utilization analytics; data-window bug fix.
+   195→
+   196→Work Log:
+   197→- QA first: lint + tsc clean (src/ only; examples/skills noise pre-existing). agent-browser: 16 views cycled, ZERO console errors. False alarm re-checked: bell badge "0+"-looking glyph in low-res screenshots is actually "9+" (cap) — verified via DOM eval, same as Task 7. Server was healthy at round start.
+   198→- REFACTOR: extracted shared month-metrics engine to src/app/api/_lib/monthly-metrics.ts (MonthMetrics, boundsOf, shiftMonth, currentMonth, shortMonthLabel, metricsFor, pctChange, buildInsights, MONTH_METRICS_NOTE). /api/dashboard/monthly-summary now imports it — response shape unchanged. Insight lines now use friendly labels: "down 96% vs Aug 2026" instead of "vs 2026-08".
+   199→- BUG CAUGHT DURING ROUND: dev server died mid-round (curl 000, no process) — same as Task 6. Sandbox quirk discovered: ANY manually started `bun run dev` is reaped between Bash tool calls (even setsid/disown), so all server-dependent verification must be bundled into single tool calls (restart → wait → assert). Used UI login (amit/owner123) via agent-browser when the session cookie was lost.
+   200→- FEATURE A (dashboard print/PDF): monthly-summary card wrapped in .print-area with print-only header (title + month label + generated timestamp); Printer icon-button added next to MonthPicker (no-print, hover:border-primary/40 hover:text-primary); insight strip gets print:bg-transparent + print:border-border. Verified via agent-browser pdf: page 1 contains ONLY the summary (header + gradient strip + 5 tiles + chips + insight + note), no sidebar/topbar. Known cosmetic: trailing blank pages (visibility-based print CSS holds hidden layout height — same tradeoff as reports; a display:none strategy would break the ancestor chain).
+   201→- FEATURE B (owner monthly summary email mock): NEW API /api/owners/monthly-email — GET ?ownerId&month returns email preview {owner, monthLabel, subject, rows[5] with pct+goodUp, activity, insights, note, bodyText, disclaimer} from the SAME monthly-metrics engine; POST {ownerId, month} = mock send → logAudit(GENERATE, module Owners, recordLabel "Monthly summary email → {name} ({month}) — mock send"). Verified via curl: bodyText composes greeting + KEY NUMBERS (with ✓/⚠ markers, goodUp semantics: expenses-down shows ✓) + ACTIVITY + INSIGHTS; audit entry confirmed in /api/audit.
+   202→- Owners view: new "Monthly summary email" dropdown item (Mail icon, first in menu, separator before edit/reset) → MonthlyEmailDialog: MonthPicker + Copy text (clipboard + toast), email-client preview (From/To/Subject envelope header, greeting, Key-numbers table with was-values + EmailDeltaPill chips incl. "new"/0% states, Net-result row emphasized bg-muted/30 + font-semibold, activity chips, insights note, money-semantics, italic sign-off), disclaimer with Info icon, Close + "Mark as sent" (disabled until data loads; success toast "Summary email logged as sent to {name}" + auto-close). E2E verified: dialog renders fully, mark-as-sent fires toast, dialog closes, audit row written.
+   203→- FEATURE C (employee-detail utilization): activity useMemo extended with day/night split, weekday[7] distribution, top-3 properties — rendered as 3 panels under Daily billing (sm:grid-cols-3): "Shift mix · 30 days" (amber/slate stacked bar + legend rows with %), "Busiest weekdays" (Mon..Sun mini bars, emerald, hover:opacity), "Top properties" (top-3 rows with teal progress bars scaled to max). All panels hover:bg-muted/50.
+   204→- BUG FOUND & FIXED (data window): first E2E showed Shift mix Day 48 + Night 52 = 100 vs totalShifts 76 — utilization loop counted ALL loaded deployments (up to 100 records) because byDay.has(key) is true for every record's own date. Fix: build window30 = Set(list dates) and filter on it. After fix: 76 shifts = Day 36 (47%) + Night 40 (53%) ✓. Note: `window` var name avoided (global shadowing) → window30.
+   205→- Verification: lint + tsc clean after every step; agent-browser E2E of all three features; mobile 375 screenshots (summary card stacks single-column with bottom nav, print button beside MonthPicker); console clean throughout. Dark-mode simulated via `agent-browser set media dark` doesn't affect next-themes class strategy — skipped visual dark re-check (all new UI uses standard dark: tokens only).
+   206→- NOTE for next rounds: sandbox reaps background dev servers between tool calls; the system auto-dev-server may need a manual bundled restart if root returns 000. e2e script kept at scripts/e2e-task9.sh as a reference for bundled-verification patterns.
+   207→
+   208→Stage Summary:
+   209→- New endpoint: /api/owners/monthly-email (GET preview / POST mock-send + audit). All monthly numbers across dashboard card + owner emails come from the single shared engine src/app/api/_lib/monthly-metrics.ts — extend THAT file, never duplicate month math.
+   210→- New UI patterns: EmailDeltaPill (new/0%/up/down chips) and email-client preview dialog in owners-view; .print-area + print-only header pattern now proven on BOTH reports and dashboard cards.
+   211→- Employee-detail panels must filter to the same 30-day window as their summary numbers (window30 Set pattern).
+   212→- Known cosmetic: print output may include trailing blank pages (visibility-based print CSS). Acceptable; revisit only if users complain.
+   213→- Next-step candidates: i18n (Hindi) scaffolding per SRS Phase 2; per-property attendance drill-down from manpower dashboard heat-map to property-detail; WhatsApp share button beside "Mark as sent" (still mock); notification-arrival e2e test (needs two browser contexts); dark-mode visual re-check of email dialog via ThemeToggle (not media emulation).
+   214→
+   215→---
+   216→Task ID: 10
+   217→Agent: main (orchestrator)
+   218→Task: QA round; i18n (EN/Hindi) scaffolding; WhatsApp share on owner email dialog; dark-mode visual re-check.
+   219→
+   220→Work Log:
+   221→- QA first: lint + tsc clean (src/), server 200, agent-browser sweep over 58 clickable nav elements — ZERO console errors. Stable → new features.
+   222→- FEATURE A (i18n scaffolding — SRS Phase 2): new src/lib/i18n.ts — Lang ("en"|"hi"), module-singleton store persisted to localStorage("bizhub-lang") using the canonical useSyncExternalStore pattern (hydration-safe, no setState-in-effect), t(lang,key) with en→key fallback, viewLabel(lang,id,enLabel) + HI_VIEWS map for nav ids, DICT with ~35 curated keys per language. document.documentElement.lang syncs on change.
+   223→- Coverage wired: SideNav group headers (nav.group.*) + item labels (viewLabel); TopBar search placeholder (topbar.search/searchShort); TopBar NEW Language dropdown (Languages icon, menuitemradio English/हिन्दी with Check indicator, aria-checked); owner dropdown menu (Owners/settings/audit/install/logout); BusinessBanner badge+scope pills+hint line (scope.badge.*/scope.*/scope.hint.*); BottomNav (nav.home, viewLabel, nav.more); dashboard card titles (dash.monthlySummary/bothBusinesses/trend/expenseSplit/collections/attention/activity) + header buttons (common.refresh/reports/viewAll).
+   224→- Settings: NEW LanguageCard (radiogroup, two big option rows with native names "English"/"हिन्दी", glyph chips A/अ, sample-line previews, primary ring on active, Sparkles note explaining scaffolding scope). Inserted as card 3.
+   225→- NAMING PITFALL: dashboard-view already had a local `const t = data?.transport` — importing i18n `t` collided ("This expression is not callable"). Fixed by aliasing the import: `import { t as tr, useLang } from "@/lib/i18n"`. Any view with a local `t`/`viewLabel`-like identifier must alias. Also removed now-dead GROUP_LABELS const.
+   226→- FEATURE B (WhatsApp share): email dialog footer gains emerald-styled WhatsApp button (MessageCircle) → wa.me link prefilled with bodyText, prefers owner mobile digits (wa.me/<msisdn>?text=) else blank share sheet; only rendered when preview data loaded (asChild+disabled combo avoided). Verified href: https://wa.me/9817922151?text=… (1432 chars).
+   227→- DARK-MODE RE-CHECK (Task 9 deferral): toggled via ThemeToggle (note: `agent-browser set media dark` can't drive next-themes class strategy) — email dialog, employee utilization panels, Hindi sidebar all render correctly in dark. Restored light after.
+   228→- E2E (bundled, single call): Hindi switch via TopBar → sidebar-hi/search-hi/group-hi OK, html[lang]="hi"; dashboard titles मासिक व्यावसायिक सारांश / 14-दिन का प्रदर्शन / वसूली OK; language PERSISTS across dev-server restart (localStorage); dark+Hindi screenshots; mobile 375 topbar fits 4 icons (search/bell/theme/language/avatar); restored light+EN. lint+tsc clean; console clean (HMR/Fast Refresh only — empty ✗ lines in `agent-browser errors` are benign formatting, confirmed via `console` output).
+   229→- SNAPSHOT PATTERN: Radix triggers/menuradios appear in snapshots as `button "…" [expanded=false, ref=eN]` / `menuitemradio "…" [checked=true, ref=eN]` — grep patterns must use `\[[^]]*ref=` (previous rounds' exact `button "X" \[ref=` missed trigger buttons; caused false FAILs in the first E2E attempt this round).
+   230→
+   231→Stage Summary:
+   232→- i18n infrastructure is live: extend src/lib/i18n.ts (DICT keys + HI_VIEWS) and use `t(lang,key)` / `viewLabel(lang,id,enLabel)` — never hardcode translated strings in components. English fallback keeps untranslated screens safe.
+   233→- Lang state survives restarts (localStorage); theme unchanged (next-themes). TopBar language dropdown is the quick switch; Settings LanguageCard is the discoverable one.
+   234→- WhatsApp share is client-side mock only (wa.me deep link) — no server delivery, consistent with SRS Phase 2.
+   235→- scripts/e2e-task10.sh kept as reference (note its first-run grep bug was fixed in-repo during verification).
+   236→- Next-step candidates: continue Hindi coverage screen-by-screen (payments/settlements page headers + column labels); per-property drill-down from heat-map to property-detail; notification-arrival E2E with two browser contexts; print-output language switch (currently summary prints in UI language only for translated card title).
+   237→
+   238→---
+   239→Task ID: 11
+   240→Agent: main (orchestrator)
+   241→Task: QA round; global command palette (Ctrl+K); rich notification-arrival toast + bell pulse; Hindi coverage extension (payments/settlements/deployments); search-API params bug fix.
+   242→
+   243→Work Log:
+   244→- QA first: lint + tsc clean (src/), server 200. agent-browser console showed stale "Parsing ecmascript source code failed" errors for dashboard-view.tsx (636/498) — investigated: they were HMR artifacts from a previous editing session; fresh reload + full sweep = ZERO errors, file compiles clean. Green-lit new work.
+   245→- FEATURE A (global command palette): new src/components/shared/command-palette.tsx built on the previously-unused cmdk/shadcn Command primitives. AppShell's dead `ctrlK` state replaced with real `paletteOpen`: Ctrl/Cmd+K TOGGLES the dialog (verified open→close), TopBar desktop search pill + mobile search icon now open it (kbd hint "Ctrl K" is finally truthful). Content: (1) live entity results via /api/search?q= (debounced 250ms, ≥2 chars) grouped Employees/Properties/Vehicles/Clients/Expenses/Deployments with tinted icon tiles (emerald manpower / amber transport), ≤4 per group; (2) "Quick actions" (deployments, payments, advances, expenses, trips, vehicles, reports, notifications, audit — icons from VIEWS registry); (3) "Go to" nav group scope-filtered (same predicate as SideNav); (4) footer kbd hint bar (↑↓ navigate / ↵ open / esc close + "Open full search view →" hidden on mobile); selection closes dialog then navigates with params. Styling: rounded-2xl, shadow-2xl, top-[12%] placement, max-h min(420px,60vh), backdrop blur via new global CSS `[data-slot="dialog-overlay"] { backdrop-filter: blur(3px) }` (applies to ALL dialogs; reduced-motion disables), command-item transition slide. Dialog query state resets on close.
+   246→- UX FIX during palette E2E: "Open full search view" was unreachable when the live query matched zero entities (group was gated on hasResults AND cmdk filtered the item out because its value lacked the query). Fixed: group renders whenever query ≥2 chars, and the item's value embeds the query (`full-search ${q}`) so cmdk can never filter it. Verified with "trip" (zero live matches) → handoff item visible → search view opens with q prefilled and graceful empty state.
+   247→- BUG FOUND & FIXED (pre-existing, exposed by palette): /api/search returned `params: { propertyId | employeeId | vehicleId }` but property/employee/vehicle-detail views all read `params?.id` — clicking ANY search result (old search view included!) navigated to an id-less detail view that fetched forever (endless skeleton, no error). Fixed at the API (params now `{ id }`) so both search-view and palette benefit. E2E: palette → "Royal Orchid" → property-detail renders (main h1 = "Royal Orchid"). Note: clients/expenses result params (clientId/search) are unread by their views — harmless, left as-is.
+   248→- FEATURE B (rich arrival toast + bell pulse): TopBar now fetches the FULL notification array (not just length) and diffs by notification KEY (prevKeysRef). On genuine arrivals while tab is visible: sonner toast shows the headline (highest-severity of the fresh batch: CRITICAL→WARNING→INFO) with its REAL title + message, severity icon (AlertTriangle red / AlertCircle amber / Info sky), description appends "— and N more new alerts." when >1, action View → notifications view. Bell gets a 2.4s animate-ping red ripple + scale-110 (pulseTimerRef cleanup on unmount). E2E: created an advance via API → new engine key `emp-advance-…` → dispatched visibilitychange (immediate re-poll path) → toast "Amit Verma holds an advance / Advance balance ₹8,100 — will be deducted in the next settlement." with Info icon + View button captured on screenshot; second dispatch did NOT re-toast (key already seen — genuine-arrivals-only semantics verified). Polling stays 60s + visibilitychange fast-path; first load never toasts.
+   249→- FEATURE C (Hindi coverage): DICT +~35 key pairs (palette.*, sr.* result-group labels, page.payments/settlements/deployments (+.sub), col.* 19 table-column keys). Wired into payments-view (header + history columns), settlements-view (header + all 9 columns), deployments-view (header + all 10 columns) — each via `const { lang } = useLang()` + t(lang,…). Verified live in Hindi: "वसूली — प्रॉपर्टी भुगतान व प्राप्य" with columns दिनांक|प्रॉपर्टी|राशि|माध्यम|संदर्भ|प्राप्तकर्ता; "भुगतान" columns कर्मचारी|दिन|दि/रा शिफ्ट|कुल|अतिरिक्त|अग्रिम −|देय शुद्ध|स्थिति; "तैनाती" columns दिनांक|कर्मचारी|प्रॉपर्टी|शिफ्ट|श्रेणी|बिलिंग|वेतन|स्थिति|भुगतान. Status badges/filter options intentionally still EN (documented Phase-2 remainder).
+   250→- QA data note: toast E2E created 2 real advances for Amit Verma (₹1,500 + ₹6,000, 2026-09-03) to surface a new engine notification; BOTH deleted afterwards via prisma (advance.deleteMany by employeeId+amount+date) — notifications back to baseline 15, Amit not listed.
+   251→- Verification: light 1280 palette (quick actions, blur backdrop), dark 1280 palette (proper dark surfaces), mobile 375 palette (fits width; footer right hint hidden <sm), palette→property-detail E2E, Ctrl+K toggle E2E, toast E2E screenshots; full 16-view sweep ZERO console errors; lint + tsc clean.
+   252→
+   253→Stage Summary:
+   254→- The command palette is the app's keyboard hub: Ctrl/Cmd+K (toggle), TopBar search affordances, live entity search + scoped navigation + quick actions + deep-search handoff. Any new view automatically appears in "Go to" via VIEWS; add to ACTIONS only for extra prominence.
+   255→- /api/search detail-result params are now `{ id }` — if you add entity types to search, the detail view MUST read params.id (or map explicitly). The old search view had this same silent bug; kept fixed for both consumers.
+   256→- Arrival-toast semantics: diff by notification KEY (not count), headline = highest severity of the batch, only when document.visibilityState === "visible", never on first load. Engine notification keys must be STABLE per entity (`emp-advance-<id>`, `prop-outstanding-<id>`) or toasts re-fire.
+   257→- i18n: page headers + main table columns of payments/settlements/deployments are bilingual. Remaining EN-by-design: status badges, filter option labels, module-level OPTIONS arrays (moving them inside components is the pattern if needed).
+   258→- QA artifacts cleaned (2 advances); no schema/API shape changes except /api/search params fix (see above).
+   259→- Next-step candidates: palette quick-create actions (inline Deploy/Payment/Advance dialogs instead of navigation); per-item palette sub-pages (employee → "give advance" action row); continue Hindi coverage (employees/properties/transport headers + filter labels); notification-arrival E2E automation script (the visibilitychange-dispatch + API-seed trick from this round is reusable); print-output language switch.
+   260→

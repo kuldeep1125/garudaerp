@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useLang, t } from "@/lib/i18n";
 import { CarFront, Plus, ShieldAlert, GaugeCircle } from "lucide-react";
 import {
   type VehicleRec, type Option, SelectInput, Field, ErrorState, moneyCls,
@@ -165,6 +166,7 @@ function AddVehicleDialog({ open, onOpenChange, onDone }: {
 // ---------------------------------------------------------------------------
 
 export default function VehiclesView({ navigate }: ViewProps) {
+  const { lang } = useLang();
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
   const searchDeb = useDebounced(search);
@@ -186,8 +188,8 @@ export default function VehiclesView({ navigate }: ViewProps) {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Vehicles"
-        subtitle={`${items.length} vehicle(s) in fleet`}
+        title={t(lang, "page.vehicles")}
+        subtitle={t(lang, "page.vehicles.sub").replace("{n}", String(items.length))}
         actions={
           <Button size="sm" className="h-9 gap-1.5" onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" aria-hidden />Add Vehicle

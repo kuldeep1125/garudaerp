@@ -204,6 +204,7 @@ export default function AdvancesView({ navigate }: ViewProps) {
                     columns={historyColumns}
                     rows={history?.items ?? []}
                     rowKey={(r) => r.id}
+                    exportName="advances"
                     loading={hLoading}
                     emptyIcon={HandCoins}
                     emptyTitle="No advances found"

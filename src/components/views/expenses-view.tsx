@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useLang, t } from "@/lib/i18n";
 import {
   Receipt, Plus, MoreHorizontal, Pencil, Trash2, Repeat, ChevronDown, Play, Wallet, Hash,
 } from "lucide-react";
@@ -324,6 +325,7 @@ function RecurringFormDialog({ open, onOpenChange, onDone }: {
 // ---------------------------------------------------------------------------
 
 export default function ExpensesView({ navigate }: ViewProps) {
+  const { lang } = useLang();
   void navigate; // reserved for future drill-downs
   const { scope } = useBusiness();
   const { mutate, saving } = useMutation();
@@ -428,7 +430,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
 
   const columns: Column<ExpenseRec>[] = [
     {
-      key: "description", label: "Expense", primary: true,
+      key: "description", label: t(lang, "col.expense"), primary: true,
       render: (r) => (
         <div className="min-w-0">
           <p className="truncate font-medium">{r.description || r.categoryName || "Untitled expense"}</p>
@@ -437,13 +439,13 @@ export default function ExpensesView({ navigate }: ViewProps) {
       ),
       value: (r) => r.description || r.categoryName || "Untitled expense",
     },
-    { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
-    { key: "business", label: "Business", render: (r) => <BusinessBadge business={r.business} />, value: (r) => r.business },
-    { key: "category", label: "Category", value: (r) => r.categoryName ?? "—", hideOnMobile: true },
-    { key: "vehicle", label: "Vehicle", value: (r) => r.vehicleName ?? "—", hideOnMobile: true },
-    { key: "spentBy", label: "Spent by", value: (r) => r.spentByName ?? "—", hideOnMobile: true },
+    { key: "date", label: t(lang, "col.date"), value: (r) => fmtDay(r.date), hideOnMobile: true },
+    { key: "business", label: t(lang, "col.business"), render: (r) => <BusinessBadge business={r.business} />, value: (r) => r.business },
+    { key: "category", label: t(lang, "col.category"), value: (r) => r.categoryName ?? "—", hideOnMobile: true },
+    { key: "vehicle", label: t(lang, "col.vehicle"), value: (r) => r.vehicleName ?? "—", hideOnMobile: true },
+    { key: "spentBy", label: t(lang, "col.spentBy"), value: (r) => r.spentByName ?? "—", hideOnMobile: true },
     {
-      key: "amount", label: "Amount", className: "text-right",
+      key: "amount", label: t(lang, "col.amount"), className: "text-right",
       render: (r) => <span className="font-semibold tabular-nums">{formatINR(r.amount)}</span>,
       value: (r) => formatINR(r.amount),
     },
@@ -475,8 +477,8 @@ export default function ExpensesView({ navigate }: ViewProps) {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Expenses"
-        subtitle="All business spending in one ledger"
+        title={t(lang, "page.expenses")}
+        subtitle={t(lang, "page.expenses.sub")}
         actions={
           <Button size="sm" className="h-9 gap-1.5" onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" aria-hidden />Add Expense
@@ -557,6 +559,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
                 columns={columns}
                 rows={items}
                 rowKey={(r) => r.id}
+                exportName="expenses"
                 loading={expenses.loading}
                 emptyIcon={Receipt}
                 emptyTitle="No expenses match"

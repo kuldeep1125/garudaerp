@@ -381,13 +381,26 @@ function BottomNav({ onOpenMore }: { onOpenMore: () => void }) {
               onClick={item.action}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "flex min-h-[56px] flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-[10px] font-medium transition-colors",
+                "flex min-h-[56px] flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-[10px] font-medium transition-colors active:scale-95",
                 active ? "text-primary" : "text-muted-foreground hover:text-foreground"
               )}
             >
-              <item.icon className={cn("h-5 w-5", active && "drop-shadow-sm")} aria-hidden />
+              <item.icon
+                className={cn(
+                  "h-5 w-5 transition-all duration-300 ease-out",
+                  active ? "-translate-y-px scale-110 drop-shadow-sm" : "scale-100"
+                )}
+                aria-hidden
+              />
               {item.label}
-              <span className={cn("h-0.5 w-6 rounded-full", active ? "bg-primary" : "bg-transparent")} aria-hidden />
+              {/* animated active indicator — grows from center */}
+              <span
+                className={cn(
+                  "h-0.5 rounded-full bg-primary transition-all duration-300 ease-out",
+                  active ? "w-7 opacity-100" : "w-0 opacity-0"
+                )}
+                aria-hidden
+              />
             </button>
           );
         })}

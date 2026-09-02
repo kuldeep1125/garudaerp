@@ -21,6 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useLang, t } from "@/lib/i18n";
 import {
   UserRound, MoreHorizontal, Pencil, Eye, HandCoins, UserPlus,
 } from "lucide-react";
@@ -137,6 +138,7 @@ function EmployeeFormDialog({ open, onOpenChange, employee, onDone }: {
 }
 
 export default function EmployeesView({ navigate }: ViewProps) {
+  const { lang } = useLang();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [addOpen, setAddOpen] = useState(false);
@@ -173,9 +175,9 @@ export default function EmployeesView({ navigate }: ViewProps) {
   };
 
   const columns: Column<EmployeeRec>[] = [
-    { key: "code", label: "Code", className: "font-mono text-xs", value: (r) => r.code, hideOnMobile: true },
+    { key: "code", label: t(lang, "col.code"), className: "font-mono text-xs", value: (r) => r.code, hideOnMobile: true },
     {
-      key: "fullName", label: "Employee", primary: true,
+      key: "fullName", label: t(lang, "col.employee"), primary: true,
       render: (r) => (
         <div className="min-w-0">
           <p className="truncate font-medium">{r.fullName}</p>
@@ -184,11 +186,11 @@ export default function EmployeesView({ navigate }: ViewProps) {
       ),
       value: (r) => r.fullName,
     },
-    { key: "mobile", label: "Mobile", value: (r) => r.mobile ?? "—", hideOnMobile: true },
-    { key: "rate", label: "Rate/day", className: "text-right", value: (r) => formatINR(r.standardRate ?? 0) },
-    { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+    { key: "mobile", label: t(lang, "col.mobile"), value: (r) => r.mobile ?? "—", hideOnMobile: true },
+    { key: "rate", label: t(lang, "col.rate"), className: "text-right", value: (r) => formatINR(r.standardRate ?? 0) },
+    { key: "status", label: t(lang, "col.status"), render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
     {
-      key: "advanceBalance", label: "Advance due", className: "text-right",
+      key: "advanceBalance", label: t(lang, "col.advanceDue"), className: "text-right",
       render: (r) => (
         <span className={cn("tabular-nums font-medium", (r.advanceBalance ?? 0) > 0 && "text-red-600 dark:text-red-400")}>
           {formatINR(r.advanceBalance ?? 0)}
@@ -236,8 +238,8 @@ export default function EmployeesView({ navigate }: ViewProps) {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Employees"
-        subtitle={`${data?.total ?? 0} people on record`}
+        title={t(lang, "page.employees")}
+        subtitle={t(lang, "page.employees.sub").replace("{n}", String(data?.total ?? 0))}
         actions={
           <Button size="sm" className="h-9 gap-1.5" onClick={() => setAddOpen(true)}>
             <UserPlus className="h-4 w-4" aria-hidden />Add Employee
@@ -267,6 +269,7 @@ export default function EmployeesView({ navigate }: ViewProps) {
               rows={rows}
               rowKey={(r) => r.id}
               onRowClick={(r) => navigate("employee-detail", { id: r.id })}
+              exportName="employees"
               loading={loading}
               emptyIcon={UserRound}
               emptyTitle={search || status ? "No employees match" : "No employees yet"}

@@ -192,6 +192,7 @@ export default function PaymentsView({ params, navigate }: ViewProps) {
                   columns={historyColumns}
                   rows={history?.items ?? []}
                   rowKey={(r) => r.id}
+                  exportName="collections"
                   loading={hLoading}
                   emptyIcon={Wallet}
                   emptyTitle="No payments in this period"

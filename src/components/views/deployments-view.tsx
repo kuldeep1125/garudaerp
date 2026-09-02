@@ -546,6 +546,7 @@ export default function DeploymentsView({ params }: ViewProps) {
               rows={rows}
               rowKey={(r) => r.id}
               onRowClick={openDetail}
+              exportName="deployments"
               loading={loading}
               emptyIcon={CalendarCheck}
               emptyTitle="No deployments for this filter"

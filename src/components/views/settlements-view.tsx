@@ -236,6 +236,7 @@ export default function SettlementsView({ navigate }: ViewProps) {
               rows={items}
               rowKey={(r) => r.id}
               onRowClick={(r) => setDetailId(r.id)}
+              exportName="settlements"
               loading={loading}
               emptyIcon={ReceiptText}
               emptyTitle="No settlements for this month"

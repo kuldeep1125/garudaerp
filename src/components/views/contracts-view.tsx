@@ -130,6 +130,7 @@ export default function ContractsView({ navigate }: ViewProps) {
               rows={rows}
               rowKey={(r) => r.id}
               onRowClick={(r) => navigate("property-detail", { id: r.propertyId })}
+              exportName="contracts"
               loading={loading}
               emptyIcon={ScrollText}
               emptyTitle="No contracts found"

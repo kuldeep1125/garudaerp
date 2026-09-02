@@ -259,6 +259,7 @@ export default function AuditView(_props: ViewProps) {
           columns={columns}
           rows={data?.items ?? []}
           rowKey={(r) => r.id}
+          exportName="audit-log"
           loading={loading}
           emptyIcon={History}
           emptyTitle="No audit entries"

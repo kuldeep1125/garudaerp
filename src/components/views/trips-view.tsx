@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { useLang, t } from "@/lib/i18n";
 import { Route, Plus, IndianRupee, TimerOff, BadgeCheck } from "lucide-react";
 import {
   type TripRec, type VehicleRec, type ClientRec, type Option, SelectInput, Field, KV, ErrorState,
@@ -224,6 +225,7 @@ function NewTripDialog({ open, onOpenChange, vehicles, clients, onDone }: {
 // ---------------------------------------------------------------------------
 
 export default function TripsView({ params, navigate }: ViewProps) {
+  const { lang } = useLang();
   void navigate; // reserved (vehicle-detail links here with vehicleId preselected)
   const { mutate, saving } = useMutation();
 
@@ -319,7 +321,7 @@ export default function TripsView({ params, navigate }: ViewProps) {
 
   const columns: Column<TripRec>[] = [
     {
-      key: "vehicle", label: "Vehicle → Client", primary: true,
+      key: "vehicle", label: t(lang, "col.vehicleClient"), primary: true,
       render: (r) => (
         <div className="min-w-0">
           <p className="truncate font-medium">{r.vehicleName ?? "—"} <span className="text-muted-foreground">→ {r.clientName ?? "—"}</span></p>
@@ -331,7 +333,7 @@ export default function TripsView({ params, navigate }: ViewProps) {
       value: (r) => `${r.vehicleName ?? "—"} → ${r.clientName ?? "—"}`,
     },
     {
-      key: "type", label: "Type", render: (r) => (
+      key: "type", label: t(lang, "col.type"), render: (r) => (
         <div className="flex flex-wrap gap-1">
           <StatusBadge status={r.tripType} />
           {r.rentalType && <StatusBadge status={r.rentalType} />}
@@ -341,17 +343,17 @@ export default function TripsView({ params, navigate }: ViewProps) {
       hideOnMobile: true,
     },
     {
-      key: "agreed", label: "Agreed", className: "text-right",
+      key: "agreed", label: t(lang, "col.agreed"), className: "text-right",
       render: (r) => <span className="tabular-nums">{formatINR(tripTotal(r))}</span>,
       value: (r) => formatINR(tripTotal(r)),
     },
     {
-      key: "paid", label: "Paid", className: "text-right", hideOnMobile: true,
+      key: "paid", label: t(lang, "col.paid"), className: "text-right", hideOnMobile: true,
       render: (r) => <span className="tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(r.paidAmount ?? 0)}</span>,
       value: (r) => formatINR(r.paidAmount ?? 0),
     },
     {
-      key: "paymentStatus", label: "Payment",
+      key: "paymentStatus", label: t(lang, "col.payment"),
       render: (r) => (
         <div className="min-w-[92px]">
           <StatusBadge status={r.paymentStatus} />
@@ -365,7 +367,7 @@ export default function TripsView({ params, navigate }: ViewProps) {
       ),
       value: (r) => r.paymentStatus,
     },
-    { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+    { key: "status", label: t(lang, "col.status"), render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
   ];
 
   const detailTrip = detail;
@@ -373,8 +375,8 @@ export default function TripsView({ params, navigate }: ViewProps) {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Trips & Rentals"
-        subtitle="Vehicle engagements, payments & closure"
+        title={t(lang, "page.trips")}
+        subtitle={t(lang, "page.trips.sub")}
         actions={
           <Button size="sm" className="h-9 gap-1.5" onClick={() => setNewOpen(true)}>
             <Plus className="h-4 w-4" aria-hidden />New Rental
@@ -436,6 +438,7 @@ export default function TripsView({ params, navigate }: ViewProps) {
               rows={items}
               rowKey={(r) => r.id}
               onRowClick={(r) => setDetailId(r.id)}
+              exportName="trips"
               loading={trips.loading}
               emptyIcon={Route}
               emptyTitle="No trips match"

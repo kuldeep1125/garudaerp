@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { useLang, t } from "@/lib/i18n";
 import { Contact2, EllipsisVertical, Pencil, Plus, Route } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -152,6 +153,7 @@ function ClientFormDialog({ open, onOpenChange, target, onDone }: {
 // ---------------------------------------------------------------------------
 
 export default function ClientsView({ navigate }: ViewProps) {
+  const { lang } = useLang();
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<ClientRec | null>(null);
@@ -166,7 +168,7 @@ export default function ClientsView({ navigate }: ViewProps) {
   const columns: Column<ClientRec>[] = [
     {
       key: "name",
-      label: "Client",
+      label: t(lang, "col.client"),
       primary: true,
       render: (r) => (
         <div className="min-w-0">
@@ -178,21 +180,21 @@ export default function ClientsView({ navigate }: ViewProps) {
     },
     {
       key: "phone",
-      label: "Phone",
+      label: t(lang, "col.phone"),
       render: (r) => <span className="tabular-nums">{r.phone || <span className="text-muted-foreground">—</span>}</span>,
       value: (r) => r.phone ?? "",
     },
-    { key: "email", label: "Email", value: (r) => r.email ?? "", hideOnMobile: true },
+    { key: "email", label: t(lang, "col.email"), value: (r) => r.email ?? "", hideOnMobile: true },
     {
       key: "tripCount",
-      label: "Trips",
+      label: t(lang, "col.trips"),
       className: "text-right",
       render: (r) => <span className="tabular-nums">{r.tripCount ?? 0}</span>,
       value: (r) => String(r.tripCount ?? 0),
     },
     {
       key: "totalBusiness",
-      label: "Total business",
+      label: t(lang, "col.totalBusiness"),
       className: "text-right",
       render: (r) => <span className="font-semibold tabular-nums">{formatINR(r.totalBusiness ?? 0)}</span>,
       value: (r) => formatINR(r.totalBusiness ?? 0),
@@ -224,8 +226,8 @@ export default function ClientsView({ navigate }: ViewProps) {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Clients"
-        subtitle={`${clients.length} transport customer${clients.length === 1 ? "" : "s"}`}
+        title={t(lang, "page.clients")}
+        subtitle={t(lang, "page.clients.sub").replace("{n}", String(clients.length))}
         icon={Contact2}
         actions={
           <Button size="sm" className="h-9 gap-1.5" onClick={() => setAddOpen(true)}>
@@ -251,6 +253,7 @@ export default function ClientsView({ navigate }: ViewProps) {
               rows={clients}
               rowKey={(r) => r.id}
               onRowClick={(r) => navigate("trips", { clientId: r.id })}
+              exportName="clients"
               loading={loading}
               emptyIcon={Contact2}
               emptyTitle={search ? "No clients match" : "No clients yet"}

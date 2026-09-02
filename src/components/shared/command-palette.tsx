@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api-client";
 import { useNav, useBusiness } from "@/components/providers";
 import { VIEWS } from "@/lib/views";
@@ -9,11 +9,13 @@ import {
   CommandDialog, CommandInput, CommandList, CommandEmpty,
   CommandGroup, CommandItem, CommandSeparator,
 } from "@/components/ui/command";
-import { useDebounced, useAsync } from "@/components/views/_shared";
+import {
+  useDebounced, useAsync, GiveAdvanceDialog, RecordPaymentDialog, DeployWizard,
+} from "@/components/views/_shared";
 import { cn } from "@/lib/utils";
 import {
   AlertCircle, ArrowRight, Building2, CalendarCheck, CarFront, Contact2,
-  CornerDownLeft, Receipt, Search, UserRound, type LucideIcon,
+  CornerDownLeft, HandCoins, Plus, Receipt, Search, UserRound, Wallet, type LucideIcon,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -54,11 +56,31 @@ const ACTIONS = [
   "reports", "notifications", "audit",
 ];
 
+// Inline quick-create actions — open the shared record dialogs right from the palette.
+type CreateKind = "advance" | "payment" | "deployment" | null;
+
+const CREATE_ITEMS: { kind: Exclude<CreateKind, null>; icon: LucideIcon; labelKey: string; subKey: string; tint: string; goto: string }[] = [
+  {
+    kind: "advance", icon: HandCoins, labelKey: "palette.create.advance", subKey: "palette.create.advance.sub",
+    tint: "text-emerald-600 dark:text-emerald-400", goto: "advances",
+  },
+  {
+    kind: "payment", icon: Wallet, labelKey: "palette.create.payment", subKey: "palette.create.payment.sub",
+    tint: "text-emerald-600 dark:text-emerald-400", goto: "payments",
+  },
+  {
+    kind: "deployment", icon: CalendarCheck, labelKey: "palette.create.deployment", subKey: "palette.create.deployment.sub",
+    tint: "text-emerald-600 dark:text-emerald-400", goto: "deployments",
+  },
+];
+
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { navigate } = useNav();
   const { scope } = useBusiness();
   const { lang } = useLang();
   const [q, setQ] = useState("");
+  const [create, setCreate] = useState<CreateKind>(null);
+  const createGotoRef = useRef<string>("");
   const debounced = useDebounced(q, 250);
 
   const live = debounced.trim().length >= 2;
@@ -78,7 +100,16 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     navigate(view, params);
   };
 
+  // Quick-create: close the palette, open the shared dialog; after a successful
+  // save jump to the relevant view so the new record is visible immediately.
+  const startCreate = (kind: Exclude<CreateKind, null>, goto: string) => {
+    onOpenChange(false);
+    setCreate(kind);
+    createGotoRef.current = goto;
+  };
+
   return (
+    <>
     <CommandDialog
       open={open}
       onOpenChange={(o) => { onOpenChange(o); if (!o) setQ(""); }}
@@ -138,6 +169,28 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           </CommandGroup>
         )}
         {live && <CommandSeparator />}
+
+        {/* Quick create — shared record dialogs, highest-value power-user actions */}
+        <CommandGroup heading={t(lang, "palette.create")}>
+          {CREATE_ITEMS.map((item) => (
+            <CommandItem
+              key={item.kind}
+              value={`create-${item.kind}`}
+              onSelect={() => startCreate(item.kind, item.goto)}
+              className="gap-3 rounded-lg"
+            >
+              <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/70", item.tint)}>
+                <item.icon className="h-4 w-4" aria-hidden />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13px] font-medium">{t(lang, item.labelKey)}</span>
+                <span className="block truncate text-[11px] text-muted-foreground">{t(lang, item.subKey)}</span>
+              </span>
+              <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" aria-hidden />
+            </CommandItem>
+          ))}
+        </CommandGroup>
+        <CommandSeparator />
 
         {/* Quick actions */}
         <CommandGroup heading={t(lang, "palette.actions")}>
@@ -203,6 +256,24 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         </span>
       </div>
     </CommandDialog>
+
+    {/* Quick-create dialogs (shared, self-fetching) — opened from palette items. */}
+    <GiveAdvanceDialog
+      open={create === "advance"}
+      onOpenChange={(o) => { if (!o) setCreate(null); }}
+      onDone={() => { setCreate(null); navigate(createGotoRef.current); }}
+    />
+    <RecordPaymentDialog
+      open={create === "payment"}
+      onOpenChange={(o) => { if (!o) setCreate(null); }}
+      onDone={() => { setCreate(null); navigate(createGotoRef.current); }}
+    />
+    <DeployWizard
+      open={create === "deployment"}
+      onOpenChange={(o) => { if (!o) setCreate(null); }}
+      onDone={() => { setCreate(null); navigate(createGotoRef.current); }}
+    />
+    </>
   );
 }
 

@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { toast } from "sonner";
+import { useLang, t } from "@/lib/i18n";
 import { Building2, Plus } from "lucide-react";
 import { Field, ListResp, Option, PropertyRec, SelectInput, errMessage, useMutation } from "./_shared";
 
@@ -90,6 +91,7 @@ function PropertyFormDialog({ open, onOpenChange, onDone }: {
 }
 
 export default function PropertiesView({ navigate }: ViewProps) {
+  const { lang } = useLang();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [addOpen, setAddOpen] = useState(false);
@@ -115,7 +117,7 @@ export default function PropertiesView({ navigate }: ViewProps) {
 
   const columns: Column<PropertyRec>[] = [
     {
-      key: "name", label: "Property", primary: true,
+      key: "name", label: t(lang, "col.property"), primary: true,
       render: (r) => (
         <div className="min-w-0">
           <p className="truncate font-medium">{r.name}{r.brandName ? <span className="text-muted-foreground"> · {r.brandName}</span> : null}</p>
@@ -124,12 +126,12 @@ export default function PropertiesView({ navigate }: ViewProps) {
       ),
       value: (r) => r.name,
     },
-    { key: "contact", label: "Contact", value: (r) => r.contactPerson ?? "—", hideOnMobile: true },
-    { key: "contract", label: "Active contract", value: (r) => r.activeContractName ?? "—", hideOnMobile: true },
-    { key: "billed", label: "Billed", className: "text-right", value: (r) => formatINR(r.totalBilled ?? 0), hideOnMobile: true },
-    { key: "received", label: "Received", className: "text-right", value: (r) => formatINR(r.totalReceived ?? 0), hideOnMobile: true },
+    { key: "contact", label: t(lang, "col.contact"), value: (r) => r.contactPerson ?? "—", hideOnMobile: true },
+    { key: "contract", label: t(lang, "col.activeContract"), value: (r) => r.activeContractName ?? "—", hideOnMobile: true },
+    { key: "billed", label: t(lang, "col.billed"), className: "text-right", value: (r) => formatINR(r.totalBilled ?? 0), hideOnMobile: true },
+    { key: "received", label: t(lang, "col.received"), className: "text-right", value: (r) => formatINR(r.totalReceived ?? 0), hideOnMobile: true },
     {
-      key: "outstanding", label: "Outstanding", className: "text-right",
+      key: "outstanding", label: t(lang, "col.outstanding"), className: "text-right",
       render: (r) => (
         <span className={(r.totalOutstanding ?? 0) > 0 ? "font-semibold tabular-nums text-red-600 dark:text-red-400" : "tabular-nums text-muted-foreground"}>
           {formatINR(r.totalOutstanding ?? 0)}
@@ -137,14 +139,14 @@ export default function PropertiesView({ navigate }: ViewProps) {
       ),
       value: (r) => formatINR(r.totalOutstanding ?? 0),
     },
-    { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+    { key: "status", label: t(lang, "col.status"), render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
   ];
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Properties"
-        subtitle={`${data?.total ?? 0} client locations`}
+        title={t(lang, "page.properties")}
+        subtitle={t(lang, "page.properties.sub").replace("{n}", String(data?.total ?? 0))}
         actions={
           <Button size="sm" className="h-9 gap-1.5" onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" aria-hidden />Add Property
@@ -174,6 +176,7 @@ export default function PropertiesView({ navigate }: ViewProps) {
               rows={data?.items ?? []}
               rowKey={(r) => r.id}
               onRowClick={(r) => navigate("property-detail", { id: r.id })}
+              exportName="properties"
               loading={loading}
               emptyIcon={Building2}
               emptyTitle={search || status ? "No properties match" : "No properties yet"}
