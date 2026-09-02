@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  BarChart3, Building2, CalendarCheck, CarFront, Crown, Download, Play, Printer, Receipt,
+  BarChart3, Building2, CalendarCheck, CarFront, Crown, Download, Info, Play, Printer, Receipt,
   ReceiptText, TrendingUp, Users, Wallet, type LucideIcon,
 } from "lucide-react";
 import {
@@ -69,6 +69,7 @@ interface ReportResp {
   rows: Record<string, unknown>[];
   totals?: Record<string, unknown> | null;
   meta?: unknown;
+  note?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -403,6 +404,15 @@ export default function ReportsView(_props: ViewProps) {
                   <p className="text-[11px] text-muted-foreground" aria-live="polite">
                     {caption}
                   </p>
+                )}
+                {data?.note && (
+                  <div
+                    className="flex items-start gap-2 rounded-lg border border-border/70 bg-muted/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground print:bg-transparent"
+                    role="note"
+                  >
+                    <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                    <span>{data.note}</span>
+                  </div>
                 )}
                 <Card>
                   <CardContent className="p-3 sm:p-4">

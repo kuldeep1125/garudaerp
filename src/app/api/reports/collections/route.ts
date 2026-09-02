@@ -32,8 +32,10 @@ export const GET = handleRoute(async ({ req }) => {
         propertyId: p.id,
         billed: day.billed,
         received: day.paid,
-        outstanding: day.outstanding,
-        pct: day.billed > 0 ? Math.round((day.paid / day.billed) * 100) : 0,
+        // Cumulative FIFO outstanding as of that day; clamped so over-collection
+        // (payments settling earlier billings) never renders as a negative due.
+        outstanding: Math.max(0, day.outstanding),
+        pct: day.billed > 0 ? Math.min(100, Math.round((day.paid / day.billed) * 100)) : 0,
       });
     }
   }
@@ -42,7 +44,7 @@ export const GET = handleRoute(async ({ req }) => {
   const totals = {
     billed: round2(rows.reduce((s, r) => s + r.billed, 0)),
     received: round2(rows.reduce((s, r) => s + r.received, 0)),
-    outstanding: round2(rows.reduce((s, r) => s + (r.billed - r.received), 0)),
+    outstanding: round2(Math.max(0, rows.reduce((s, r) => s + r.outstanding, 0))),
   };
 
   return {
@@ -56,6 +58,7 @@ export const GET = handleRoute(async ({ req }) => {
     ],
     rows,
     totals,
+    note: "Received is payments dated in the period and may settle billings from before it; Outstanding is the cumulative FIFO balance, so Received can exceed Billed on a single row.",
     meta: { from: dayKey(from), to: dayKey(to) },
   };
 });

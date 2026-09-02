@@ -19,10 +19,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { CalendarCheck, CheckCheck, CheckSquare, Square, Users, IndianRupee, Pencil, UserX, XCircle, MinusCircle } from "lucide-react";
+import { CalendarCheck, CheckCheck, CheckSquare, Square, Users, IndianRupee, Pencil, UserX, XCircle, MinusCircle, CalendarDays, ChevronDown } from "lucide-react";
 import {
   DeploymentRec, DeployWizard, ListResp, Option, PropertyRec, SelectInput, ShiftBadgeInline,
-  errMessage, fmtDateTime, fmtDay, todayStr, useMutation,
+  errMessage, fmtDateTime, fmtDay, todayStr, useAsync, useMutation,
 } from "./_shared";
 
 const STATUS_OPTIONS: Option[] = [
@@ -42,6 +42,47 @@ const SHIFT_OPTIONS: Option[] = [
 ];
 
 interface Totals { billing: number; payout: number; margin: number; count: number }
+
+// --- Attendance month grid (per-employee × per-day shift counts) ---
+interface AttendanceCell { date: string; shifts: number }
+interface AttendanceRow {
+  employeeId: string; name: string; code: string; role?: string | null;
+  total: number; workedDays: number; cells: AttendanceCell[];
+}
+interface AttendanceResp { month: string; dates: string[]; rows: AttendanceRow[]; totalShifts: number }
+
+const ATT_HEAT = [
+  "bg-muted/50",
+  "bg-emerald-200/70 dark:bg-emerald-900/60",
+  "bg-emerald-400/80 dark:bg-emerald-800/80",
+  "bg-emerald-600 dark:bg-emerald-600",
+];
+
+function attClass(n: number): string {
+  if (n <= 0) return ATT_HEAT[0];
+  if (n === 1) return ATT_HEAT[1];
+  if (n === 2) return ATT_HEAT[2];
+  return ATT_HEAT[3];
+}
+
+const WD_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
+
+function monthLabel(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  return new Date(y, (m ?? 1) - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+}
+
+function shiftMonth(month: string, delta: number): string {
+  const [y, m] = month.split("-").map(Number);
+  const d = new Date(y, (m ?? 1) - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function isWeekend(dateStr: string): boolean {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const wd = new Date(y, (m ?? 1) - 1, d ?? 1).getDay();
+  return wd === 0 || wd === 6;
+}
 
 function monthBounds(offset = 0): { from: string; to: string } {
   const now = new Date();
@@ -64,6 +105,17 @@ export default function DeploymentsView({ params }: ViewProps) {
   const [editRates, setEditRates] = useState(false);
   const [rateForm, setRateForm] = useState({ billingRate: "", payoutRate: "", adjustmentAmount: "", adjustmentNote: "", notes: "" });
   const { mutate, saving } = useMutation();
+
+  // Attendance month grid — fetched lazily, only while expanded.
+  const [attOpen, setAttOpen] = useState(false);
+  const [attMonth, setAttMonth] = useState(() => {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const { data: att, loading: attLoading } = useAsync<AttendanceResp | null>(
+    () => (attOpen ? api.get<AttendanceResp>(`/api/deployments/attendance?month=${attMonth}`) : Promise.resolve(null)),
+    [attOpen, attMonth]
+  );
 
   // Property options for filter.
   const [properties, setProperties] = useState<PropertyRec[]>([]);
@@ -239,6 +291,121 @@ export default function DeploymentsView({ params }: ViewProps) {
           </Button>
         }
       />
+
+      {/* Attendance month grid (collapsible) */}
+      <Card>
+        <button
+          type="button"
+          className="flex w-full items-center gap-2.5 p-4 text-left"
+          aria-expanded={attOpen}
+          onClick={() => setAttOpen((v) => !v)}
+        >
+          <span className="rounded-lg bg-emerald-100 p-1.5 dark:bg-emerald-950" aria-hidden>
+            <CalendarDays className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold">Attendance — {monthLabel(attMonth)}</span>
+            <span className="block text-xs text-muted-foreground">
+              {att ? `${att.totalShifts.toLocaleString("en-IN")} shifts across ${att.rows.length} employees` : "Per-employee daily shift grid"}
+            </span>
+          </span>
+          <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", attOpen && "rotate-180")} aria-hidden />
+        </button>
+        {attOpen && (
+          <CardContent className="border-t pt-3">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1">
+                <Button variant="outline" size="sm" className="h-7 w-7 p-0" aria-label="Previous month" onClick={() => setAttMonth((m) => shiftMonth(m, -1))}>
+                  ‹
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2.5 text-xs"
+                  onClick={() => {
+                    const n = new Date();
+                    setAttMonth(`${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`);
+                  }}
+                >
+                  This month
+                </Button>
+                <Button variant="outline" size="sm" className="h-7 w-7 p-0" aria-label="Next month" onClick={() => setAttMonth((m) => shiftMonth(m, 1))}>
+                  ›
+                </Button>
+              </div>
+              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground" aria-hidden>
+                <span>Less</span>
+                {ATT_HEAT.map((c) => <span key={c} className={cn("h-3 w-3 rounded-[3px]", c)} />)}
+                <span>More</span>
+              </div>
+            </div>
+
+            {attLoading && !att ? (
+              <div className="space-y-2">
+                {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-6 w-full" />)}
+              </div>
+            ) : att && att.rows.length > 0 ? (
+              <div className="overflow-x-auto pb-1">
+                <div className="min-w-[640px]">
+                  {/* Header: name + day numbers + totals */}
+                  <div
+                    className="sticky top-0 z-20 grid items-end gap-px border-b bg-card pb-1"
+                    style={{ gridTemplateColumns: `minmax(8.5rem, 11rem) repeat(${att.dates.length}, minmax(14px, 1fr)) 2.6rem 2.6rem` }}
+                  >
+                    <div className="sticky left-0 z-30 bg-card pr-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Employee</div>
+                    {att.dates.map((d, i) => {
+                      const day = Number(d.slice(8));
+                      const wd = WD_LETTERS[new Date(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, day).getDay()];
+                      const isToday = d === todayStr();
+                      return (
+                        <div key={d} className={cn("text-center text-[9px] leading-tight", isWeekend(d) ? "text-muted-foreground/60" : "text-muted-foreground", isToday && "font-bold text-primary")}>
+                          <div className={cn(isToday && "rounded-sm bg-primary/10")}>{day}</div>
+                          <div className="opacity-70">{wd}</div>
+                        </div>
+                      );
+                    })}
+                    <div className="text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Shifts</div>
+                    <div className="text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Days</div>
+                  </div>
+
+                  <div className="max-h-[46vh] overflow-y-auto">
+                    {att.rows.map((r) => (
+                      <div
+                        key={r.employeeId}
+                        className="grid items-center gap-px border-b border-border/40 py-1"
+                        style={{ gridTemplateColumns: `minmax(8.5rem, 11rem) repeat(${att.dates.length}, minmax(14px, 1fr)) 2.6rem 2.6rem` }}
+                      >
+                        <div className="sticky left-0 z-10 bg-card pr-2">
+                          <p className="truncate text-xs font-medium" title={`${r.name} (${r.code})`}>{r.name}</p>
+                          <p className="truncate text-[10px] text-muted-foreground">{r.code}</p>
+                        </div>
+                        {r.cells.map((c) => (
+                          <div
+                            key={c.date}
+                            className={cn(
+                              "mx-auto h-4 w-4 rounded-[3px] transition-transform hover:scale-125",
+                              attClass(c.shifts),
+                              isWeekend(c.date) && c.shifts === 0 && "opacity-50",
+                              c.date === todayStr() && "ring-1 ring-primary ring-offset-1 ring-offset-background"
+                            )}
+                            role="img"
+                            aria-label={`${r.name}: ${c.shifts} shift(s) on ${c.date}`}
+                            title={`${fmtDay(c.date)} · ${r.name} · ${c.shifts} shift${c.shifts === 1 ? "" : "s"}`}
+                          />
+                        ))}
+                        <div className="text-right text-xs font-bold tabular-nums">{r.total}</div>
+                        <div className="text-right text-xs tabular-nums text-muted-foreground">{r.workedDays}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="py-6 text-center text-xs text-muted-foreground">No active employees found.</p>
+            )}
+          </CardContent>
+        )}
+      </Card>
 
       {/* Filters */}
       <Card>

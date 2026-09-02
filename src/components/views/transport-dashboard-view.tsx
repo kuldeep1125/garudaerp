@@ -12,7 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
-  Truck, CarFront, IndianRupee, Receipt, Route, Landmark, TrendingDown, Wallet, Trophy, Users,
+  Truck, CarFront, IndianRupee, Receipt, Route, Landmark, TrendingDown, Wallet, Trophy, Users, Info,
 } from "lucide-react";
 import { AreaTrend, CHART_COLORS, ErrorState, moneyCls, useAsync } from "./_shared";
 
@@ -22,6 +22,17 @@ interface TransportBlock {
   monthEmi: number; monthNet: number;
 }
 interface PerVehicle { vehicleId: string; name: string; revenue: number; expense: number; emi: number; net: number }
+interface TripProfitTrip {
+  tripId: string; label: string; client: string; destination: string; vehicle: string;
+  registrationNumber: string; rentalType: string; status: string;
+  revenue: number; allocatedCost: number; profit: number; marginPct: number; collectedPct: number;
+}
+interface TripProfitResp {
+  totalTrips: number;
+  totals: { revenue: number; allocatedCost: number; profit: number };
+  note: string;
+  trips: TripProfitTrip[];
+}
 interface Resp {
   transport?: TransportBlock;
   trend: { date: string; revenue: number }[];
@@ -33,6 +44,10 @@ export default function TransportDashboardView({ navigate }: ViewProps) {
   const { data, loading, error, reload } = useAsync<Resp>(
     () => api.get<Resp>(`/api/dashboard/transport?range=${range}`),
     [range]
+  );
+  const { data: tripProfit, loading: tpLoading } = useAsync<TripProfitResp>(
+    () => api.get<TripProfitResp>("/api/transport/trip-profit?limit=6"),
+    []
   );
 
   const t = data?.transport;
@@ -86,6 +101,83 @@ export default function TransportDashboardView({ navigate }: ViewProps) {
               />
             </CardContent>
           </Card>
+
+          {/* Trip-wise estimated profitability */}
+          {tpLoading ? (
+            <Card>
+              <CardContent className="space-y-3 p-4">
+                <Skeleton className="h-5 w-56" />
+                {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-9 w-full" />)}
+              </CardContent>
+            </Card>
+          ) : tripProfit && tripProfit.trips.length > 0 ? (
+            <Card>
+              <CardHeader className="flex-row items-start justify-between space-y-0 pb-2">
+                <div>
+                  <CardTitle className="text-base">Top trips by estimated profit</CardTitle>
+                  <p className="mt-1 text-xs text-muted-foreground">{tripProfit.totalTrips} {tripProfit.totalTrips === 1 ? "trip" : "trips"} this month</p>
+                </div>
+                <span
+                  className={cn(
+                    "rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums",
+                    tripProfit.totals.profit >= 0
+                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                      : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                  )}
+                >
+                  Net {formatINR(tripProfit.totals.profit, { compact: true })}
+                </span>
+              </CardHeader>
+              <CardContent className="space-y-2.5">
+                {tripProfit.trips.map((t, i) => {
+                  const maxProfit = Math.max(...tripProfit.trips.map((x) => Math.abs(x.profit)), 1);
+                  const widthPct = Math.max(4, Math.round((Math.abs(t.profit) / maxProfit) * 100));
+                  const positive = t.profit >= 0;
+                  return (
+                    <button
+                      key={t.tripId}
+                      type="button"
+                      onClick={() => navigate("trips")}
+                      className="group block w-full rounded-lg px-1 py-1 text-left transition-colors hover:bg-muted/50"
+                      title={`${t.client} · ${t.destination} · ${t.vehicle} (${t.registrationNumber})\nRevenue ${formatINR(t.revenue)} · Cost ≈ ${formatINR(t.allocatedCost)} · Collected ${t.collectedPct}%`}
+                    >
+                      <div className="mb-1 flex items-center gap-2 text-xs">
+                        <span className="w-4 shrink-0 text-[10px] font-bold text-muted-foreground" aria-hidden>{i + 1}</span>
+                        <span className="min-w-0 flex-1 truncate font-medium">{t.label}</span>
+                        <span className="hidden shrink-0 text-[10px] text-muted-foreground sm:inline">{t.vehicle}</span>
+                        <span
+                          className={cn(
+                            "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums",
+                            positive
+                              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                              : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                          )}
+                        >
+                          {t.marginPct}%
+                        </span>
+                        <span className={cn("w-16 shrink-0 text-right font-bold tabular-nums", moneyCls(t.profit))}>
+                          {formatINR(t.profit, { compact: true })}
+                        </span>
+                      </div>
+                      <div className="ml-6 h-1.5 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={cn(
+                            "h-full rounded-full transition-all duration-500 group-hover:opacity-80",
+                            positive ? "bg-emerald-500 dark:bg-emerald-600" : "bg-red-500 dark:bg-red-600"
+                          )}
+                          style={{ width: `${widthPct}%` }}
+                        />
+                      </div>
+                    </button>
+                  );
+                })}
+                <p className="flex items-start gap-1.5 pt-1 text-[11px] leading-relaxed text-muted-foreground">
+                  <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+                  {tripProfit.note}
+                </p>
+              </CardContent>
+            </Card>
+          ) : null}
 
           {/* Most profitable callout */}
           {best && (

@@ -143,3 +143,24 @@ Stage Summary:
 - Employee detail Work History is now analytics-led (30-day strip + billing trend above the raw table).
 - Report column-type contract: treat "currency" and "money" as synonyms on any new report consumers.
 - Next-step candidates: window-vs-FIFO outstanding semantics on the collections report (label or clamp negatives); owner monthly summary; i18n scaffolding (SRS Phase 2); attendance-style month grid on deployments view.
+
+---
+Task ID: 7
+Agent: main (orchestrator)
+Task: QA round; report window-vs-FIFO semantics fix; trip-wise estimated profit chart; attendance month grid; styling details.
+
+Work Log:
+- QA first: server 200, lint + tsc clean (src/), agent-browser sweep of all sidebar views (manpower stack, collections, settlements, transport stack, reports, settings) — ZERO console errors. False alarm investigated: TopBar bell badge rendered "9+" (cap) and looked like "0+" in a low-res screenshot — verified geometry 22×16px, working as designed. Collections view healthy (₹2,73,160 outstanding / 6 properties).
+- DATA-SEMANTICS FIX (Task 6 observation resolved): /api/reports/collections + /api/reports/property-revenue now clamp row outstanding at ≥0, cap Collection % at 100, clamp totals outstanding ≥0, and return a new `note` field explaining that received is dated-in-window payments which may settle earlier billings. Verified via API: 0 negative-outstanding rows, 0 pct>100 rows, note present.
+- Reports view: new optional `note?: string` on ReportResp rendered as a muted info strip (Info icon, role="note", print-visible via bg-transparent on print) between the meta caption and the table.
+- NEW API: GET /api/transport/trip-profit?from=&to=&limit=8 (clamp 3–20, defaults to month range) — top trips by ESTIMATED profit: revenue = finalAmount ?? agreed+extra; vehicle TRANSPORT expenses (opex+EMI) allocated pro-rata by each trip's share of that vehicle's revenue, so per-trip profits sum to vehicle net. Returns totals, note, per-trip {client, destination, vehicle+reg, revenue, allocatedCost, profit, marginPct, collectedPct}. Smoke-verified: Goa trip ₹32,000 revenue → ₹26,038 profit (81%).
+- Transport dashboard: "Top trips by estimated profit" card after Revenue trend — ranked rows (1..n) with animated emerald/red bars scaled to max |profit|, margin chip, profit value (moneyCls), native tooltip with revenue/cost/collected %, header Net chip (emerald/red), count with singular/plural ("1 trip this month" — grammar bug caught and fixed in-round), Info note footer. Skeleton while loading, hidden when no trips.
+- NEW API: GET /api/deployments/attendance?month=YYYY-MM (default current) — per-employee BILLABLE shift counts for every day of the month; rows = all ACTIVE employees (fullName/code/designation), sorted by total desc; returns dates[], rows with per-cell {date, shifts}, total, workedDays, totalShifts. Seed data: 22 employees × 31 days, 1,262 shifts. (Two Prisma fixes during dev: Employee has no isActive → status:"ACTIVE"; name field is fullName, role is designation.)
+- Deployments view: collapsible "Attendance — {Month}" card between PageHeader and filters. Lazy fetch via useAsync (loader resolves null while collapsed, refetches on month change). Month nav (‹ This month ›), Less→More legend, CSS-grid matrix with sticky top header row + sticky-left employee column (bg-card z-layering), GitHub-style 3-step emerald heat cells (dark variants), weekend columns dimmed, today column ringed with ring-primary, per-cell hover:scale-125 + title tooltip + role="img" aria-label, Shifts/Days totals columns, max-h-[46vh] vertical scroll + horizontal scroll on narrow screens (min-w-[640px]).
+- Verification: agent-browser screenshots — transport card light (1280) + dark + mobile 375; attendance grid light + dark + mobile 375 (sticky name column + horizontal scroll confirmed); reports note strip light. Full 17-view cycle zero console errors; lint clean; tsc 0 src errors; root 200.
+
+Stage Summary:
+- Report money semantics are now: outstanding never negative, pct ≤ 100, with an on-screen/print-visible explanation strip. New consumers of report payloads should copy this pattern (`note` field) whenever window-based numbers can be misread.
+- New endpoints: /api/transport/trip-profit (est. profit, pro-rata cost allocation) and /api/deployments/attendance (month grid).
+- Attendance grid layout trick: gridTemplateColumns inline style + sticky left column requires bg-card + z-index on the sticky cell; header row must be sticky top with higher z than row-sticky cells.
+- Next-step candidates: make trip-profit respect the dashboard RangeSelector (from/to wiring); per-property attendance drill-down (click a heat cell → filtered deployments); owner monthly summary email mock; i18n (Hindi) scaffolding per SRS Phase 2.

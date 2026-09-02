@@ -51,8 +51,10 @@ export const GET = handleRoute(async ({ req }) => {
       shifts: r.shifts,
       billing: r.billing,
       received: r.received,
-      outstanding: round2(r.billing - r.received),
-      collectionPct: r.billing > 0 ? Math.round((r.received / r.billing) * 100) : 0,
+      // Payments dated in the window may settle billings from before it — clamp
+      // so an over-collected property shows ₹0 due instead of a negative number.
+      outstanding: Math.max(0, round2(r.billing - r.received)),
+      collectionPct: r.billing > 0 ? Math.min(100, Math.round((r.received / r.billing) * 100)) : 0,
     }))
     .sort((a, b) => b.billing - a.billing);
 
@@ -75,6 +77,7 @@ export const GET = handleRoute(async ({ req }) => {
     ],
     rows,
     totals,
+    note: "Received is payments dated in the period and may include collections against earlier billings; Outstanding is clamped at ₹0 when a property is over-collected.",
     meta: { from: dayKey(from), to: dayKey(to) },
   };
 });
