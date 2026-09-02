@@ -9,17 +9,17 @@ import { DataTable, type Column } from "@/components/shared/data-table";
 import { RangeSelector, type RangeKey } from "@/components/shared/filters";
 import { MonthPicker, toMonth } from "@/components/shared/month-picker";
 import { EmptyState } from "@/components/shared/empty-state";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
   BarChart3, Building2, CalendarCheck, CarFront, Crown, Download, Info, Play, Printer, Receipt,
-  ReceiptText, TrendingUp, Users, Wallet, type LucideIcon,
+  ReceiptText, Route, TrendingUp, Users, Wallet, type LucideIcon,
 } from "lucide-react";
 import {
-  ErrorState, Field, Option, SelectInput, todayStr, useAsync,
+  BarsCompare, CHART_COLORS, ErrorState, Field, Option, SelectInput, todayStr, useAsync,
 } from "./_shared";
 
 // ---------------------------------------------------------------------------
@@ -43,6 +43,7 @@ const REPORTS: ReportDef[] = [
   { type: "expenses", title: "Expenses", subtitle: "Expense entries by category & business", icon: Receipt, config: "range-business" },
   { type: "profitability", title: "Profitability", subtitle: "Billing, payout, expenses & net margin", icon: TrendingUp, config: "range-business" },
   { type: "vehicle-profitability", title: "Vehicle Profitability", subtitle: "Revenue, opex, EMI & net by vehicle", icon: CarFront, config: "range" },
+  { type: "trip-profit", title: "Trip Profitability", subtitle: "Per-trip revenue, estimated cost & margin", icon: Route, config: "range" },
   { type: "daily-operations", title: "Daily Operations", subtitle: "All deployments for a single day", icon: CalendarCheck, config: "date" },
   { type: "owner-expenses", title: "Owner Expenses", subtitle: "Spending by owner with withdrawals", icon: Crown, config: "range" },
   { type: "settlement-summary", title: "Settlement Summary", subtitle: "Month payroll summary per employee", icon: ReceiptText, config: "month" },
@@ -70,6 +71,7 @@ interface ReportResp {
   totals?: Record<string, unknown> | null;
   meta?: unknown;
   note?: string;
+  chart?: { label: string; revenue: number; cost: number; profit: number; marginPct: number }[] | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +416,33 @@ export default function ReportsView(_props: ViewProps) {
                     <span>{data.note}</span>
                   </div>
                 )}
+                {/* Trip-profit chart — only for the Trip Profitability report */}
+                {def.type === "trip-profit" && data?.chart && data.chart.length > 0 && (
+                  <Card className="overflow-hidden print:break-inside-avoid">
+                    <div className="h-0.5 w-full bg-gradient-to-r from-emerald-500/70 via-teal-500/70 to-red-500/70" aria-hidden />
+                    <CardHeader className="pb-0">
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <Route className="h-4 w-4 text-primary" aria-hidden />
+                        Trip-wise profit — revenue vs estimated cost
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        The most profitable trips plus the biggest loss-makers in the period
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="pt-2">
+                      <BarsCompare
+                        data={data.chart}
+                        xKey="label"
+                        height={260}
+                        series={[
+                          { key: "revenue", label: "Revenue", color: CHART_COLORS.emerald },
+                          { key: "cost", label: "Est. cost", color: CHART_COLORS.red },
+                          { key: "profit", label: "Profit", color: CHART_COLORS.teal },
+                        ]}
+                      />
+                    </CardContent>
+                  </Card>
+ )}
                 <Card>
                   <CardContent className="p-3 sm:p-4">
                     <DataTable

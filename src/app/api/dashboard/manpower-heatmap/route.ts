@@ -5,7 +5,7 @@ import { lastNDays } from "../../_lib/dashboard";
 
 // GET /api/dashboard/manpower-heatmap?days=14
 // Day × property deployment intensity matrix for the manpower dashboard
-// workforce heat-map. Only BILLABLE deployments count.
+// workforce heat-map, split DAY vs NIGHT per cell. Only BILLABLE deployments count.
 export const GET = handleRoute(async ({ req }) => {
   const sp = new URL(req.url).searchParams;
   const days = Math.min(30, Math.max(7, Number(sp.get("days") ?? 14) || 14));
@@ -17,10 +17,12 @@ export const GET = handleRoute(async ({ req }) => {
   });
 
   const totals = new Map<string, number>();
-  const cell = new Map<string, number>();
+  const cell = new Map<string, { total: number; day: number; night: number }>();
   for (const d of deps) {
     const k = `${dayKey(d.date)}|${d.propertyId}`;
-    cell.set(k, (cell.get(k) ?? 0) + 1);
+    const prev = cell.get(k) ?? { total: 0, day: 0, night: 0 };
+    const isNight = d.shift.toUpperCase().includes("NIGHT");
+    cell.set(k, { total: prev.total + 1, day: prev.day + (isNight ? 0 : 1), night: prev.night + (isNight ? 1 : 0) });
     totals.set(d.propertyId, (totals.get(d.propertyId) ?? 0) + 1);
   }
 
@@ -44,7 +46,10 @@ export const GET = handleRoute(async ({ req }) => {
       propertyId: r.propertyId,
       propertyName: r.propertyName,
       total: r.total,
-      cells: keys.map((date) => ({ date, shifts: cell.get(`${date}|${r.propertyId}`) ?? 0 })),
+      cells: keys.map((date) => {
+        const c = cell.get(`${date}|${r.propertyId}`) ?? { total: 0, day: 0, night: 0 };
+        return { date, shifts: c.total, day: c.day, night: c.night };
+      }),
     })),
     unlistedShifts: deps.length - rows.reduce((s, r) => s + r.total, 0),
   };

@@ -15,7 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   CalendarCheck, Users, Building2, IndianRupee, Wallet, HandCoins, Receipt, TrendingDown,
-  Sun, Moon, AlertTriangle, Grid3X3,
+  Sun, Moon, AlertTriangle, Grid3X3, Globe2,
 } from "lucide-react";
 import { AreaTrend, CHART_COLORS, ErrorState, useAsync } from "./_shared";
 
@@ -40,28 +40,28 @@ interface HeatResp {
   dates: string[];
   rows: {
     propertyId: string; propertyName: string; total: number;
-    cells: { date: string; shifts: number }[];
+    cells: { date: string; shifts: number; day: number; night: number }[];
   }[];
   unlistedShifts: number;
 }
 
-// Intensity scale for the heat-map: 0 = empty, then 4 emerald steps.
-const HEAT_STEPS = [
-  "bg-muted/60",
-  "bg-emerald-200/70 dark:bg-emerald-900/60",
-  "bg-emerald-300/80 dark:bg-emerald-800/80",
-  "bg-emerald-500/85 dark:bg-emerald-700",
-  "bg-emerald-600 dark:bg-emerald-600",
-];
+type HeatMode = "all" | "day" | "night";
 
-function heatClass(n: number, max: number): string {
-  if (n <= 0) return HEAT_STEPS[0];
+// Intensity ramp (opacity of the colored fill): index by ceil(n/max*4), 0 = empty.
+const HEAT_OPACITY = [0, 0.32, 0.56, 0.78, 1] as const;
+
+function heatOpacity(n: number, max: number): number {
+  if (n <= 0) return 0;
   const level = Math.min(4, Math.max(1, Math.ceil((n / Math.max(1, max)) * 4)));
-  return HEAT_STEPS[level];
+  return HEAT_OPACITY[level];
 }
+
+const DAY_FILL = "bg-amber-400 dark:bg-amber-500";
+const NIGHT_FILL = "bg-slate-500 dark:bg-slate-400";
 
 export default function ManpowerDashboardView({ navigate }: ViewProps) {
   const [range, setRange] = useState<RangeKey>("today");
+  const [heatMode, setHeatMode] = useState<HeatMode>("all");
   const { data, loading, error, reload } = useAsync<Resp>(
     () => api.get<Resp>(`/api/dashboard/manpower?range=${range}`),
     [range]
@@ -70,6 +70,15 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
     () => api.get<HeatResp>("/api/dashboard/manpower-heatmap?days=14"),
     []
   );
+
+  // Per-metric maxima so each fill (day / night / total) scales independently.
+  const heatMax = heat
+    ? {
+        all: Math.max(1, ...heat.rows.flatMap((r) => r.cells.map((c) => c.shifts))),
+        day: Math.max(1, ...heat.rows.flatMap((r) => r.cells.map((c) => c.day))),
+        night: Math.max(1, ...heat.rows.flatMap((r) => r.cells.map((c) => c.night))),
+      }
+    : { all: 1, day: 1, night: 1 };
 
   const m = data?.manpower;
   const day = m?.dayShifts ?? 0;
@@ -161,14 +170,41 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
             </CardContent>
           </Card>
 
-          {/* Workforce heat-map — last 14 days × busiest properties */}
+          {/* Workforce heat-map — last 14 days × busiest properties, DAY/NIGHT split */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Grid3X3 className="h-4 w-4 text-primary" aria-hidden />
-                Workforce heat-map
-              </CardTitle>
-              <CardDescription className="text-xs">Shifts per day at the busiest properties — click a cell to inspect deployments</CardDescription>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Grid3X3 className="h-4 w-4 text-primary" aria-hidden />
+                  Workforce heat-map
+                </CardTitle>
+                <div className="flex items-center gap-1" role="group" aria-label="Heat-map shift filter">
+                  {([
+                    { id: "all", label: "All", icon: Globe2 },
+                    { id: "day", label: "Day", icon: Sun },
+                    { id: "night", label: "Night", icon: Moon },
+                  ] as const).map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      aria-pressed={heatMode === m.id}
+                      onClick={() => setHeatMode(m.id)}
+                      className={cn(
+                        "flex h-7 items-center gap-1 rounded-full px-2.5 text-[11px] font-semibold transition-colors",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        heatMode === m.id
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+                      )}
+                    >
+                      <m.icon className="h-3 w-3" aria-hidden />{m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <CardDescription className="text-xs">
+                Shifts per day at the busiest properties — amber = day, slate = night; click a cell to inspect deployments
+              </CardDescription>
             </CardHeader>
             <CardContent>
               {heatLoading ? (
@@ -192,9 +228,11 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
                       </div>
                       {/* One row per property */}
                       {heat.rows.map((row) => {
-                        const max = Math.max(...heat.rows.map((r) => Math.max(...r.cells.map((c) => c.shifts))));
+                        const rowSum = heatMode === "day" ? row.cells.reduce((s, c) => s + c.day, 0)
+                          : heatMode === "night" ? row.cells.reduce((s, c) => s + c.night, 0)
+                          : row.total;
                         return (
-                          <div key={row.propertyId} className="mt-1 flex items-center gap-1">
+                          <div key={row.propertyId} className="mt-1 flex items-center gap-1 rounded transition-colors hover:bg-muted/40">
                             <button
                               type="button"
                               className="w-28 shrink-0 cursor-pointer truncate rounded pr-1 text-left text-[11px] font-medium hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
@@ -204,7 +242,11 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
                               {row.propertyName}
                             </button>
                             {row.cells.map((c) => {
-                              const active = c.shifts > 0;
+                              const dayOp = heatOpacity(c.day, heatMax.day);
+                              const nightOp = heatOpacity(c.night, heatMax.night);
+                              const active = heatMode === "all" ? c.shifts > 0 : heatMode === "day" ? c.day > 0 : c.night > 0;
+                              const metric = heatMode === "day" ? c.day : heatMode === "night" ? c.night : c.shifts;
+                              const split = c.shifts > 0 ? (c.day / c.shifts) * 100 : 0;
                               return (
                                 <button
                                   key={c.date}
@@ -212,18 +254,21 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
                                   disabled={!active}
                                   aria-label={
                                     active
-                                      ? `${row.propertyName}, ${c.date}: ${c.shifts} shift${c.shifts === 1 ? "" : "s"} — view deployments`
+                                      ? heatMode === "day"
+                                        ? `${row.propertyName}, ${c.date}: ${c.day} day shift${c.day === 1 ? "" : "s"} — view deployments`
+                                        : heatMode === "night"
+                                          ? `${row.propertyName}, ${c.date}: ${c.night} night shift${c.night === 1 ? "" : "s"} — view deployments`
+                                          : `${row.propertyName}, ${c.date}: ${c.shifts} shift${c.shifts === 1 ? "" : "s"} (${c.day} day / ${c.night} night) — view deployments`
                                       : `${row.propertyName}, ${c.date}: no shifts`
                                   }
                                   className={cn(
-                                    "h-6 flex-1 rounded-[4px] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                                    "relative h-6 flex-1 overflow-hidden rounded-[4px] bg-muted/60 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
                                     active && "cursor-pointer hover:scale-110 hover:ring-1 hover:ring-primary/40",
-                                    !active && "cursor-default",
-                                    heatClass(c.shifts, max)
+                                    !active && "cursor-default"
                                   )}
                                   title={
                                     active
-                                      ? `${row.propertyName} · ${c.date} · ${c.shifts} shift${c.shifts === 1 ? "" : "s"} — click to view deployments`
+                                      ? `${row.propertyName} · ${c.date} · ${metric} shift${metric === 1 ? "" : "s"}${heatMode === "all" ? ` (${c.day} day / ${c.night} night)` : ""} — click to view deployments`
                                       : `${row.propertyName} · ${c.date} · no shifts`
                                   }
                                   onClick={
@@ -231,11 +276,20 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
                                       ? () => navigate("deployments", { propertyId: row.propertyId, date: c.date })
                                       : undefined
                                   }
-                                />
+                                >
+                                  {active && heatMode === "all" && (
+                                    <>
+                                      <span className={cn("absolute inset-y-0 left-0 rounded-l-[4px] transition-all", DAY_FILL)} style={{ width: `${split}%`, opacity: dayOp }} />
+                                      <span className={cn("absolute inset-y-0 right-0 rounded-r-[4px] transition-all", NIGHT_FILL)} style={{ width: `${100 - split}%`, opacity: nightOp }} />
+                                    </>
+                                  )}
+                                  {active && heatMode === "day" && <span className={cn("absolute inset-0 transition-all", DAY_FILL)} style={{ opacity: dayOp }} />}
+                                  {active && heatMode === "night" && <span className={cn("absolute inset-0 transition-all", NIGHT_FILL)} style={{ opacity: nightOp }} />}
+                                </button>
                               );
                             })}
                             <div className="w-7 shrink-0 text-right text-[10px] font-semibold tabular-nums text-muted-foreground">
-                              {row.total}
+                              {rowSum}
                             </div>
                           </div>
                         );
@@ -245,13 +299,26 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
                       )}
                     </div>
                   </div>
-                  {/* Legend */}
-                  <div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground">
+                  {/* Legend — intensity scale + day/night color keys */}
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
                     <span>Less</span>
-                    {HEAT_STEPS.map((s) => (
-                      <span key={s} className={cn("h-2.5 w-4 rounded-[3px]", s)} aria-hidden />
+                    {[0.32, 0.56, 0.78, 1].map((o) => (
+                      <span key={o} className="relative h-2.5 w-4 overflow-hidden rounded-[3px] bg-muted" aria-hidden>
+                        {heatMode !== "night" && <span className={cn("absolute inset-y-0 left-0", DAY_FILL)} style={{ opacity: o, width: heatMode === "day" ? "100%" : "50%" }} />}
+                        {heatMode !== "day" && <span className={cn("absolute inset-y-0 right-0", NIGHT_FILL)} style={{ opacity: o, width: heatMode === "night" ? "100%" : "50%" }} />}
+                      </span>
                     ))}
                     <span>More</span>
+                    {heatMode !== "night" && (
+                      <span className="ml-1 inline-flex items-center gap-1">
+                        <span className={cn("h-2.5 w-3 rounded-[3px]", DAY_FILL)} aria-hidden />Day
+                      </span>
+                    )}
+                    {heatMode !== "day" && (
+                      <span className="inline-flex items-center gap-1">
+                        <span className={cn("h-2.5 w-3 rounded-[3px]", NIGHT_FILL)} aria-hidden />Night
+                      </span>
+                    )}
                     <span className="ml-auto">{heat.dates.length} days</span>
                   </div>
                 </>

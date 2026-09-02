@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { api } from "@/lib/api-client";
+import { api, downloadJSON } from "@/lib/api-client";
 import type { ViewProps } from "@/components/view-types";
 import { PageHeader } from "@/components/shared/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,9 +11,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import {
-  Building2, Check, Crown, History, Languages, Receipt, ReceiptText, Settings, Smartphone, Sparkles, Truck, Users,
+  Building2, Check, Crown, Database, Download, History, Languages, Loader2, Receipt, ReceiptText, Settings, Smartphone, Sparkles, Truck, Users,
 } from "lucide-react";
-import { Field, useAsync, useMutation } from "./_shared";
+import { errMessage, Field, todayStr, useAsync, useMutation } from "./_shared";
 import { usePwaInstall } from "@/components/shared/pwa-install";
 import { useLang, t, type Lang } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -35,6 +35,63 @@ interface SettingsResp {
 }
 
 type SettingsForm = { name: string; address: string; contact: string; gstin: string; logoText: string };
+
+// ---------------------------------------------------------------------------
+// Data & backup — full JSON export (GET /api/settings/backup)
+// ---------------------------------------------------------------------------
+
+interface BackupResp {
+  format: string;
+  version: number;
+  generatedAt: string;
+  counts: Record<string, number>;
+}
+
+function BackupCard() {
+  const { lang } = useLang();
+  const [exporting, setExporting] = useState(false);
+
+  const exportBackup = async () => {
+    setExporting(true);
+    try {
+      const backup = await api.get<BackupResp>("/api/settings/backup");
+      const total = Object.values(backup.counts).reduce((s, n) => s + n, 0);
+      downloadJSON(`bizhub-backup-${todayStr()}.json`, backup);
+      toast.success(
+        t(lang, "settings.backupDone")
+          .replace("{total}", total.toLocaleString("en-IN"))
+          .replace("{collections}", String(Object.keys(backup.counts).length))
+      );
+    } catch (e) {
+      toast.error(errMessage(e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Database className="h-4 w-4 text-primary" aria-hidden />
+          {t(lang, "settings.backupTitle")}
+        </CardTitle>
+        <CardDescription>{t(lang, "settings.backupDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <Button variant="outline" className="min-h-10 gap-2" onClick={() => void exportBackup()} disabled={exporting}>
+          {exporting ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+          ) : (
+            <Download className="h-4 w-4" aria-hidden />
+          )}
+          {exporting ? t(lang, "settings.backupWorking") : t(lang, "settings.backupAction")}
+        </Button>
+        <p className="text-xs leading-relaxed text-muted-foreground">{t(lang, "settings.backupNote")}</p>
+      </CardContent>
+    </Card>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Language preference (i18n scaffolding — persisted in localStorage)
@@ -255,7 +312,10 @@ export default function SettingsView({ navigate }: ViewProps) {
         {/* 3 — Language */}
         <LanguageCard />
 
-        {/* 4 — System shortcuts */}
+        {/* 4 — Data & backup */}
+        <BackupCard />
+
+        {/* 5 — System shortcuts */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">System shortcuts</CardTitle>
@@ -283,7 +343,7 @@ export default function SettingsView({ navigate }: ViewProps) {
           </CardContent>
         </Card>
 
-        {/* 5 — About */}
+        {/* 6 — About */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">About</CardTitle>

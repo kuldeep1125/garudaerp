@@ -280,3 +280,43 @@ Stage Summary:
 - agent-browser gotcha this round: sidebar/view refs go stale across snapshots because the keyed main remounts on every navigation — take snapshot + extract ref + click in ONE shell call, never reuse refs from earlier snapshots.
 - Dev-server startup pattern documented above — check server is up FIRST at the start of the next session (curl localhost:3000), else use the setsid one-liner.
 - Next-step candidates: palette per-entity quick actions (employee row → "Give advance" sub-action); trip-profit chart on reports view (transport dashboard already has trip-profit bars; reports has profitability/vehicle-profitability tables); notification-arrival E2E automation script (visibilitychange-dispatch + API-seed trick from Task 11 is reusable); print-output language switch; remaining Hindi: status badges + filter option labels + settlements/payments detail dialogs.
+
+---
+Task ID: 13
+Agent: main (orchestrator)
+Task: Status assessment + QA round; new features (day/night workforce heat-map, trip-profit report chart, skeleton shimmer + chart polish, settings JSON backup export).
+
+Work Log:
+- ENV: dev server was DOWN at session start again (cron session kill pattern). Restarted with the documented `cd /home/z/my-project && (setsid bun run dev > /tmp/devserver.log 2>&1 &)` — NOTE: first curl after start can take ~15s (next compile); wait + re-curl before assuming failure. Mid-session the server died once more and the same pattern revived it.
+- QA first: lint + tsc (src/) = 0 problems; agent-browser sweep of all 16+ views at 1280 (light) with the "errors after last [HMR] connected" console pattern = CLEAN. Verdict: stable → proceeded to new features.
+
+- FEATURE A (day/night workforce heat-map — fulfils the promise from Task 11/12 next-step list):
+  - API `/api/dashboard/manpower-heatmap` now returns per-cell `{ date, shifts, day, night }` (night = `shift.toUpperCase().includes("NIGHT")`, same convention as employee-earnings report).
+  - View (manpower-dashboard-view): heat-map cells are now SPLIT cells — amber left half (day) + slate right half (night) proportional to that day's day/night mix, each half's OPACITY carrying its own intensity vs per-metric maxima (`heatMax.all/day/night`). Header gains an All / Day / Night segmented toggle (Globe2/Sun/Moon icons, aria-pressed) that re-renders intensities (Day mode = full-width amber fills only; Night = slate), row totals recompute per mode, tooltips/aria-labels read "X shift(s) (Y day / Z night)". Legend shows per-mode intensity ramp + Day/Night color keys. Data storytelling verified live: "Night Owl Diner" row is nearly all-slate (night venue), Green Leaf leads night totals (43) in Night mode.
+  - Verified: light + dark @1280, mobile 375 (toggle wraps, cells scroll in the existing overflow-x container, legend wraps), Night toggle E2E screenshot.
+
+- FEATURE B (trip-wise profit report chart — fulfils the promise from Task 11/12 next-step list):
+  - Extracted the trip-profit computation into `src/app/api/_lib/trip-profit.ts` (`computeTripProfit(from,to)` + `TRIP_PROFIT_NOTE`); refactored `/api/transport/trip-profit` to use it (zero behavior change — same response verified).
+  - New report `/api/reports/trip-profit?from=&to=` (reports contract: columns/rows/totals/meta/note) + optional `chart` field: rows = per-trip [Trip, Start, Vehicle, Type, Status, Revenue(money), Est. cost(money), Profit(money), Margin %(number), Collected %(number)], rows capped at 40, totals across ALL trips in window. `chart` = top 8 profit winners + up to 2 worst loss-makers (deduped, profit-sorted, labels truncated to 22 chars) each `{label, revenue, cost, profit, marginPct}`.
+  - reports-view: REPORTS gains "Trip Profitability" (icon Route, config range). When `def.type === "trip-profit"` and chart present, a chart card (gradient hairline top + Route icon title) renders ABOVE the table inside `.print-area` (prints with PDF): `BarsCompare` 3 series — Revenue emerald / Est. cost red / Profit teal, height 260. Negative profit bars hang below the zero axis. CSV/Print buttons work unchanged (table columns flow through the generic runner).
+  - Verified E2E: This Month (1 trip single group) → Last Month (30 bars = 10 trips × 3 series, loss-makers below axis, legend Revenue/Est. cost/Profit). API totals: revenue ₹1,64,500, cost ₹1,53,907, profit ₹10,593 across 15 trips (Aug window).
+
+- FEATURE C (styling details round):
+  - Global skeleton shimmer: `[data-slot="skeleton"]::after` sweeps a card-colored light gradient (`color-mix(in oklab, var(--card) 60%, transparent)` — CSS vars are complete oklch values, NOT raw channels, so `hsl(var(--x)/α)` would NOT work here) over every loading skeleton; `prefers-reduced-motion` disables. Applies app-wide (dashboards, tables, dialogs) with zero component changes.
+  - BarsCompare bars now use `radius={[4,4,4,4]}` so mixed-sign charts (trip profit) don't have flat-cut negative bars.
+  - Heat-map cells/legend/row-hover polish (see Feature A) + trip-profit chart card hairline (see Feature B).
+
+- FEATURE D (settings data-backup export):
+  - New `GET /api/settings/backup` → `{ format:"bizhub-backup", version:1, generatedAt, counts, data }` with all 22 collections (owners→auditLogs; audit capped 1,000 latest; Sessions deliberately EXCLUDED as auth artifacts). Verified payload: 2,378 records / 1.5MB pretty JSON.
+  - `downloadJSON()` helper added to api-client (pretty JSON blob download).
+  - settings-view gains "Data & backup" card (#4, Database icon): Export button with Loader2 spinner state → downloads `bizhub-backup-YYYY-MM-DD.json` → toast "Backup downloaded — {total} records across {collections} collections". Bilingual i18n keys `settings.backup*` added (EN+HI, {total}/{collections} interpolation via .replace).
+  - Verified E2E: click → real 1,519,182-byte `bizhub-backup-2026-09-02.json` in downloads (header + counts inspected) + success toast; Hindi card verified (डेटा और बैकअप / बैकअप निर्यात करें (JSON)). Language + theme restored to EN/light after checks.
+
+- Final verification: post-change full sweep (17 nav entries incl. palette-routed Notifications view) = ZERO console errors/warnings after last HMR-connect; lint + tsc(src) clean; server 200.
+
+Stage Summary:
+- Heat-map contract: cells now `{date, shifts, day, night}` — any other consumer must read all three; intensity = opacity (HEAT_OPACITY ramp), fills = DAY_FILL/NIGHT_FILL class constants in manpower-dashboard-view. heatMax computed per metric so toggles rescale independently.
+- Trip-profit: computation lives ONLY in `src/app/api/_lib/trip-profit.ts` — dashboard endpoint (limit slice) and report endpoint (chart slice + totals) both consume it; change allocation model there in one place. Reports view renders `data.chart` generically only for the trip-profit type; a future charted report can reuse the same optional-chart pattern (render above table, inside print-area).
+- Backup: 22 collections, no sessions; audit capped at 1,000. Restore/import is NOT implemented (documented Phase-2 candidate — needs conflict strategy).
+- agent-browser gotchas confirmed again: (1) sidebar refs go stale after each navigation — snapshot+grep+click in ONE shell call; (2) "More menu"/bottom-nav labels only exist at mobile viewport; Notifications VIEW reachable via Ctrl+K palette → "Notifications" option (TopBar bell opens the panel, not the view); (3) after server restart, wait ~4s before eval (page rehydrate).
+- Next-step candidates: palette per-entity quick actions (employee row → "Give advance"); backup RESTORE/import UI (danger zone, merge strategy); Hindi for status badges + filter OPTIONS + report titles (REPORTS array is module-level EN by design); trips-view trip-detail dialog with per-trip payment records; notification-arrival E2E automation script (Task 11's visibilitychange-dispatch trick remains reusable).
