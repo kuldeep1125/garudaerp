@@ -6,7 +6,7 @@ import { formatINR } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
-import { RangeSelector, type RangeKey } from "@/components/shared/filters";
+import { RangeSelector, type RangeKey, rangeKeyToBounds, RANGE_HINT } from "@/components/shared/filters";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -45,10 +45,10 @@ export default function TransportDashboardView({ navigate }: ViewProps) {
     () => api.get<Resp>(`/api/dashboard/transport?range=${range}`),
     [range]
   );
-  const { data: tripProfit, loading: tpLoading } = useAsync<TripProfitResp>(
-    () => api.get<TripProfitResp>("/api/transport/trip-profit?limit=6"),
-    []
-  );
+  const { data: tripProfit, loading: tpLoading, error: tpError } = useAsync<TripProfitResp>(() => {
+    const { from, to } = rangeKeyToBounds(range);
+    return api.get<TripProfitResp>(`/api/transport/trip-profit?limit=6&from=${from}&to=${to}`);
+  }, [range]);
 
   const t = data?.transport;
   const vehicles = [...(data?.perVehicle ?? [])].sort((a, b) => b.net - a.net);
@@ -102,7 +102,7 @@ export default function TransportDashboardView({ navigate }: ViewProps) {
             </CardContent>
           </Card>
 
-          {/* Trip-wise estimated profitability */}
+          {/* Trip-wise estimated profitability — follows the range selector */}
           {tpLoading ? (
             <Card>
               <CardContent className="space-y-3 p-4">
@@ -110,12 +110,14 @@ export default function TransportDashboardView({ navigate }: ViewProps) {
                 {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-9 w-full" />)}
               </CardContent>
             </Card>
-          ) : tripProfit && tripProfit.trips.length > 0 ? (
+          ) : tpError ? null : tripProfit && tripProfit.trips.length > 0 ? (
             <Card>
               <CardHeader className="flex-row items-start justify-between space-y-0 pb-2">
                 <div>
                   <CardTitle className="text-base">Top trips by estimated profit</CardTitle>
-                  <p className="mt-1 text-xs text-muted-foreground">{tripProfit.totalTrips} {tripProfit.totalTrips === 1 ? "trip" : "trips"} this month</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {tripProfit.totalTrips} {tripProfit.totalTrips === 1 ? "trip" : "trips"} {RANGE_HINT[range]}
+                  </p>
                 </div>
                 <span
                   className={cn(

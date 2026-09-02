@@ -46,6 +46,60 @@ export function RangeSelector({
   );
 }
 
+// Resolve a RangeKey to concrete YYYY-MM-DD bounds (client-side mirror of the
+// API-side range presets, so charts fed by from/to APIs follow the selector).
+export function rangeKeyToBounds(key: RangeKey): { from: string; to: string } {
+  const ymd = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const now = new Date();
+  switch (key) {
+    case "today": {
+      const s = ymd(now);
+      return { from: s, to: s };
+    }
+    case "yesterday": {
+      const d = new Date(now);
+      d.setDate(d.getDate() - 1);
+      const s = ymd(d);
+      return { from: s, to: s };
+    }
+    case "week": {
+      const a = new Date(now);
+      a.setDate(a.getDate() - 6);
+      return { from: ymd(a), to: ymd(now) };
+    }
+    case "lastweek": {
+      const b = new Date(now);
+      b.setDate(b.getDate() - 7);
+      const a = new Date(now);
+      a.setDate(a.getDate() - 13);
+      return { from: ymd(a), to: ymd(b) };
+    }
+    case "lastmonth": {
+      return {
+        from: ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+        to: ymd(new Date(now.getFullYear(), now.getMonth(), 0)),
+      };
+    }
+    case "month":
+    case "custom":
+    default: {
+      return { from: ymd(new Date(now.getFullYear(), now.getMonth(), 1)), to: ymd(now) };
+    }
+  }
+}
+
+// Short human hint for the active range — used in card subtitles like "… this month".
+export const RANGE_HINT: Record<RangeKey, string> = {
+  today: "today",
+  yesterday: "yesterday",
+  week: "last 7 days",
+  lastweek: "prior week",
+  month: "this month",
+  lastmonth: "last month",
+  custom: "selected range",
+};
+
 // Search box with icon. Debounce handled by caller or useDebouncedValue.
 export function SearchInput({
   value,

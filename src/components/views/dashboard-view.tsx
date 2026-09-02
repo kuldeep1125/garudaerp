@@ -8,6 +8,7 @@ import { useAuth } from "@/components/providers";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { RangeSelector, type RangeKey } from "@/components/shared/filters";
+import { MonthPicker, toMonth } from "@/components/shared/month-picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,6 +17,7 @@ import { cn } from "@/lib/utils";
 import {
   Users, Truck, Wallet, IndianRupee, Landmark, CalendarCheck, Receipt, HandCoins, ReceiptText,
   Route, AlertTriangle, AlertCircle, Info, ChevronRight, Building2, RefreshCw, Activity, PieChart as PieChartIcon, History,
+  CalendarRange, TrendingUp, TrendingDown, Minus, Sparkles, CalendarDays,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import { ErrorState, useAsync, AreaTrend, CHART_COLORS } from "./_shared";
@@ -53,6 +55,18 @@ interface TrendRow { date: string; billing: number; collections: number; transpo
 interface AuditItem {
   id: string; ownerName: string; action: string; module: string;
   recordLabel: string | null; createdAt: string;
+}
+
+interface MonthMetrics {
+  deployments: number; manpowerBilling: number; manpowerPayout: number; manpowerMargin: number;
+  manpowerOtherExpenses: number; collections: number; advances: number; trips: number;
+  transportRevenue: number; transportCollected: number; transportOpex: number; transportEmi: number;
+  net: number;
+}
+interface MonthlySummaryResp {
+  month: string; prevMonth: string;
+  current: MonthMetrics; previous: MonthMetrics;
+  insights: string[]; note: string;
 }
 
 const SEVERITY_STYLE: Record<string, { icon: typeof Info; cls: string }> = {
@@ -108,6 +122,46 @@ function prettyDate(): string {
   return new Intl.DateTimeFormat("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date());
 }
 
+// Month-over-month delta chip: ▲/▼ with % — colored by whether the move is good.
+function Delta({ pct, goodUp = true }: { pct: number | null; goodUp?: boolean }) {
+  if (pct === null) {
+    return <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">new</span>;
+  }
+  if (pct === 0) {
+    return (
+      <span className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+        <Minus className="h-2.5 w-2.5" aria-hidden />0%
+      </span>
+    );
+  }
+  const up = pct > 0;
+  const good = up === goodUp;
+  const Icon = up ? TrendingUp : TrendingDown;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums",
+        good
+          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+          : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+      )}
+    >
+      <Icon className="h-2.5 w-2.5" aria-hidden />
+      {Math.abs(pct)}%
+    </span>
+  );
+}
+
+function pctOf(cur: number, prev: number): number | null {
+  if (prev === 0) return cur === 0 ? 0 : null;
+  return Math.round(((cur - prev) / Math.abs(prev)) * 100);
+}
+
+function monthShort(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-IN", { month: "short" });
+}
+
 export default function DashboardView({ navigate }: ViewProps) {
   const { owner } = useAuth();
   const [range, setRange] = useState<RangeKey>("today");
@@ -122,6 +176,11 @@ export default function DashboardView({ navigate }: ViewProps) {
   const { data: audit, loading: auditLoading, reload: reloadAudit } = useAsync<{ items: AuditItem[] }>(
     () => api.get<{ items: AuditItem[] }>("/api/audit?page=1&pageSize=6"),
     []
+  );
+  const [summaryMonth, setSummaryMonth] = useState<string>(() => toMonth());
+  const { data: monthly, loading: monthlyLoading } = useAsync<MonthlySummaryResp>(
+    () => api.get<MonthlySummaryResp>(`/api/dashboard/monthly-summary?month=${summaryMonth}`),
+    [summaryMonth]
   );
 
   const m = data?.manpower;
@@ -327,6 +386,96 @@ export default function DashboardView({ navigate }: ViewProps) {
               </CardContent>
             </Card>
           </section>
+
+          {/* Monthly business summary — month-over-month, both businesses */}
+          {monthlyLoading ? (
+            <Card>
+              <CardContent className="space-y-3 p-4 sm:p-6">
+                <div className="flex items-center justify-between">
+                  <Skeleton className="h-5 w-48" />
+                  <Skeleton className="h-9 w-40 rounded-full" />
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                  {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 rounded-xl" />)}
+                </div>
+                <Skeleton className="h-9 w-full rounded-lg" />
+              </CardContent>
+            </Card>
+          ) : monthly ? (
+            <Card className="overflow-hidden border-primary/20">
+              <div className="h-0.5 w-full bg-gradient-to-r from-emerald-500/70 via-teal-500/70 to-amber-500/70" aria-hidden />
+              <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
+                <div className="space-y-0.5">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <CalendarRange className="h-4 w-4 text-primary" aria-hidden />
+                    Monthly business summary
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    {monthShort(monthly.prevMonth)} → {monthShort(monthly.month)} · both businesses
+                  </CardDescription>
+                </div>
+                <MonthPicker month={summaryMonth} onChange={setSummaryMonth} className="scale-95" />
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                  {([
+                    { label: "Manpower billing", value: monthly.current.manpowerBilling, prev: monthly.previous.manpowerBilling, goodUp: true, icon: Users, cls: "text-emerald-600 dark:text-emerald-400" },
+                    { label: "Collections", value: monthly.current.collections, prev: monthly.previous.collections, goodUp: true, icon: Wallet, cls: "text-teal-600 dark:text-teal-400" },
+                    { label: "Transport revenue", value: monthly.current.transportRevenue, prev: monthly.previous.transportRevenue, goodUp: true, icon: Truck, cls: "text-amber-600 dark:text-amber-400" },
+                    { label: "Total expenses", value: monthly.current.manpowerOtherExpenses + monthly.current.transportOpex + monthly.current.transportEmi, prev: monthly.previous.manpowerOtherExpenses + monthly.previous.transportOpex + monthly.previous.transportEmi, goodUp: false, icon: Receipt, cls: "text-red-600 dark:text-red-400" },
+                    { label: "Net result", value: monthly.current.net, prev: monthly.previous.net, goodUp: true, icon: Landmark, cls: "" },
+                  ] as const).map((row) => (
+                    <div key={row.label} className="rounded-xl border bg-muted/30 p-3 transition-colors hover:bg-muted/50">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+                          <row.icon className={cn("h-3.5 w-3.5 shrink-0", row.cls)} aria-hidden />
+                          <span className="truncate">{row.label}</span>
+                        </span>
+                        <Delta pct={pctOf(row.value, row.prev)} goodUp={row.goodUp} />
+                      </div>
+                      <p className="mt-1 text-base font-bold tabular-nums">{formatINR(row.value, { compact: true })}</p>
+                      <p className="text-[10px] tabular-nums text-muted-foreground">was {formatINR(row.prev, { compact: true })}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+                    <CalendarCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" aria-hidden />
+                    {monthly.current.deployments} deployment{monthly.current.deployments === 1 ? "" : "s"}
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+                    <Route className="h-3 w-3 text-amber-600 dark:text-amber-400" aria-hidden />
+                    {monthly.current.trips} trip{monthly.current.trips === 1 ? "" : "s"}
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+                    <CalendarDays className="h-3 w-3" aria-hidden />
+                    advances {formatINR(monthly.current.advances, { compact: true })}
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+                    EMI {formatINR(monthly.current.transportEmi, { compact: true })}
+                  </span>
+                </div>
+                {monthly.insights.length > 0 && (
+                  <div
+                    className="flex items-start gap-2 rounded-xl border border-primary/20 bg-gradient-to-r from-primary/5 via-primary/[0.03] to-transparent p-3"
+                    role="note"
+                    aria-label="Automated insights"
+                  >
+                    <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+                    <ul className="min-w-0 space-y-0.5">
+                      {monthly.insights.map((line) => (
+                        <li key={line} className="text-xs leading-relaxed text-foreground/80">{line}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <p className="flex items-start gap-1.5 text-[10px] leading-relaxed text-muted-foreground">
+                  <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+                  {monthly.note}
+                </p>
+              </CardContent>
+            </Card>
+          ) : null}
 
           {/* Collections + attention */}
           <section className="grid gap-3 lg:grid-cols-2" aria-label="Collections and attention">

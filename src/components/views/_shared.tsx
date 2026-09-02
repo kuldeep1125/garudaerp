@@ -382,7 +382,14 @@ export function SelectInput({ value, onChange, options, placeholder = "Select…
   disabled?: boolean;
 }) {
   return (
-    <Select value={value || undefined} onValueChange={(v) => onChange(v === EMPTY_SENTINEL ? "" : v)} disabled={disabled}>
+    <Select
+      // Always controlled: `value || sentinel` keeps Radix from flipping
+      // between uncontrolled (undefined) and controlled when value is "".
+      // A non-matching sentinel still renders the placeholder visually.
+      value={value || EMPTY_SENTINEL}
+      onValueChange={(v) => onChange(v === EMPTY_SENTINEL ? "" : v)}
+      disabled={disabled}
+    >
       <SelectTrigger className={cn("h-10 w-full", className)} aria-label={placeholder}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>

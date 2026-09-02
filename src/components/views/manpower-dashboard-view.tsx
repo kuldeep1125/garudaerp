@@ -168,7 +168,7 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
                 <Grid3X3 className="h-4 w-4 text-primary" aria-hidden />
                 Workforce heat-map
               </CardTitle>
-              <CardDescription className="text-xs">Shifts per day at the busiest properties — last 14 days</CardDescription>
+              <CardDescription className="text-xs">Shifts per day at the busiest properties — click a cell to inspect deployments</CardDescription>
             </CardHeader>
             <CardContent>
               {heatLoading ? (
@@ -195,19 +195,45 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
                         const max = Math.max(...heat.rows.map((r) => Math.max(...r.cells.map((c) => c.shifts))));
                         return (
                           <div key={row.propertyId} className="mt-1 flex items-center gap-1">
-                            <div className="w-28 shrink-0 truncate pr-1 text-[11px] font-medium" title={row.propertyName}>
+                            <button
+                              type="button"
+                              className="w-28 shrink-0 cursor-pointer truncate rounded pr-1 text-left text-[11px] font-medium hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                              title={`${row.propertyName} — open property`}
+                              onClick={() => navigate("property-detail", { id: row.propertyId })}
+                            >
                               {row.propertyName}
-                            </div>
-                            {row.cells.map((c) => (
-                              <div
-                                key={c.date}
-                                className={cn(
-                                  "h-6 flex-1 rounded-[4px] transition-transform hover:scale-110",
-                                  heatClass(c.shifts, max)
-                                )}
-                                title={`${row.propertyName} · ${c.date} · ${c.shifts} shift${c.shifts === 1 ? "" : "s"}`}
-                              />
-                            ))}
+                            </button>
+                            {row.cells.map((c) => {
+                              const active = c.shifts > 0;
+                              return (
+                                <button
+                                  key={c.date}
+                                  type="button"
+                                  disabled={!active}
+                                  aria-label={
+                                    active
+                                      ? `${row.propertyName}, ${c.date}: ${c.shifts} shift${c.shifts === 1 ? "" : "s"} — view deployments`
+                                      : `${row.propertyName}, ${c.date}: no shifts`
+                                  }
+                                  className={cn(
+                                    "h-6 flex-1 rounded-[4px] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                                    active && "cursor-pointer hover:scale-110 hover:ring-1 hover:ring-primary/40",
+                                    !active && "cursor-default",
+                                    heatClass(c.shifts, max)
+                                  )}
+                                  title={
+                                    active
+                                      ? `${row.propertyName} · ${c.date} · ${c.shifts} shift${c.shifts === 1 ? "" : "s"} — click to view deployments`
+                                      : `${row.propertyName} · ${c.date} · no shifts`
+                                  }
+                                  onClick={
+                                    active
+                                      ? () => navigate("deployments", { propertyId: row.propertyId, date: c.date })
+                                      : undefined
+                                  }
+                                />
+                              );
+                            })}
                             <div className="w-7 shrink-0 text-right text-[10px] font-semibold tabular-nums text-muted-foreground">
                               {row.total}
                             </div>

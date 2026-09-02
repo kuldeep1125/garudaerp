@@ -164,3 +164,26 @@ Stage Summary:
 - New endpoints: /api/transport/trip-profit (est. profit, pro-rata cost allocation) and /api/deployments/attendance (month grid).
 - Attendance grid layout trick: gridTemplateColumns inline style + sticky left column requires bg-card + z-index on the sticky cell; header row must be sticky top with higher z than row-sticky cells.
 - Next-step candidates: make trip-profit respect the dashboard RangeSelector (from/to wiring); per-property attendance drill-down (click a heat cell → filtered deployments); owner monthly summary email mock; i18n (Hindi) scaffolding per SRS Phase 2.
+
+---
+Task ID: 8
+Agent: main (orchestrator)
+Task: QA round; monthly owner summary (API + dashboard card); trip-profit range wiring; heat-map & attendance drill-downs; employee filter; Radix Select controlled-state bug fix.
+
+Work Log:
+- QA first: server 200, lint + tsc clean (src/), agent-browser sweep — stable, zero console errors. Green-lit new features.
+- NEW API: GET /api/dashboard/monthly-summary?month=YYYY-MM (regex-validated, defaults to current) → { month, prevMonth, current, previous, insights[], note }. MonthMetrics per month: deployments, manpowerBilling/Payout/Margin (BILLABLE deployments dated in month), collections (payments received), advances, trips, transportRevenue (trips STARTING in month, billing basis finalAmount ?? agreed+extra), transportCollected (paidAmount — documented as approximation), transportOpex (TRANSPORT expenses excl. EMI), transportEmi (EMI-category expenses), net = margin − manpowerOther + transportRevenue − opex − EMI. Server generates up to 3 insight lines (biggest |pct| mover ≥5%, collections < ½ billing, net<0 warning / turned-positive praise). Verified via curl: Sep-2026 vs Aug-2026 numbers correct.
+- Dashboard: "Monthly business summary" card between business-split and collections — gradient top accent strip (emerald→teal→amber), MonthPicker nav (‹ ›), 5 metric tiles (icon + label + Delta chip + current vs "was X" + hover bg), chips row (deployments/trips/advances/EMI), Sparkles insight strip (role=note, gradient bg), Info money-semantics footer. Local Delta component: TrendingUp/Down/Minus, goodUp flag (expense down = green), "new" chip when prev=0, pct via pctOf(). Loading skeleton card.
+- Shared filters.tsx: new rangeKeyToBounds(key) (client mirror of API presets, custom/month default) + RANGE_HINT map ("today"/"last 7 days"/…/custom:"selected range").
+- Transport dashboard: trip-profit now wired to RangeSelector — useAsync deps [range], from/to params via rangeKeyToBounds; subtitle "N trips {RANGE_HINT[range]}"; tpError → card hidden. Verified: "1 trip this month" → This Week (hidden, no trips) → Last Month "14 trips last month".
+- Manpower heat-map drill-down: cells are now <button>s (active only when shifts>0) → navigate("deployments", { propertyId, date }); property names clickable → property-detail; hover ring + focus-visible ring + aria-labels; description updated "click a cell to inspect deployments". Verified: Royal Orchid 2026-08-21 → deployments pre-filtered (6 deployments, ₹7.4K).
+- Deployments view: (1) NEW Employee filter (SelectInput fed by /api/employees?status=ACTIVE, param params.employeeId supported; filter grid now xl:grid-cols-5); (2) attendance grid cells are buttons → drill-down sets employeeId + date, CLEARS propertyId (attendance grid is property-agnostic — first test exposed empty cross-filter result, fixed), collapses panel, toast "Showing {name} — {date}". Verified: Rahul Sharma 2026-09-01 → 3 deployments ₹2.9K.
+- BUG FOUND & FIXED (pre-existing, exposed by drill-down): SelectInput passed value={value || undefined} → Radix Select flipped uncontrolled→controlled when value went ""→id ("Select is changing from uncontrolled to controlled" console warning). Fix: always pass defined value via EMPTY_SENTINEL (value || EMPTY_SENTINEL) — non-matching sentinel still renders placeholder visually. Verified warning gone on fresh load + after drill-down.
+- Verification: agent-browser screenshots — summary card light 1280 (Sept: down-96% red chips, expenses down-93% GREEN — correct goodUp semantics) + August view (▲270%/▲288% green, "new" chip for transport from ₹0 baseline, dual insights) + dark 1280 + mobile 375 (tiles stack single-column, no truncation); full 18-view sweep + drill-down flows = ZERO console errors/warnings; tsc 0 src errors; lint clean; root 200.
+
+Stage Summary:
+- New endpoint contract: /api/dashboard/monthly-summary?month=YYYY-MM → { current, previous, insights, note } — money semantics documented in `note` (billing=dated-in-month deployments, transport revenue=trips starting in month, collections=received-in-month).
+- Client-side rangeKeyToBounds + RANGE_HINT in shared/filters.tsx is the canonical way to keep any from/to API in sync with a RangeSelector.
+- Drill-down pattern: heat/attendance cells carry aria-labels ending "— view/filter deployments"; attendance drill-down must clear property filter (cross-filter empties results).
+- SelectInput is now always-controlled — do not reintroduce `value || undefined`.
+- Next-step candidates: export monthly summary to PDF (print header like reports); per-employee utilization chart on employee-detail; owner monthly summary email mock (SRS Phase 2); i18n (Hindi) scaffolding.

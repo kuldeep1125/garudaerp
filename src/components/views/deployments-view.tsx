@@ -97,6 +97,7 @@ export default function DeploymentsView({ params }: ViewProps) {
   const [fromTo, setFromTo] = useState<{ from?: string; to?: string }>({});
   const [rangeKey, setRangeKey] = useState<RangeKey | null>(params?.date ? null : "today");
   const [propertyId, setPropertyId] = useState(params?.propertyId ?? "");
+  const [employeeId, setEmployeeId] = useState(params?.employeeId ?? "");
   const [shift, setShift] = useState("");
   const [status, setStatus] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -123,6 +124,16 @@ export default function DeploymentsView({ params }: ViewProps) {
     let cancelled = false;
     api.get<ListResp<PropertyRec>>("/api/properties" + qs({ pageSize: 200 }))
       .then((d) => { if (!cancelled) setProperties(d.items); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Employee options for filter (active only).
+  const [employees, setEmployees] = useState<{ id: string; fullName: string; code: string }[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    api.get<ListResp<{ id: string; fullName: string; code: string }>>("/api/employees" + qs({ status: "ACTIVE", pageSize: 200 }))
+      .then((d) => { if (!cancelled) setEmployees(d.items); })
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
@@ -157,6 +168,7 @@ export default function DeploymentsView({ params }: ViewProps) {
         from: fromTo.from,
         to: fromTo.to,
         propertyId: propertyId || undefined,
+        employeeId: employeeId || undefined,
         shift: shift || undefined,
         status: status || undefined,
         pageSize: 200,
@@ -170,7 +182,7 @@ export default function DeploymentsView({ params }: ViewProps) {
     } finally {
       setLoading(false);
     }
-  }, [date, fromTo, propertyId, shift, status]);
+  }, [date, fromTo, propertyId, employeeId, shift, status]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -306,7 +318,7 @@ export default function DeploymentsView({ params }: ViewProps) {
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-semibold">Attendance — {monthLabel(attMonth)}</span>
             <span className="block text-xs text-muted-foreground">
-              {att ? `${att.totalShifts.toLocaleString("en-IN")} shifts across ${att.rows.length} employees` : "Per-employee daily shift grid"}
+              {att ? `${att.totalShifts.toLocaleString("en-IN")} shifts across ${att.rows.length} employees · click a cell to inspect` : "Per-employee daily shift grid"}
             </span>
           </span>
           <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", attOpen && "rotate-180")} aria-hidden />
@@ -379,20 +391,49 @@ export default function DeploymentsView({ params }: ViewProps) {
                           <p className="truncate text-xs font-medium" title={`${r.name} (${r.code})`}>{r.name}</p>
                           <p className="truncate text-[10px] text-muted-foreground">{r.code}</p>
                         </div>
-                        {r.cells.map((c) => (
-                          <div
-                            key={c.date}
-                            className={cn(
-                              "mx-auto h-4 w-4 rounded-[3px] transition-transform hover:scale-125",
-                              attClass(c.shifts),
-                              isWeekend(c.date) && c.shifts === 0 && "opacity-50",
-                              c.date === todayStr() && "ring-1 ring-primary ring-offset-1 ring-offset-background"
-                            )}
-                            role="img"
-                            aria-label={`${r.name}: ${c.shifts} shift(s) on ${c.date}`}
-                            title={`${fmtDay(c.date)} · ${r.name} · ${c.shifts} shift${c.shifts === 1 ? "" : "s"}`}
-                          />
-                        ))}
+                        {r.cells.map((c) => {
+                          const active = c.shifts > 0;
+                          return (
+                            <button
+                              key={c.date}
+                              type="button"
+                              disabled={!active}
+                              className={cn(
+                                "mx-auto flex h-4 w-4 items-center justify-center rounded-[3px] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                                active && "cursor-pointer hover:scale-125 hover:ring-1 hover:ring-primary/40",
+                                !active && "cursor-default",
+                                attClass(c.shifts),
+                                isWeekend(c.date) && c.shifts === 0 && "opacity-50",
+                                c.date === todayStr() && "ring-1 ring-primary ring-offset-1 ring-offset-background"
+                              )}
+                              role="img"
+                              aria-label={
+                                active
+                                  ? `${r.name}: ${c.shifts} shift(s) on ${c.date} — filter deployments`
+                                  : `${r.name}: no shifts on ${c.date}`
+                              }
+                              title={
+                                active
+                                  ? `${fmtDay(c.date)} · ${r.name} · ${c.shifts} shift${c.shifts === 1 ? "" : "s"} — click to inspect`
+                                  : `${fmtDay(c.date)} · ${r.name} · no shifts`
+                              }
+                              onClick={
+                                active
+                                  ? () => {
+                                      // Drill down: filter the table below to this employee + day.
+                                      // The attendance grid is property-agnostic, so clear any
+                                      // property filter to avoid an empty cross-filter result.
+                                      setEmployeeId(r.employeeId);
+                                      setPropertyId("");
+                                      onDateChange(c.date);
+                                      setAttOpen(false);
+                                      toast.info(`Showing ${r.name} — ${fmtDay(c.date)}`);
+                                    }
+                                  : undefined
+                              }
+                            />
+                          );
+                        })}
                         <div className="text-right text-xs font-bold tabular-nums">{r.total}</div>
                         <div className="text-right text-xs tabular-nums text-muted-foreground">{r.workedDays}</div>
                       </div>
@@ -414,7 +455,7 @@ export default function DeploymentsView({ params }: ViewProps) {
             value={(rangeKey ?? "today") as RangeKey}
             onChange={onRange}
           />
-          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <div>
               <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Date</Label>
               <Input type="date" value={date} onChange={(e) => onDateChange(e.target.value)} className="h-10" aria-label="Filter by date" />
@@ -426,6 +467,15 @@ export default function DeploymentsView({ params }: ViewProps) {
                 onChange={(v) => { setPropertyId(v); setSelectedIds([]); }}
                 options={[{ label: "All properties", value: "" }, ...properties.map((p) => ({ label: p.name, value: p.id }))]}
                 placeholder="All properties"
+              />
+            </div>
+            <div>
+              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Employee</Label>
+              <SelectInput
+                value={employeeId}
+                onChange={(v) => { setEmployeeId(v); setSelectedIds([]); }}
+                options={[{ label: "All employees", value: "" }, ...employees.map((e) => ({ label: `${e.fullName} (${e.code})`, value: e.id }))]}
+                placeholder="All employees"
               />
             </div>
             <div>
