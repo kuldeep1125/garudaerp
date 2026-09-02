@@ -222,7 +222,28 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
     const worked = list.filter((d) => d.shifts > 0).length;
     const totalShifts = list.reduce((s, d) => s + d.shifts, 0);
     const billed = list.reduce((s, d) => s + d.billing, 0);
-    return { list, worked, totalShifts, billed };
+
+    // Utilization analytics: shift mix, weekday distribution, top properties.
+    // IMPORTANT: filter to the same 30-day window as the summary numbers above,
+    // so Day+Night sums equal totalShifts (the raw list may hold up to 100 records).
+    const window30 = new Set(list.map((d) => d.date));
+    let dayShifts = 0;
+    let nightShifts = 0;
+    const weekday = [0, 0, 0, 0, 0, 0, 0]; // Sun..Sat
+    const byProp = new Map<string, number>();
+    for (const d of data?.deployments ?? []) {
+      if (!d.date) continue;
+      const key = String(d.date).slice(0, 10);
+      if (window30.has(key)) {
+        if (d.shift === "NIGHT") nightShifts += 1;
+        else dayShifts += 1;
+        const wd = new Date(`${key}T00:00:00`).getDay();
+        weekday[wd] += 1;
+        byProp.set(d.propertyName, (byProp.get(d.propertyName) ?? 0) + 1);
+      }
+    }
+    const topProps = [...byProp.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    return { list, worked, totalShifts, billed, dayShifts, nightShifts, weekday, topProps };
   }, [data?.deployments]);
 
   if (loading) {
@@ -361,6 +382,98 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
                     height={140}
                     series={[{ key: "billing", label: "Billing", color: CHART_COLORS.emerald }]}
                   />
+                </div>
+              )}
+
+              {/* Utilization analytics: shift mix · weekday load · top properties */}
+              {activity.totalShifts > 0 && (
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  {/* Shift mix — day vs night stacked bar */}
+                  <div className="rounded-xl border bg-muted/30 p-3 transition-colors hover:bg-muted/50">
+                    <p className="text-[11px] font-medium text-muted-foreground">Shift mix · 30 days</p>
+                    <div
+                      className="mt-2.5 flex h-2.5 w-full overflow-hidden rounded-full"
+                      role="img"
+                      aria-label={`${activity.dayShifts} day shifts, ${activity.nightShifts} night shifts`}
+                    >
+                      <span
+                        className="h-full bg-amber-400 transition-all dark:bg-amber-500"
+                        style={{ width: `${Math.round((activity.dayShifts / activity.totalShifts) * 100)}%` }}
+                        title={`Day · ${activity.dayShifts} shifts`}
+                      />
+                      <span
+                        className="h-full bg-slate-500 transition-all dark:bg-slate-400"
+                        style={{ width: `${Math.round((activity.nightShifts / activity.totalShifts) * 100)}%` }}
+                        title={`Night · ${activity.nightShifts} shifts`}
+                      />
+                    </div>
+                    <div className="mt-2.5 space-y-1 text-[11px]">
+                      <p className="flex items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                          <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400 dark:bg-amber-500" aria-hidden />Day
+                        </span>
+                        <span className="shrink-0 font-bold tabular-nums">
+                          {activity.dayShifts} <span className="font-normal text-muted-foreground">({Math.round((activity.dayShifts / activity.totalShifts) * 100)}%)</span>
+                        </span>
+                      </p>
+                      <p className="flex items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                          <span className="h-2 w-2 shrink-0 rounded-full bg-slate-500 dark:bg-slate-400" aria-hidden />Night
+                        </span>
+                        <span className="shrink-0 font-bold tabular-nums">
+                          {activity.nightShifts} <span className="font-normal text-muted-foreground">({Math.round((activity.nightShifts / activity.totalShifts) * 100)}%)</span>
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Busiest weekdays — mini bar chart Mon..Sun */}
+                  <div className="rounded-xl border bg-muted/30 p-3 transition-colors hover:bg-muted/50">
+                    <p className="text-[11px] font-medium text-muted-foreground">Busiest weekdays</p>
+                    {(() => {
+                      const order = [1, 2, 3, 4, 5, 6, 0]; // Mon..Sun
+                      const labels = ["M", "T", "W", "T", "F", "S", "S"];
+                      const max = Math.max(...order.map((i) => activity.weekday[i]), 1);
+                      return (
+                        <div className="mt-2.5 flex h-14 items-end justify-between gap-1.5">
+                          {order.map((i, idx) => (
+                            <div key={i} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1">
+                              <div
+                                className={cn(
+                                  "w-full rounded-t-[3px] transition-all hover:opacity-80",
+                                  activity.weekday[i] > 0 ? "bg-emerald-500/80 dark:bg-emerald-500" : "bg-muted"
+                                )}
+                                style={{ height: `${Math.max((activity.weekday[i] / max) * 100, activity.weekday[i] > 0 ? 8 : 4)}%` }}
+                                title={`${activity.weekday[i]} shift${activity.weekday[i] === 1 ? "" : "s"}`}
+                              />
+                              <span className="text-[9px] text-muted-foreground">{labels[idx]}</span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Top properties — where this employee works most */}
+                  <div className="rounded-xl border bg-muted/30 p-3 transition-colors hover:bg-muted/50">
+                    <p className="text-[11px] font-medium text-muted-foreground">Top properties</p>
+                    <div className="mt-2.5 space-y-2">
+                      {activity.topProps.map(([name, count]) => (
+                        <div key={name} className="min-w-0">
+                          <p className="flex items-center justify-between gap-2 text-[11px]">
+                            <span className="min-w-0 truncate" title={name}>{name}</span>
+                            <span className="shrink-0 font-bold tabular-nums">{count}</span>
+                          </p>
+                          <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-muted">
+                            <div
+                              className="h-full rounded-full bg-teal-500/80 transition-all dark:bg-teal-400"
+                              style={{ width: `${Math.round((count / (activity.topProps[0]?.[1] ?? 1)) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
             </CardContent>

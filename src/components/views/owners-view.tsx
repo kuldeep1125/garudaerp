@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { api } from "@/lib/api-client";
+import { formatINR } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
+import { MonthPicker, toMonth } from "@/components/shared/month-picker";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,10 +15,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  Crown, EllipsisVertical, KeyRound, Pencil, Plus, ShieldCheck, UserPlus,
+  CalendarRange, ClipboardCopy, Crown, EllipsisVertical, Info, KeyRound, Mail, Minus, Pencil,
+  Plus, Send, ShieldCheck, TrendingDown, TrendingUp, UserPlus,
 } from "lucide-react";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -34,6 +37,23 @@ import { useAuth } from "@/components/providers";
 // Owner row shape (GET /api/owners → { items })
 // ---------------------------------------------------------------------------
 
+interface EmailRow {
+  key: string; label: string; value: number; previous: number;
+  pct: number | null; goodUp: boolean;
+}
+
+interface EmailPreview {
+  owner: { id: string; name: string; username: string; mobile: string | null; isActive: boolean };
+  month: string; prevMonth: string; monthLabel: string; prevMonthLabel: string;
+  subject: string;
+  rows: EmailRow[];
+  activity: { deployments: number; trips: number; advances: number; emi: number };
+  insights: string[];
+  note: string;
+  bodyText: string;
+  disclaimer: string;
+}
+
 interface OwnerRow {
   id: string;
   name: string;
@@ -42,6 +62,175 @@ interface OwnerRow {
   isActive: boolean;
   createdAt?: string;
   createdRecords?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Monthly summary email dialog (mock send — audit-logged)
+// ---------------------------------------------------------------------------
+
+function EmailDeltaPill({ pct, goodUp }: { pct: number | null; goodUp: boolean }) {
+  if (pct === null) {
+    return <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">new</span>;
+  }
+  if (pct === 0) {
+    return <span className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold text-muted-foreground"><Minus className="h-2.5 w-2.5" aria-hidden />0%</span>;
+  }
+  const up = pct > 0;
+  const good = up === goodUp;
+  const Icon = up ? TrendingUp : TrendingDown;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-bold tabular-nums",
+        good
+          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+          : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+      )}
+    >
+      <Icon className="h-2.5 w-2.5" aria-hidden />{up ? "+" : ""}{pct}%
+    </span>
+  );
+}
+
+function MonthlyEmailDialog({ target, onClose }: { target: OwnerRow; onClose: () => void }) {
+  const [month, setMonth] = useState<string>(() => toMonth());
+  const { data, loading, error, reload } = useAsync<EmailPreview>(
+    () => api.get<EmailPreview>(`/api/owners/monthly-email?ownerId=${target.id}&month=${month}`),
+    [month, target.id]
+  );
+  const { mutate, saving } = useMutation();
+
+  const copyText = async () => {
+    if (!data) return;
+    try {
+      await navigator.clipboard.writeText(data.bodyText);
+      toast.success("Email text copied to clipboard");
+    } catch {
+      toast.error("Could not copy — clipboard unavailable");
+    }
+  };
+
+  const markSent = async () => {
+    const res = await mutate(
+      () => api.post("/api/owners/monthly-email", { ownerId: target.id, month }),
+      `Summary email logged as sent to ${target.name}`
+    );
+    if (res.ok) onClose();
+  };
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Mail className="h-4 w-4 text-primary" aria-hidden />
+            Monthly summary — {target.name}
+          </DialogTitle>
+          <DialogDescription>
+            Composed from the same numbers as the dashboard summary card. Sending is a logged mock until Phase 2.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <MonthPicker month={month} onChange={setMonth} />
+          {data && (
+            <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={copyText}>
+              <ClipboardCopy className="h-3.5 w-3.5" aria-hidden />Copy text
+            </Button>
+          )}
+        </div>
+
+        {loading && (
+          <div className="space-y-2">
+            <Skeleton className="h-16 rounded-xl" />
+            <Skeleton className="h-40 rounded-xl" />
+          </div>
+        )}
+
+        {error && (
+          <div className="rounded-xl border border-red-200 bg-red-50/60 p-4 text-center dark:border-red-900 dark:bg-red-950/30">
+            <p className="text-xs text-red-700 dark:text-red-300">{error}</p>
+            <Button variant="outline" size="sm" className="mt-2 h-8" onClick={() => void reload()}>Retry</Button>
+          </div>
+        )}
+
+        {data && !loading && (
+          <div className="overflow-hidden rounded-xl border" aria-label="Email preview">
+            {/* Email envelope header */}
+            <div className="space-y-1 border-b bg-muted/40 px-4 py-3 text-xs">
+              <p className="flex gap-2"><span className="w-12 shrink-0 font-semibold text-muted-foreground">From</span><span className="min-w-0 truncate">BizHub &lt;reports@bizhub.app&gt;</span></p>
+              <p className="flex gap-2"><span className="w-12 shrink-0 font-semibold text-muted-foreground">To</span><span className="min-w-0 truncate">{data.owner.name} &lt;{data.owner.mobile || `@${data.owner.username}`}&gt;</span></p>
+              <p className="flex gap-2"><span className="w-12 shrink-0 font-semibold text-muted-foreground">Subject</span><span className="min-w-0 font-semibold text-foreground">{data.subject}</span></p>
+            </div>
+
+            {/* Body */}
+            <div className="space-y-4 px-4 py-4">
+              <p className="text-sm">Hi <span className="font-semibold">{data.owner.name}</span>,</p>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Here is your BizHub business summary for <span className="font-semibold text-foreground">{data.monthLabel}</span> (compared with {data.prevMonthLabel}).
+              </p>
+
+              <div className="overflow-hidden rounded-lg border">
+                <p className="border-b bg-muted/40 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Key numbers</p>
+                <div className="divide-y">
+                  {data.rows.map((r) => (
+                    <div
+                      key={r.key}
+                      className={cn(
+                        "flex items-center justify-between gap-2 px-3 py-2 text-xs transition-colors hover:bg-muted/40",
+                        r.key === "net" && "bg-muted/30 font-semibold"
+                      )}
+                    >
+                      <span className={cn("min-w-0 truncate", r.key !== "net" && "text-muted-foreground")}>{r.label}</span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span className="font-bold tabular-nums">{formatINR(r.value)}</span>
+                        <span className="hidden text-[10px] tabular-nums text-muted-foreground sm:inline">was {formatINR(r.previous)}</span>
+                        <EmailDeltaPill pct={r.pct} goodUp={r.goodUp} />
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                <span className="rounded-full bg-muted px-2 py-0.5">{data.activity.deployments} deployments</span>
+                <span className="rounded-full bg-muted px-2 py-0.5">{data.activity.trips} trips</span>
+                <span className="rounded-full bg-muted px-2 py-0.5">advances {formatINR(data.activity.advances, { compact: true })}</span>
+                <span className="rounded-full bg-muted px-2 py-0.5">EMI {formatINR(data.activity.emi, { compact: true })}</span>
+              </div>
+
+              {data.insights.length > 0 && (
+                <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2" role="note">
+                  <CalendarRange className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+                  <ul className="min-w-0 space-y-0.5">
+                    {data.insights.map((line) => (
+                      <li key={line} className="text-[11px] leading-relaxed">{line}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <p className="text-[10px] leading-relaxed text-muted-foreground">{data.note}</p>
+              <p className="text-[10px] italic text-muted-foreground">— BizHub · automated summary</p>
+            </div>
+          </div>
+        )}
+
+        {data && (
+          <p className="flex items-start gap-1.5 text-[10px] leading-relaxed text-muted-foreground">
+            <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />{data.disclaimer}
+          </p>
+        )}
+
+        <DialogFooter className="gap-2">
+          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={onClose}>Close</Button>
+          <Button className="min-h-10 flex-1 gap-1.5 sm:flex-none" onClick={markSent} disabled={loading || !data || saving}>
+            <Send className="h-3.5 w-3.5" aria-hidden />{saving ? "Logging…" : "Mark as sent"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -138,13 +327,14 @@ function MyAccountCard() {
 // Owner card
 // ---------------------------------------------------------------------------
 
-function OwnerCard({ owner, isSelf, saving, onEdit, onReset, onToggleActive }: {
+function OwnerCard({ owner, isSelf, saving, onEdit, onReset, onToggleActive, onEmail }: {
   owner: OwnerRow;
   isSelf: boolean;
   saving: boolean;
   onEdit: () => void;
   onReset: () => void;
   onToggleActive: (next: boolean) => void;
+  onEmail: () => void;
 }) {
   return (
     <Card className="transition-all hover:shadow-sm">
@@ -194,7 +384,11 @@ function OwnerCard({ owner, isSelf, saving, onEdit, onReset, onToggleActive }: {
                   <EllipsisVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onClick={onEmail}>
+                  <Mail className="h-3.5 w-3.5" aria-hidden />Monthly summary email
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={onEdit}>
                   <Pencil className="h-3.5 w-3.5" aria-hidden />Edit details
                 </DropdownMenuItem>
@@ -404,6 +598,7 @@ export default function OwnersView(_props: ViewProps) {
   const [editTarget, setEditTarget] = useState<OwnerRow | null>(null);
   const [resetTarget, setResetTarget] = useState<OwnerRow | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<OwnerRow | null>(null);
+  const [emailTarget, setEmailTarget] = useState<OwnerRow | null>(null);
   const { mutate, saving } = useMutation();
 
   const owners = data?.items ?? [];
@@ -476,6 +671,7 @@ export default function OwnersView(_props: ViewProps) {
               onEdit={() => setEditTarget(o)}
               onReset={() => setResetTarget(o)}
               onToggleActive={(next) => onToggleActive(o, next)}
+              onEmail={() => setEmailTarget(o)}
             />
           ))}
         </div>
@@ -523,6 +719,10 @@ export default function OwnersView(_props: ViewProps) {
         onOpenChange={(v) => !v && setResetTarget(null)}
         target={resetTarget}
       />
+
+      {emailTarget && (
+        <MonthlyEmailDialog target={emailTarget} onClose={() => setEmailTarget(null)} />
+      )}
     </div>
   );
 }

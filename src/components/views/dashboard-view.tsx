@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import {
   Users, Truck, Wallet, IndianRupee, Landmark, CalendarCheck, Receipt, HandCoins, ReceiptText,
   Route, AlertTriangle, AlertCircle, Info, ChevronRight, Building2, RefreshCw, Activity, PieChart as PieChartIcon, History,
-  CalendarRange, TrendingUp, TrendingDown, Minus, Sparkles, CalendarDays,
+  CalendarRange, TrendingUp, TrendingDown, Minus, Sparkles, CalendarDays, Printer,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import { ErrorState, useAsync, AreaTrend, CHART_COLORS } from "./_shared";
@@ -402,20 +402,40 @@ export default function DashboardView({ navigate }: ViewProps) {
               </CardContent>
             </Card>
           ) : monthly ? (
-            <Card className="overflow-hidden border-primary/20">
-              <div className="h-0.5 w-full bg-gradient-to-r from-emerald-500/70 via-teal-500/70 to-amber-500/70" aria-hidden />
-              <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
-                <div className="space-y-0.5">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <CalendarRange className="h-4 w-4 text-primary" aria-hidden />
-                    Monthly business summary
-                  </CardTitle>
-                  <CardDescription className="text-xs">
-                    {monthShort(monthly.prevMonth)} → {monthShort(monthly.month)} · both businesses
-                  </CardDescription>
-                </div>
-                <MonthPicker month={summaryMonth} onChange={setSummaryMonth} className="scale-95" />
-              </CardHeader>
+            <div className="print-area space-y-2">
+              {/* Print-only header (hidden on screen) */}
+              <div className="hidden print:block">
+                <h1 className="text-lg font-bold">Monthly business summary — BizHub</h1>
+                <p className="text-xs">Month: {monthShort(monthly.month)} (compared with {monthShort(monthly.prevMonth)})</p>
+                <p className="text-xs">Generated {new Date().toLocaleString("en-IN")}</p>
+                <hr className="my-2" />
+              </div>
+              <Card className="overflow-hidden border-primary/20">
+                <div className="h-0.5 w-full bg-gradient-to-r from-emerald-500/70 via-teal-500/70 to-amber-500/70" aria-hidden />
+                <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
+                  <div className="space-y-0.5">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <CalendarRange className="h-4 w-4 text-primary" aria-hidden />
+                      Monthly business summary
+                    </CardTitle>
+                    <CardDescription className="text-xs">
+                      {monthShort(monthly.prevMonth)} → {monthShort(monthly.month)} · both businesses
+                    </CardDescription>
+                  </div>
+                  <div className="no-print flex items-center gap-1.5">
+                    <MonthPicker month={summaryMonth} onChange={setSummaryMonth} className="scale-95" />
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-9 w-9 transition-colors hover:border-primary/40 hover:text-primary"
+                      onClick={() => window.print()}
+                      aria-label="Print or save this summary as PDF"
+                      title="Print / Save PDF"
+                    >
+                      <Printer className="h-4 w-4" aria-hidden />
+                    </Button>
+                  </div>
+                </CardHeader>
               <CardContent className="space-y-3">
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
                   {([
@@ -457,7 +477,7 @@ export default function DashboardView({ navigate }: ViewProps) {
                 </div>
                 {monthly.insights.length > 0 && (
                   <div
-                    className="flex items-start gap-2 rounded-xl border border-primary/20 bg-gradient-to-r from-primary/5 via-primary/[0.03] to-transparent p-3"
+                    className="flex items-start gap-2 rounded-xl border border-primary/20 bg-gradient-to-r from-primary/5 via-primary/[0.03] to-transparent p-3 print:border-border print:bg-transparent"
                     role="note"
                     aria-label="Automated insights"
                   >
@@ -474,7 +494,8 @@ export default function DashboardView({ navigate }: ViewProps) {
                   {monthly.note}
                 </p>
               </CardContent>
-            </Card>
+              </Card>
+            </div>
           ) : null}
 
           {/* Collections + attention */}
