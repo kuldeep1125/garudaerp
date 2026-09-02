@@ -9,12 +9,13 @@ import { StatCard } from "@/components/shared/stat-card";
 import { RangeSelector, type RangeKey } from "@/components/shared/filters";
 import { DataTable, type Column } from "@/components/shared/data-table";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import {
   CalendarCheck, Users, Building2, IndianRupee, Wallet, HandCoins, Receipt, TrendingDown,
-  Sun, Moon, AlertTriangle,
+  Sun, Moon, AlertTriangle, Grid3X3,
 } from "lucide-react";
 import { AreaTrend, CHART_COLORS, ErrorState, useAsync } from "./_shared";
 
@@ -34,11 +35,40 @@ interface Resp {
   topOwedProperty?: { propertyId: string; propertyName: string; outstanding: number } | null;
 }
 
+interface HeatResp {
+  days: number;
+  dates: string[];
+  rows: {
+    propertyId: string; propertyName: string; total: number;
+    cells: { date: string; shifts: number }[];
+  }[];
+  unlistedShifts: number;
+}
+
+// Intensity scale for the heat-map: 0 = empty, then 4 emerald steps.
+const HEAT_STEPS = [
+  "bg-muted/60",
+  "bg-emerald-200/70 dark:bg-emerald-900/60",
+  "bg-emerald-300/80 dark:bg-emerald-800/80",
+  "bg-emerald-500/85 dark:bg-emerald-700",
+  "bg-emerald-600 dark:bg-emerald-600",
+];
+
+function heatClass(n: number, max: number): string {
+  if (n <= 0) return HEAT_STEPS[0];
+  const level = Math.min(4, Math.max(1, Math.ceil((n / Math.max(1, max)) * 4)));
+  return HEAT_STEPS[level];
+}
+
 export default function ManpowerDashboardView({ navigate }: ViewProps) {
   const [range, setRange] = useState<RangeKey>("today");
   const { data, loading, error, reload } = useAsync<Resp>(
     () => api.get<Resp>(`/api/dashboard/manpower?range=${range}`),
     [range]
+  );
+  const { data: heat, loading: heatLoading } = useAsync<HeatResp>(
+    () => api.get<HeatResp>("/api/dashboard/manpower-heatmap?days=14"),
+    []
   );
 
   const m = data?.manpower;
@@ -128,6 +158,78 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
                   <span>Day {dayPct}%</span><span>Night {100 - dayPct}%</span>
                 </div>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Workforce heat-map — last 14 days × busiest properties */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Grid3X3 className="h-4 w-4 text-primary" aria-hidden />
+                Workforce heat-map
+              </CardTitle>
+              <CardDescription className="text-xs">Shifts per day at the busiest properties — last 14 days</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {heatLoading ? (
+                <Skeleton className="h-44 w-full rounded-lg" />
+              ) : !heat || heat.rows.length === 0 ? (
+                <p className="flex h-32 items-center justify-center text-center text-xs text-muted-foreground">
+                  No deployments in the last 14 days
+                </p>
+              ) : (
+                <>
+                  <div className="-mx-1 overflow-x-auto px-1 pb-1">
+                    <div className="min-w-[560px]">
+                      {/* Date header row */}
+                      <div className="flex items-end gap-1">
+                        <div className="w-28 shrink-0" aria-hidden />
+                        {heat.dates.map((d) => (
+                          <div key={d} className="flex-1 text-center text-[9px] tabular-nums text-muted-foreground">
+                            {d.slice(8)}
+                          </div>
+                        ))}
+                      </div>
+                      {/* One row per property */}
+                      {heat.rows.map((row) => {
+                        const max = Math.max(...heat.rows.map((r) => Math.max(...r.cells.map((c) => c.shifts))));
+                        return (
+                          <div key={row.propertyId} className="mt-1 flex items-center gap-1">
+                            <div className="w-28 shrink-0 truncate pr-1 text-[11px] font-medium" title={row.propertyName}>
+                              {row.propertyName}
+                            </div>
+                            {row.cells.map((c) => (
+                              <div
+                                key={c.date}
+                                className={cn(
+                                  "h-6 flex-1 rounded-[4px] transition-transform hover:scale-110",
+                                  heatClass(c.shifts, max)
+                                )}
+                                title={`${row.propertyName} · ${c.date} · ${c.shifts} shift${c.shifts === 1 ? "" : "s"}`}
+                              />
+                            ))}
+                            <div className="w-7 shrink-0 text-right text-[10px] font-semibold tabular-nums text-muted-foreground">
+                              {row.total}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {heat.unlistedShifts > 0 && (
+                        <p className="mt-2 text-[10px] text-muted-foreground">+ {heat.unlistedShifts} more shifts at other properties</p>
+                      )}
+                    </div>
+                  </div>
+                  {/* Legend */}
+                  <div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground">
+                    <span>Less</span>
+                    {HEAT_STEPS.map((s) => (
+                      <span key={s} className={cn("h-2.5 w-4 rounded-[3px]", s)} aria-hidden />
+                    ))}
+                    <span>More</span>
+                    <span className="ml-auto">{heat.dates.length} days</span>
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
 

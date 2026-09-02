@@ -103,3 +103,24 @@ Stage Summary:
 - New endpoint contract: /api/dashboard/combined-trend?days=N → { days, trend: [{date, billing, collections, transport, expenses}] } (N clamped 7–60).
 - pwa-install.ts is a module singleton (listeners registered at import) — import only from client components.
 - Next-step candidates: toast on new notification while polling; workforce heat-map on manpower dashboard; trip-wise profit report chart; export whole dashboard to PDF.
+
+---
+Task ID: 5
+Agent: main (orchestrator)
+Task: Status QA round; workforce heat-map, trip payment progress, notification-arrival toast, view transition; sticky-sidebar overflow bug fix.
+
+Work Log:
+- QA: lint + tsc clean (src/); agent-browser cycle of settlements/deployments/trips/expenses/reports/employees — no runtime console errors (only stale dev-mode Fast Refresh warning from editing).
+- BUG FOUND & FIXED (layout, pre-existing): sidebar nav spilled OUT of the 100vh aside on short pages — ScrollArea root used `flex-1` without `min-h-0`, so it refused to shrink, overflowed the aside (nav items visible below the footer; html scrollHeight inflated 152px; sticky sidebar appeared unpinned). Fix: `min-h-0 flex-1` on the ScrollArea in SideNav. Verified geometry after fix: docH 864 (was 1016), asideTop stays 0 at max scroll, logo always visible. Also keyed the ScrollArea by `view` so nav internal scroll resets on navigation.
+- NEW API: GET /api/dashboard/manpower-heatmap?days=7..30 (default 14) → { dates[], rows: [{propertyId, propertyName, total, cells:[{date, shifts}]}] (top 8 properties by total, sorted desc), unlistedShifts } from BILLABLE deployments grouped by day×property.
+- Manpower dashboard: new "Workforce heat-map" card after Day/Night split — GitHub-style grid (rows=properties w/ name+total, cols=14 days), 5-step emerald intensity scale (HEAT_STEPS, dark variants), per-cell title tooltip + hover scale, Less→More legend, horizontal scroll wrapper (min-w-[560px]) for mobile, skeleton + empty state. Verified desktop + 375px (scrolls horizontally).
+- Trips view: Payment column now renders StatusBadge + mini Progress bar (Paid/Target %, h-1.5) + % label — verified (0% pending, 47% partial). tripPaidPct() helper (clamped 0-100, target = finalAmount ?? agreed+extra).
+- TopBar notification-arrival toast: polling effect now diffs counts via refs (first load silent), fires `toast.info("N new notifications")` with View action → notifications view, only when tab visible; added visibilitychange listener for instant re-check on tab return.
+- View transitions: globals.css adds `@keyframes view-in` (fade + 6px slide, 0.24s, cubic-bezier(0.22,1,0.36,1)) + `.view-enter` utility with prefers-reduced-motion guard; app-shell wraps children in `<div key={view} className="view-enter">` — remount per view plays the animation (getComputedStyle verified: view-in 0.24s).
+- Regression checks after ScrollArea change: collapsed sidebar (68px rail) OK, mobile More sheet renders full nav OK, settings/owners/audit views OK, dark mode untouched.
+
+Stage Summary:
+- Sticky-sidebar spill bug is the headline fix — any future layout work in SideNav must keep `min-h-0` on the flex ScrollArea.
+- New endpoint: /api/dashboard/manpower-heatmap?days=N (clamp 7-30).
+- Heat-map maxes at 8 rows by design; unlisted shifts surfaced via unlistedShifts caption.
+- Next-step candidates: PDF export bundle for reports; employee-wise utilization chart on employee-detail; monthly owner summary email mock; i18n (Hindi) scaffolding per SRS Phase 2.

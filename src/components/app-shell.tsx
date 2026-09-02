@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { useAuth, useNav, useBusiness, type BusinessScope } from "@/components/providers";
@@ -77,7 +77,8 @@ function SideNav({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onT
           </Button>
         )}
       </div>
-      <ScrollArea className="flex-1 px-2 pb-4">
+      {/* Keyed by view so the nav's internal scroll resets on navigation */}
+      <ScrollArea key={view} className="min-h-0 flex-1 px-2 pb-4">
         <div className="space-y-4">
           {groups.map((group) => (
             <div key={group.key}>
@@ -144,19 +145,41 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
   const { navigate } = useNav();
   const [notifCount, setNotifCount] = useState(0);
   const { canInstall, install } = usePwaInstall();
+  const prevCountRef = useRef(0);
+  const firstLoadRef = useRef(true);
 
   useEffect(() => {
     let alive = true;
     const load = async () => {
       try {
         const items = await import("@/lib/api-client").then(({ api }) => api.get<{ length: number }>("/api/notifications"));
-        if (alive) setNotifCount(Array.isArray(items) ? items.length : 0);
+        const count = Array.isArray(items) ? items.length : 0;
+        if (!alive) return;
+        setNotifCount(count);
+        // Announce only genuine arrivals (skip initial load), when the tab is visible.
+        if (
+          !firstLoadRef.current &&
+          count > prevCountRef.current &&
+          typeof document !== "undefined" &&
+          document.visibilityState === "visible"
+        ) {
+          const added = count - prevCountRef.current;
+          toast.info(`${added} new notification${added === 1 ? "" : "s"}`, {
+            description: "Something needs your attention",
+            action: { label: "View", onClick: () => navigate("notifications") },
+          });
+        }
+        prevCountRef.current = count;
+        firstLoadRef.current = false;
       } catch { /* ignore */ }
     };
     load();
     const t = setInterval(load, 60_000);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
+    // Re-check immediately when the user returns to the tab.
+    const onVis = () => { if (document.visibilityState === "visible") void load(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { alive = false; clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
+  }, [navigate]);
 
   const initials = (owner?.name ?? "?").slice(0, 2).toUpperCase();
 
@@ -356,7 +379,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           className={cn("mx-auto w-full max-w-[1600px] flex-1 px-3 pb-24 pt-3 sm:px-5 sm:pt-4 md:pb-10", !isWide && "max-w-[1400px]")}
           aria-label={currentView?.label ?? "Content"}
         >
-          {children}
+          {/* Keyed by view → remounts on navigation and plays the enter animation */}
+          <div key={view} className="view-enter">
+            {children}
+          </div>
         </main>
         <footer className="mt-auto hidden border-t bg-background py-3 md:block">
           <div className="mx-auto flex max-w-[1600px] items-center justify-between px-5 text-[11px] text-muted-foreground">

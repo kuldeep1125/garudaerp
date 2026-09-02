@@ -14,6 +14,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
+import { Progress } from "@/components/ui/progress";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -82,6 +83,12 @@ function tripTotal(t: TripRec): number {
 
 function tripOutstanding(t: TripRec): number {
   return Math.max(0, tripTotal(t) - (t.paidAmount ?? 0));
+}
+
+function tripPaidPct(t: TripRec): number {
+  const target = tripTotal(t);
+  if (target <= 0) return 0;
+  return Math.min(100, Math.round(((t.paidAmount ?? 0) / target) * 100));
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +350,21 @@ export default function TripsView({ params, navigate }: ViewProps) {
       render: (r) => <span className="tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(r.paidAmount ?? 0)}</span>,
       value: (r) => formatINR(r.paidAmount ?? 0),
     },
-    { key: "paymentStatus", label: "Payment", render: (r) => <StatusBadge status={r.paymentStatus} />, value: (r) => r.paymentStatus },
+    {
+      key: "paymentStatus", label: "Payment",
+      render: (r) => (
+        <div className="min-w-[92px]">
+          <StatusBadge status={r.paymentStatus} />
+          <Progress
+            value={tripPaidPct(r)}
+            className="mt-1 h-1.5"
+            aria-label={`Paid ${tripPaidPct(r)}% of ${formatINR(tripTotal(r))}`}
+          />
+          <p className="mt-0.5 text-[10px] tabular-nums text-muted-foreground">{tripPaidPct(r)}%</p>
+        </div>
+      ),
+      value: (r) => r.paymentStatus,
+    },
     { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
   ];
 
