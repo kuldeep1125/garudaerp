@@ -189,3 +189,31 @@
     animation: none;
   }
 }
+
+/* Dialog polish — soft blurred backdrop for all dialogs (palette, forms, previews) */
+[data-slot="dialog-overlay"] {
+  backdrop-filter: blur(3px);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="dialog-overlay"] {
+    backdrop-filter: none;
+  }
+}
+
+/* Command palette item motion — tiny slide on keyboard/hover selection */
+[data-slot="command-item"] {
+  transition: transform 0.12s ease, background-color 0.12s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="command-item"] {
+    transition: none;
+  }
+}
+
+/* Sonner toast entrance respects reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  [data-sonner-toast] {
+    animation: none !important;
+    transition: none !important;
+  }
+}

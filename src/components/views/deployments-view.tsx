@@ -19,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useLang, t } from "@/lib/i18n";
 import { CalendarCheck, CheckCheck, CheckSquare, Square, Users, IndianRupee, Pencil, UserX, XCircle, MinusCircle, CalendarDays, ChevronDown } from "lucide-react";
 import {
   DeploymentRec, DeployWizard, ListResp, Option, PropertyRec, SelectInput, ShiftBadgeInline,
@@ -93,6 +94,7 @@ function monthBounds(offset = 0): { from: string; to: string } {
 }
 
 export default function DeploymentsView({ params }: ViewProps) {
+  const { lang } = useLang();
   const [date, setDate] = useState(params?.date ?? todayStr());
   const [fromTo, setFromTo] = useState<{ from?: string; to?: string }>({});
   const [rangeKey, setRangeKey] = useState<RangeKey | null>(params?.date ? null : "today");
@@ -260,9 +262,9 @@ export default function DeploymentsView({ params }: ViewProps) {
       ),
       value: () => "",
     },
-    { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
+    { key: "date", label: t(lang, "col.date"), value: (r) => fmtDay(r.date), hideOnMobile: true },
     {
-      key: "employee", label: "Employee", primary: true,
+      key: "employee", label: t(lang, "col.employee"), primary: true,
       render: (r) => (
         <div className="min-w-0">
           <p className="truncate font-medium">{r.employeeName}</p>
@@ -271,23 +273,23 @@ export default function DeploymentsView({ params }: ViewProps) {
       ),
       value: (r) => r.employeeName,
     },
-    { key: "property", label: "Property", value: (r) => r.propertyName, hideOnMobile: true },
-    { key: "shift", label: "Shift", render: (r) => <ShiftBadgeInline shift={r.shift} />, value: (r) => r.shift },
-    { key: "category", label: "Category", value: (r) => r.workCategory ?? "—", hideOnMobile: true },
+    { key: "property", label: t(lang, "col.property"), value: (r) => r.propertyName, hideOnMobile: true },
+    { key: "shift", label: t(lang, "col.shift"), render: (r) => <ShiftBadgeInline shift={r.shift} />, value: (r) => r.shift },
+    { key: "category", label: t(lang, "col.category"), value: (r) => r.workCategory ?? "—", hideOnMobile: true },
     {
-      key: "billingAmount", label: "Billing", className: "text-right",
+      key: "billingAmount", label: t(lang, "col.billing"), className: "text-right",
       render: (r) => <span className="tabular-nums">{formatINR(r.billingAmount ?? 0)}</span>,
       value: (r) => formatINR(r.billingAmount ?? 0),
     },
     {
-      key: "payoutAmount", label: "Payout", className: "text-right",
+      key: "payoutAmount", label: t(lang, "col.payout"), className: "text-right",
       render: (r) => <span className="tabular-nums">{formatINR(r.payoutAmount ?? 0)}</span>,
       value: (r) => formatINR(r.payoutAmount ?? 0),
       hideOnMobile: true,
     },
-    { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+    { key: "status", label: t(lang, "col.status"), render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
     {
-      key: "paidStatus", label: "Paid", render: (r) => <StatusBadge status={r.paidStatus ?? "UNPAID"} />, value: (r) => r.paidStatus ?? "UNPAID",
+      key: "paidStatus", label: t(lang, "col.paid"), render: (r) => <StatusBadge status={r.paidStatus ?? "UNPAID"} />, value: (r) => r.paidStatus ?? "UNPAID",
       hideOnMobile: true,
     },
   ];
@@ -295,8 +297,8 @@ export default function DeploymentsView({ params }: ViewProps) {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Deployments"
-        subtitle="Daily work records & attendance"
+        title={t(lang, "page.deployments")}
+        subtitle={t(lang, "page.deployments.sub")}
         actions={
           <Button size="sm" className="h-9 gap-1.5" onClick={() => setWizardOpen(true)}>
             <Users className="h-4 w-4" aria-hidden />Deploy Employees

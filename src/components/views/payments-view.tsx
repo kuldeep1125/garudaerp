@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { toast } from "sonner";
+import { useLang, t } from "@/lib/i18n";
 import { Wallet, Plus, Building2, ArrowRight } from "lucide-react";
 import {
   ListResp, Option, PaymentRec, PropertyRec, RecordPaymentDialog, SelectInput, errMessage, fmtDay, useAsync,
@@ -27,6 +28,7 @@ interface PendingRow {
 }
 
 export default function PaymentsView({ params, navigate }: ViewProps) {
+  const { lang } = useLang();
   const [tab, setTab] = useState("outstanding");
   const [payFor, setPayFor] = useState<string | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
@@ -79,9 +81,9 @@ export default function PaymentsView({ params, navigate }: ViewProps) {
   ];
 
   const historyColumns: Column<PaymentRec>[] = [
-    { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
+    { key: "date", label: t(lang, "col.date"), value: (r) => fmtDay(r.date), hideOnMobile: true },
     {
-      key: "propertyName", label: "Property", primary: true,
+      key: "propertyName", label: t(lang, "col.property"), primary: true,
       render: (r) => (
         <div className="min-w-0">
           <p className="truncate font-medium">{r.propertyName ?? "—"}</p>
@@ -90,10 +92,10 @@ export default function PaymentsView({ params, navigate }: ViewProps) {
       ),
       value: (r) => r.propertyName ?? "—",
     },
-    { key: "amount", label: "Amount", className: "text-right", render: (r) => <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(r.amount)}</span>, value: (r) => formatINR(r.amount) },
-    { key: "method", label: "Method", value: (r) => r.method ?? "—" },
-    { key: "reference", label: "Reference", value: (r) => r.reference ?? "—", hideOnMobile: true },
-    { key: "receivedBy", label: "Received by", value: (r) => r.receivedByName ?? "—", hideOnMobile: true },
+    { key: "amount", label: t(lang, "col.amount"), className: "text-right", render: (r) => <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(r.amount)}</span>, value: (r) => formatINR(r.amount) },
+    { key: "method", label: t(lang, "col.method"), value: (r) => r.method ?? "—" },
+    { key: "reference", label: t(lang, "col.reference"), value: (r) => r.reference ?? "—", hideOnMobile: true },
+    { key: "receivedBy", label: t(lang, "col.receivedBy"), value: (r) => r.receivedByName ?? "—", hideOnMobile: true },
   ];
 
   const totalOutstanding = (pending.data?.items ?? []).reduce((s, i) => s + (i.outstanding ?? 0), 0);
@@ -101,8 +103,8 @@ export default function PaymentsView({ params, navigate }: ViewProps) {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Collections"
-        subtitle="Property payments & receivables"
+        title={t(lang, "page.payments")}
+        subtitle={t(lang, "page.payments.sub")}
         actions={
           <Button size="sm" className="h-9 gap-1.5" onClick={() => setQuickOpen(true)}>
             <Plus className="h-4 w-4" aria-hidden />Record Payment

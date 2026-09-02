@@ -72,21 +72,21 @@ export const GET = handleRoute(async ({ req }) => {
     title: e.fullName,
     subtitle: `${e.code}${e.designation ? ` · ${e.designation}` : ""} · ${e.status}`,
     view: "employee-detail",
-    params: { employeeId: e.id },
+    params: { id: e.id }, // detail views read params.id (was employeeId — clicking results showed an endless skeleton)
   }));
   const propItems: SearchItem[] = properties.map((p) => ({
     id: p.id,
     title: p.name,
     subtitle: [p.brandName, p.type, p.status].filter(Boolean).join(" · "),
     view: "property-detail",
-    params: { propertyId: p.id },
+    params: { id: p.id }, // detail views read params.id (was propertyId)
   }));
   const vehItems: SearchItem[] = vehicles.map((v) => ({
     id: v.id,
     title: v.name,
     subtitle: `${v.registrationNumber}${v.make || v.model ? ` · ${[v.make, v.model].filter(Boolean).join(" ")}` : ""} · ${v.status}`,
     view: "vehicle-detail",
-    params: { vehicleId: v.id },
+    params: { id: v.id }, // detail views read params.id (was vehicleId)
   }));
   const clientItems: SearchItem[] = clients.map((c) => ({
     id: c.id,

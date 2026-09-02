@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useLang, t } from "@/lib/i18n";
 import {
   ReceiptText, Users, Landmark, Banknote, CheckCircle2, Wand2, FileText, CalendarClock,
 } from "lucide-react";
@@ -54,6 +55,7 @@ function monthLabel(month: string): string {
 }
 
 export default function SettlementsView({ navigate }: ViewProps) {
+  const { lang } = useLang();
   const [month, setMonth] = useState(toMonth());
   const [status, setStatus] = useState("");
 
@@ -135,7 +137,7 @@ export default function SettlementsView({ navigate }: ViewProps) {
 
   const columns: Column<SettlementRec>[] = [
     {
-      key: "employeeName", label: "Employee", primary: true,
+      key: "employeeName", label: t(lang, "col.employee"), primary: true,
       render: (r) => (
         <div className="min-w-0">
           <p className="truncate font-medium">{r.employeeName}</p>
@@ -144,21 +146,21 @@ export default function SettlementsView({ navigate }: ViewProps) {
       ),
       value: (r) => r.employeeName,
     },
-    { key: "totalDays", label: "Days", className: "text-right", value: (r) => String(r.totalDays ?? 0) },
-    { key: "shifts", label: "D/N shifts", className: "text-right", hideOnMobile: true, value: (r) => `${r.dayShifts ?? 0}/${r.nightShifts ?? 0}` },
-    { key: "gross", label: "Gross", className: "text-right", hideOnMobile: true, value: (r) => formatINR(r.grossEarnings ?? 0) },
-    { key: "additions", label: "Additions", className: "text-right", hideOnMobile: true, value: (r) => formatINR(r.additions ?? 0) },
+    { key: "totalDays", label: t(lang, "col.days"), className: "text-right", value: (r) => String(r.totalDays ?? 0) },
+    { key: "shifts", label: t(lang, "col.shifts"), className: "text-right", hideOnMobile: true, value: (r) => `${r.dayShifts ?? 0}/${r.nightShifts ?? 0}` },
+    { key: "gross", label: t(lang, "col.gross"), className: "text-right", hideOnMobile: true, value: (r) => formatINR(r.grossEarnings ?? 0) },
+    { key: "additions", label: t(lang, "col.additions"), className: "text-right", hideOnMobile: true, value: (r) => formatINR(r.additions ?? 0) },
     {
-      key: "advance", label: "Advance −", className: "text-right",
+      key: "advance", label: t(lang, "col.advance"), className: "text-right",
       render: (r) => <span className="tabular-nums text-red-600 dark:text-red-400">−{formatINR(r.advanceDeducted ?? 0)}</span>,
       value: (r) => formatINR(r.advanceDeducted ?? 0),
     },
     {
-      key: "net", label: "Net payable", className: "text-right",
+      key: "net", label: t(lang, "col.net"), className: "text-right",
       render: (r) => <span className="font-bold tabular-nums">{formatINR(r.netPayable ?? 0)}</span>,
       value: (r) => formatINR(r.netPayable ?? 0),
     },
-    { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+    { key: "status", label: t(lang, "col.status"), render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
   ];
 
   const detailLines = detail?.lines ?? [];
@@ -167,8 +169,8 @@ export default function SettlementsView({ navigate }: ViewProps) {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Settlements"
-        subtitle="Month-end payroll, finalize & payout"
+        title={t(lang, "page.settlements")}
+        subtitle={t(lang, "page.settlements.sub")}
         actions={
           <AlertDialog open={generateOpen} onOpenChange={setGenerateOpen}>
             <AlertDialogTrigger asChild>

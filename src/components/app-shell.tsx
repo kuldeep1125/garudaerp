@@ -5,6 +5,7 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { useAuth, useNav, useBusiness, type BusinessScope } from "@/components/providers";
 import { usePwaInstall } from "@/components/shared/pwa-install";
+import { CommandPalette } from "@/components/shared/command-palette";
 import { VIEWS, getView } from "@/lib/views";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,7 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import {
   Bell, Building2, CarFront, Check, ChevronsLeft, Home, Languages, LayoutGrid, LogOut, Moon, Search, Smartphone, Sun,
-  Truck, Users, Wallet, ShieldCheck, Boxes,
+  Truck, Users, Wallet, ShieldCheck, Boxes, AlertTriangle, AlertCircle, Info,
 } from "lucide-react";
 import { useLang, t, viewLabel } from "@/lib/i18n";
 
@@ -134,38 +135,66 @@ function ThemeToggle() {
   );
 }
 
+// Live notification shape (subset of the engine payload).
+interface AppNotification {
+  key: string;
+  severity: "CRITICAL" | "WARNING" | "INFO";
+  title: string;
+  message: string;
+  view: string;
+  params?: Record<string, string>;
+}
+
+const SEVERITY_ICON: Record<AppNotification["severity"], React.ReactNode> = {
+  CRITICAL: <AlertTriangle className="h-5 w-5 text-red-500" />,
+  WARNING: <AlertCircle className="h-5 w-5 text-amber-500" />,
+  INFO: <Info className="h-5 w-5 text-sky-500" />,
+};
+
 // Sticky top header
-function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
+function TopBar({ onOpenMore, onOpenPalette }: { onOpenMore: () => void; onOpenPalette: () => void }) {
   const { owner, logout } = useAuth();
   const { navigate } = useNav();
   const { lang, setLang } = useLang();
   const [notifCount, setNotifCount] = useState(0);
+  const [pulse, setPulse] = useState(false);
   const { canInstall, install } = usePwaInstall();
-  const prevCountRef = useRef(0);
+  const prevKeysRef = useRef<Set<string> | null>(null);
   const firstLoadRef = useRef(true);
+  const pulseTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     let alive = true;
     const load = async () => {
       try {
-        const items = await import("@/lib/api-client").then(({ api }) => api.get<{ length: number }>("/api/notifications"));
-        const count = Array.isArray(items) ? items.length : 0;
-        if (!alive) return;
-        setNotifCount(count);
+        const items = await import("@/lib/api-client").then(({ api }) =>
+          api.get<AppNotification[]>("/api/notifications")
+        );
+        if (!alive || !Array.isArray(items)) return;
+        setNotifCount(items.length);
+        const prevKeys = prevKeysRef.current;
+        prevKeysRef.current = new Set(items.map((n) => n.key));
         // Announce only genuine arrivals (skip initial load), when the tab is visible.
-        if (
-          !firstLoadRef.current &&
-          count > prevCountRef.current &&
-          typeof document !== "undefined" &&
-          document.visibilityState === "visible"
-        ) {
-          const added = count - prevCountRef.current;
-          toast.info(`${added} new notification${added === 1 ? "" : "s"}`, {
-            description: "Something needs your attention",
-            action: { label: "View", onClick: () => navigate("notifications") },
-          });
+        if (!firstLoadRef.current && prevKeys && document.visibilityState === "visible") {
+          const fresh = items.filter((n) => !prevKeys.has(n.key));
+          if (fresh.length > 0) {
+            const rank = { CRITICAL: 0, WARNING: 1, INFO: 2 } as const;
+            const headline =
+              [...fresh].sort((a, b) => rank[a.severity] - rank[b.severity])[0] ?? fresh[0];
+            toast(headline.title, {
+              description:
+                fresh.length > 1
+                  ? `${headline.message} — and ${fresh.length - 1} more new alert${fresh.length === 2 ? "" : "s"}.`
+                  : headline.message,
+              icon: SEVERITY_ICON[headline.severity] ?? SEVERITY_ICON.INFO,
+              action: { label: "View", onClick: () => navigate("notifications") },
+            });
+            // Bell ripple — brief ping so the eye is drawn to the new alert.
+            setPulse(true);
+            if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
+            pulseTimerRef.current = window.setTimeout(() => setPulse(false), 2400);
+          }
         }
-        prevCountRef.current = count;
         firstLoadRef.current = false;
       } catch { /* ignore */ }
     };
@@ -174,7 +203,11 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
     // Re-check immediately when the user returns to the tab.
     const onVis = () => { if (document.visibilityState === "visible") void load(); };
     document.addEventListener("visibilitychange", onVis);
-    return () => { alive = false; clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
+    return () => {
+      alive = false; clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+      if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
+    };
   }, [navigate]);
 
   const initials = (owner?.name ?? "?").slice(0, 2).toUpperCase();
@@ -191,11 +224,11 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
 
         <Button variant="ghost" size="icon" className="hidden lg:inline-flex h-9 w-9 lg:hidden" aria-hidden tabIndex={-1} />
 
-        {/* Global search trigger */}
+        {/* Global search trigger — opens the command palette (Ctrl K) */}
         <button
-          onClick={() => navigate("search")}
+          onClick={onOpenPalette}
           className="ml-0 hidden sm:flex h-9 min-w-0 flex-1 max-w-md items-center gap-2 rounded-xl border bg-muted/40 px-3 text-sm text-muted-foreground hover:bg-muted hover:border-primary/40 transition-colors"
-          aria-label="Global search"
+          aria-label="Open command palette"
         >
           <Search className="h-4 w-4 shrink-0" />
           <span className="min-w-0 truncate whitespace-nowrap hidden md:inline">{t(lang, "topbar.search")}</span>
@@ -204,11 +237,12 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
         </button>
 
         <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
-          <Button variant="ghost" size="icon" className="sm:hidden h-10 w-10" onClick={() => navigate("search")} aria-label="Search">
+          <Button variant="ghost" size="icon" className="sm:hidden h-10 w-10" onClick={onOpenPalette} aria-label="Open command palette">
             <Search className="h-5 w-5" />
           </Button>
           <Button variant="ghost" size="icon" className="h-10 w-10 relative" onClick={() => navigate("notifications")} aria-label={`Notifications${notifCount ? `, ${notifCount} active` : ""}`}>
-            <Bell className="h-5 w-5" />
+            {pulse && <span className="absolute inset-0 rounded-full bg-red-500/30 animate-ping" aria-hidden />}
+            <Bell className={cn("h-5 w-5 transition-transform", pulse && "scale-110")} />
             {notifCount > 0 && (
               <span
                 className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold tabular-nums text-white ring-2 ring-background"
@@ -375,19 +409,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { navigate, view } = useNav();
   const [collapsed, setCollapsed] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [ctrlK, setCtrlK] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setCtrlK(false);
-        navigate("search");
+        setPaletteOpen((o) => !o);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [navigate]);
+  }, []);
 
   const currentView = getView(view);
   const isWide = ["dashboard", "manpower", "transport"].includes(view);
@@ -400,7 +433,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar onOpenMore={() => setMoreOpen(true)} />
+        <TopBar onOpenMore={() => setMoreOpen(true)} onOpenPalette={() => setPaletteOpen(true)} />
         <BusinessBanner />
         <main
           id="main-scroll"
@@ -423,6 +456,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Mobile bottom nav */}
       <BottomNav onOpenMore={() => setMoreOpen(true)} />
 
+      {/* Global command palette (Ctrl/Cmd+K, search buttons) */}
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+
       {/* Mobile "More" sheet with full nav */}
       <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
         <SheetTrigger className="hidden" aria-hidden />
@@ -433,8 +469,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <SideNav onNavigate={() => setMoreOpen(false)} />
         </SheetContent>
       </Sheet>
-
-      {ctrlK && null}
     </div>
   );
 }
