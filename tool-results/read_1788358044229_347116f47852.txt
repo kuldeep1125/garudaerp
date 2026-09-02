@@ -1,0 +1,2002 @@
+     1→# Business Management SaaS — Complete Product Requirements Specification
+     2→
+     3→## 1. Product Overview
+     4→
+     5→The system will be a **centralized business management SaaS/PWA for a group of business owners** to manage two separate businesses from one secure platform:
+     6→
+     7→1. **Manpower / Staffing Supply Business**
+     8→   - Employees are supplied/deployed to restaurant properties.
+     9→   - Properties pay the business for deployed employees/shifts.
+    10→   - Employees are paid according to their agreed rates.
+    11→   - The system tracks deployments, attendance/work, property billing, collections, employee earnings, advances, expenses, profitability, and monthly settlements.
+    12→
+    13→2. **Transport / Vehicle Rental Business**
+    14→   - Business-owned vehicles are rented to clients or used for trips.
+    15→   - Each vehicle has independent revenue, expenses, EMI, maintenance, profitability, and history.
+    16→   - This business must remain financially and operationally separate from the manpower business.
+    17→
+    18→The platform should function as a **single business-control center for all owners**, with extremely simple day-to-day data entry and highly automated calculations, reporting, statements, and notifications.
+    19→
+    20→The application must be designed **mobile-first**, with a smooth app-like experience through a **Progressive Web App (PWA)**, while also working properly on desktop/laptop screens.
+    21→
+    22→---
+    23→
+    24→# 2. Core Product Goals
+    25→
+    26→The system should be designed around the following principles:
+    27→
+    28→### 2.1 Minimum Data Entry
+    29→
+    30→Owners should not have to repeatedly enter information that the system already knows.
+    31→
+    32→For example:
+    33→
+    34→- Employee details are entered once.
+    35→- Property details are entered once.
+    36→- Standard rates are stored once.
+    37→- Vehicle information is entered once.
+    38→- Recurring expenses can be configured once.
+    39→- Monthly employee statements should be generated automatically from recorded work.
+    40→
+    41→### 2.2 Maximum Automation
+    42→
+    43→The system should automatically:
+    44→
+    45→- Calculate daily billing.
+    46→- Calculate employee earnings.
+    47→- Calculate business margins.
+    48→- Calculate monthly employee totals.
+    49→- Deduct advances.
+    50→- Generate monthly statements.
+    51→- Generate PDFs.
+    52→- Prepare WhatsApp messages.
+    53→- Calculate revenue and expenses.
+    54→- Calculate profit/loss.
+    55→- Produce daily/weekly/monthly reports.
+    56→- Identify unpaid property amounts.
+    57→- Calculate outstanding employee advances.
+    58→- Calculate vehicle profitability.
+    59→- Generate recurring financial records where configured.
+    60→
+    61→### 2.3 One Source of Truth
+    62→
+    63→All business records should exist in one centralized database.
+    64→
+    65→The same data should be reused across:
+    66→
+    67→- Dashboards
+    68→- Reports
+    69→- Employee statements
+    70→- Property statements
+    71→- Expense reports
+    72→- Profit/loss reports
+    73→- Owner reports
+    74→- Vehicle reports
+    75→- Monthly settlements
+    76→
+    77→There should not be separate manually maintained Excel-style datasets for different reports.
+    78→
+    79→---
+    80→
+    81→# 3. Users and Access Control
+    82→
+    83→## 3.1 Owners
+    84→
+    85→There are currently **15 owners**.
+    86→
+    87→Known owners:
+    88→
+    89→- Yash
+    90→- Saurabh
+    91→- Santosh
+    92→- 12 additional owners
+    93→
+    94→The system must not hardcode the number of owners.
+    95→
+    96→Administrators should be able to:
+    97→
+    98→- Add owner
+    99→- Edit owner
+   100→- Deactivate owner
+   101→- Reactivate owner
+   102→- Change owner profile information
+   103→- View activity performed by each owner
+   104→
+   105→## 3.2 Owner Permissions
+   106→
+   107→All owners have **equal full access**.
+   108→
+   109→There is currently no requirement for:
+   110→
+   111→- Super admin
+   112→- Manager
+   113→- Accountant
+   114→- Employee login
+   115→- Property login
+   116→- Restricted owner role
+   117→
+   118→Every owner should be able to access the same business modules and records.
+   119→
+   120→However, the system should still maintain an internal **audit log** identifying which owner created, edited, deleted, approved, or changed each record.
+   121→
+   122→Example:
+   123→
+   124→> Saurabh created deployment #482 at 10:42 AM.
+   125→
+   126→> Yash changed employee rate from ₹850 to ₹900 at 11:17 AM.
+   127→
+   128→This is important for accountability even though all owners have equal permissions.
+   129→
+   130→---
+   131→
+   132→# 4. Authentication and Security
+   133→
+   134→The application should provide secure owner authentication.
+   135→
+   136→Required functionality:
+   137→
+   138→- Login
+   139→- Logout
+   140→- Password reset
+   141→- Change password
+   142→- Session management
+   143→- Remember-device/session option where appropriate
+   144→- Secure password hashing
+   145→- Automatic session expiration
+   146→- Optional device/session management
+   147→- Login activity tracking
+   148→
+   149→Because the system contains financial information, security should be treated as a core requirement rather than an optional feature.
+   150→
+   151→---
+   152→
+   153→# 5. APPLICATION STRUCTURE
+   154→
+   155→The application should contain two clearly separated business areas.
+   156→
+   157→## Main Navigation
+   158→
+   159→### Global
+   160→
+   161→- Dashboard
+   162→- Notifications
+   163→- Search
+   164→- Owners
+   165→- Settings
+   166→- Activity/Audit Log
+   167→
+   168→### Business 1 — Manpower
+   169→
+   170→- Manpower Dashboard
+   171→- Employees
+   172→- Properties
+   173→- Contracts/Rates
+   174→- Deployments
+   175→- Attendance/Work Records
+   176→- Payments/Collections
+   177→- Employee Advances
+   178→- Employee Settlements
+   179→- Expenses
+   180→- Reports
+   181→
+   182→### Business 2 — Transport
+   183→
+   184→- Transport Dashboard
+   185→- Vehicles
+   186→- Clients
+   187→- Trips/Rentals
+   188→- Vehicle Expenses
+   189→- EMI
+   190→- Maintenance
+   191→- Revenue
+   192→- Profitability
+   193→- Reports
+   194→
+   195→The user must always be able to clearly see which business they are operating in.
+   196→
+   197→Financial records from the two businesses must never accidentally mix.
+   198→
+   199→---
+   200→
+   201→# 6. BUSINESS 1 — MANPOWER / STAFFING MANAGEMENT
+   202→
+   203→## 6.1 Business Model
+   204→
+   205→The company supplies its employees/staff to restaurant properties.
+   206→
+   207→Typical workflow:
+   208→
+   209→**Property requests staff → Owner selects employees → Employees are assigned to property → Employee works shift → Property is billed → Payment is received/recorded → Employee earnings accumulate → Advances are deducted → Monthly settlement is generated.**
+   210→
+   211→The system must support different rates and agreements for different properties.
+   212→
+   213→---
+   214→
+   215→# 7. Employee Management
+   216→
+   217→Employees are records in the system.
+   218→
+   219→They do **not** receive login access.
+   220→
+   221→## 7.1 Employee Profile
+   222→
+   223→Each employee should have a detailed profile containing, where required:
+   224→
+   225→### Personal Information
+   226→
+   227→- Employee ID
+   228→- Full name
+   229→- Profile photo
+   230→- Date of birth
+   231→- Gender
+   232→- Mobile number
+   233→- WhatsApp number
+   234→- Alternate contact
+   235→- Address
+   236→- City
+   237→- Emergency contact
+   238→- Joining date
+   239→- Employment status
+   240→
+   241→### Payment Information
+   242→
+   243→- Payment/bank details
+   244→- UPI ID
+   245→- Account holder name
+   246→- Bank name
+   247→- Account number
+   248→- IFSC
+   249→- Preferred payment method
+   250→
+   251→### Employment Information
+   252→
+   253→- Job/designation
+   254→- Skills/category
+   255→- Experience
+   256→- Standard payout rate
+   257→- Rate type
+   258→- Joining date
+   259→- Current status:
+   260→  - Active
+   261→  - Inactive
+   262→  - Suspended
+   263→  - Left business
+   264→
+   265→### Additional Information
+   266→
+   267→- Documents
+   268→- Notes
+   269→- Internal remarks
+   270→- Advance balance
+   271→- Historical rate changes
+   272→
+   273→Sensitive information should be protected appropriately.
+   274→
+   275→---
+   276→
+   277→# 8. Employee Rate Management
+   278→
+   279→Employee payment rates should not necessarily be permanently fixed.
+   280→
+   281→The system should support:
+   282→
+   283→- Standard employee rate
+   284→- Property-specific rate
+   285→- Shift-specific rate
+   286→- Assignment-specific rate
+   287→- Temporary rate override
+   288→- Effective-from date
+   289→- Effective-to date
+   290→- Historical rate records
+   291→
+   292→Example:
+   293→
+   294→Employee A:
+   295→
+   296→- Property A → ₹800/day
+   297→- Property B → ₹900/day
+   298→- Special event → ₹1,000/day
+   299→
+   300→The exact rate used for an assignment must be stored with that assignment so historical calculations never change accidentally when the employee's standard rate is later modified.
+   301→
+   302→---
+   303→
+   304→# 9. Property Management
+   305→
+   306→Each restaurant/property should have its own master profile.
+   307→
+   308→## Property Profile
+   309→
+   310→Fields may include:
+   311→
+   312→- Property ID
+   313→- Property name
+   314→- Brand/company name
+   315→- Property type
+   316→- Address
+   317→- Contact person
+   318→- Contact number
+   319→- WhatsApp number
+   320→- Email
+   321→- Billing contact
+   322→- Payment contact
+   323→- Start date
+   324→- Contract status
+   325→- Active/inactive status
+   326→- Notes
+   327→
+   328→---
+   329→
+   330→# 10. Property Contract and Rate Management
+   331→
+   332→Because billing rates vary by property/contract, the system must support flexible contracts.
+   333→
+   334→Each property may have:
+   335→
+   336→- Contract name/number
+   337→- Contract start date
+   338→- Contract end date
+   339→- Billing rate
+   340→- Employee payout rate
+   341→- Shift
+   342→- Work category
+   343→- Number of employees allowed/required
+   344→- Special terms
+   345→- Payment terms
+   346→- Notes
+   347→
+   348→Rates must be configurable instead of hardcoded.
+   349→
+   350→The system should support rate history.
+   351→
+   352→Example:
+   353→
+   354→Property A:
+   355→
+   356→| Period | Property Billing | Employee Payout |
+   357→|---|---:|---:|
+   358→| Jan–Mar | ₹1,000 | ₹800 |
+   359→| Apr–Jun | ₹1,100 | ₹850 |
+   360→
+   361→Historical records must continue using the rates that were active when the work was performed.
+   362→
+   363→---
+   364→
+   365→# 11. Employee Deployment / Assignment
+   366→
+   367→This is one of the most important modules.
+   368→
+   369→When a property requests workers, an owner should be able to create a deployment in only a few steps.
+   370→
+   371→## Deployment Flow
+   372→
+   373→1. Select property.
+   374→2. Select date.
+   375→3. Select shift.
+   376→4. Select one or multiple employees.
+   377→5. Select work/category if applicable.
+   378→6. System loads applicable rates automatically.
+   379→7. Owner reviews the assignment.
+   380→8. Save.
+   381→
+   382→The system should support multiple employees in one operation.
+   383→
+   384→Example:
+   385→
+   386→> Property A requests 5 employees for the night shift.
+   387→
+   388→Owner selects:
+   389→
+   390→- Employee 1
+   391→- Employee 2
+   392→- Employee 3
+   393→- Employee 4
+   394→- Employee 5
+   395→
+   396→The system immediately calculates the expected billing and employee payout.
+   397→
+   398→---
+   399→
+   400→# 12. Shift Management
+   401→
+   402→Initial shifts:
+   403→
+   404→- Day
+   405→- Night
+   406→
+   407→The architecture should support additional shifts later, such as:
+   408→
+   409→- Morning
+   410→- Evening
+   411→- Full Day
+   412→- Custom shift
+   413→
+   414→Each shift record may include:
+   415→
+   416→- Name
+   417→- Start time
+   418→- End time
+   419→- Billing rate
+   420→- Employee rate
+   421→- Break rules if required
+   422→
+   423→---
+   424→
+   425→# 13. Daily Deployment Record
+   426→
+   427→Every employee assignment must create an immutable historical work record containing:
+   428→
+   429→- Date
+   430→- Employee
+   431→- Property
+   432→- Shift
+   433→- Work/category
+   434→- Property billing rate
+   435→- Employee payout rate
+   436→- Expected property billing
+   437→- Expected employee payout
+   438→- Owner who created the record
+   439→- Creation timestamp
+   440→- Notes
+   441→- Status
+   442→
+   443→The actual rate used must be saved to the work record.
+   444→
+   445→Changing a property's current rate in the future must not alter historical records.
+   446→
+   447→---
+   448→
+   449→# 14. Daily Earnings Calculation
+   450→
+   451→The application must automatically calculate daily financial totals.
+   452→
+   453→Example:
+   454→
+   455→Property A:
+   456→
+   457→5 employees × ₹1,000 billing rate
+   458→
+   459→= ₹5,000 expected property billing.
+   460→
+   461→Employee payout:
+   462→
+   463→5 employees × ₹800
+   464→
+   465→= ₹4,000 employee payout.
+   466→
+   467→Gross manpower margin:
+   468→
+   469→₹5,000 − ₹4,000
+   470→
+   471→= ₹1,000
+   472→
+   473→The dashboard should be able to show:
+   474→
+   475→- Total expected billing
+   476→- Total employee payout
+   477→- Gross margin
+   478→- Number of employees deployed
+   479→- Number of properties served
+   480→- Day/night breakdown
+   481→
+   482→---
+   483→
+   484→# 15. Flexible Margin Calculation
+   485→
+   486→The system must not assume that every contract follows the same margin formula.
+   487→
+   488→The contract should support:
+   489→
+   490→### Option A — Automatic Margin
+   491→
+   492→Property billing − employee payout.
+   493→
+   494→### Option B — Manually Defined Owner/Business Cut
+   495→
+   496→An owner can explicitly define the business margin/cut for a contract or assignment.
+   497→
+   498→### Option C — Special Adjustment
+   499→
+   500→Allow additional adjustments such as:
+   501→
+   502→- Bonus
+   503→- Deduction
+   504→- Commission
+   505→- Transportation charge
+   506→- Overtime
+   507→- Penalty
+   508→- Other adjustment
+   509→
+   510→The final calculation should therefore be transparent rather than relying on hidden assumptions.
+   511→
+   512→---
+   513→
+   514→# 16. Attendance / Work Confirmation
+   515→
+   516→Because employee salary depends on actual work performed, the system should distinguish between:
+   517→
+   518→- Scheduled assignment
+   519→- Confirmed work
+   520→- Cancelled assignment
+   521→- No-show
+   522→- Replacement
+   523→- Partial shift
+   524→- Completed shift
+   525→
+   526→A work record should be finalized before being included in monthly settlement.
+   527→
+   528→Where practical, owners should be able to mark multiple employees as completed together.
+   529→
+   530→---
+   531→
+   532→# 17. Daily Property Payment / Collection Tracking
+   533→
+   534→The system must track whether a property has paid for its deployed staff/work.
+   535→
+   536→Basic requirement:
+   537→
+   538→**Payment Received: YES / NO**
+   539→
+   540→Per property and date.
+   541→
+   542→The system should also support a more detailed payment record so the system is useful for actual accounting.
+   543→
+   544→Possible fields:
+   545→
+   546→- Property
+   547→- Work date
+   548→- Expected amount
+   549→- Received amount
+   550→- Payment date
+   551→- Payment method
+   552→- Reference/transaction number
+   553→- Received by owner
+   554→- Notes
+   555→- Outstanding amount
+   556→
+   557→The UI can still keep this very simple:
+   558→
+   559→> Property A — ₹5,000 — Received ✓
+   560→
+   561→or
+   562→
+   563→> Property B — ₹8,000 — Pending ₹8,000
+   564→
+   565→---
+   566→
+   567→# 18. Property Outstanding / Receivables
+   568→
+   569→The system must automatically calculate:
+   570→
+   571→- Today's outstanding
+   572→- This week's outstanding
+   573→- This month's outstanding
+   574→- Total property outstanding
+   575→- Property-wise outstanding
+   576→- Oldest unpaid amount
+   577→- Payment history
+   578→
+   579→A property detail page should show:
+   580→
+   581→**Total billed → Total received → Total outstanding.**
+   582→
+   583→---
+   584→
+   585→# 19. Property History
+   586→
+   587→Every property should have a complete historical timeline.
+   588→
+   589→It should show:
+   590→
+   591→- Employees deployed
+   592→- Dates worked
+   593→- Shifts
+   594→- Rates
+   595→- Total billing
+   596→- Payments received
+   597→- Outstanding amounts
+   598→- Adjustments
+   599→- Contracts
+   600→- Rate changes
+   601→- Notes
+   602→
+   603→Filters:
+   604→
+   605→- Date range
+   606→- Employee
+   607→- Shift
+   608→- Payment status
+   609→- Contract
+   610→
+   611→---
+   612→
+   613→# 20. Employee History
+   614→
+   615→Every employee should have a full historical record.
+   616→
+   617→It should show:
+   618→
+   619→- Date
+   620→- Property
+   621→- Shift
+   622→- Work
+   623→- Rate
+   624→- Daily earning
+   625→- Advance
+   626→- Deduction
+   627→- Adjustment
+   628→- Monthly settlement
+   629→- Outstanding advance
+   630→
+   631→The employee profile should make it easy to answer:
+   632→
+   633→> Where did this employee work?
+   634→
+   635→> How much did they earn?
+   636→
+   637→> How much advance have they taken?
+   638→
+   639→> How much remains payable?
+   640→
+   641→---
+   642→
+   643→# 21. Employee Advances
+   644→
+   645→Owners must be able to record advances given to employees.
+   646→
+   647→Each advance should include:
+   648→
+   649→- Employee
+   650→- Date
+   651→- Amount
+   652→- Reason
+   653→- Payment method
+   654→- Given by owner
+   655→- Reference number if applicable
+   656→- Notes
+   657→
+   658→The system must maintain a running employee advance balance.
+   659→
+   660→Example:
+   661→
+   662→Employee receives:
+   663→
+   664→₹3,000 advance.
+   665→
+   666→Later:
+   667→
+   668→₹2,000 advance.
+   669→
+   670→Total outstanding advance:
+   671→
+   672→₹5,000.
+   673→
+   674→---
+   675→
+   676→# 22. Advance Repayment / Deduction
+   677→
+   678→At month-end, employee advances should automatically be deducted from payable salary/earnings.
+   679→
+   680→Example:
+   681→
+   682→Monthly earnings = ₹25,000
+   683→
+   684→Advance = ₹5,000
+   685→
+   686→Final payable = ₹20,000
+   687→
+   688→The calculation must appear clearly in the employee statement.
+   689→
+   690→The system should support:
+   691→
+   692→- Full deduction
+   693→- Partial deduction
+   694→- Manual adjustment
+   695→- Carry-forward balance
+   696→
+   697→Example:
+   698→
+   699→Salary = ₹10,000
+   700→
+   701→Advance balance = ₹15,000
+   702→
+   703→Only ₹10,000 can be deducted.
+   704→
+   705→Remaining advance:
+   706→
+   707→₹5,000 carried into the next month.
+   708→
+   709→---
+   710→
+   711→# 23. Employee Monthly Settlement
+   712→
+   713→At the end of each month, the system should generate a complete settlement for every employee.
+   714→
+   715→The settlement should calculate:
+   716→
+   717→- Total working days
+   718→- Total shifts
+   719→- Day shifts
+   720→- Night shifts
+   721→- Property-wise work
+   722→- Rate per shift
+   723→- Gross earnings
+   724→- Bonuses
+   725→- Overtime
+   726→- Other additions
+   727→- Advances
+   728→- Other deductions
+   729→- Net payable
+   730→- Previous outstanding advance
+   731→- Remaining advance after deduction
+   732→
+   733→The owner should be able to review the settlement before finalization.
+   734→
+   735→Once finalized, the settlement should be locked from accidental modifications.
+   736→
+   737→Any correction should create an adjustment/revision rather than silently changing the finalized statement.
+   738→
+   739→---
+   740→
+   741→# 24. Employee Monthly Statement PDF
+   742→
+   743→Each employee should receive a professional PDF statement.
+   744→
+   745→The PDF should look similar to a formal salary/bank-style statement rather than a simple text document.
+   746→
+   747→It should include:
+   748→
+   749→### Header
+   750→
+   751→- Business/company name
+   752→- Logo
+   753→- Statement period
+   754→- Employee name
+   755→- Employee ID
+   756→
+   757→### Detailed Table
+   758→
+   759→| Date | Property | Shift | Rate | Earnings |
+   760→|---|---|---|---:|---:|
+   761→
+   762→Every working day should appear individually.
+   763→
+   764→### Summary
+   765→
+   766→- Total days
+   767→- Total shifts
+   768→- Gross earnings
+   769→- Additions
+   770→- Advance deductions
+   771→- Other deductions
+   772→- Net payable
+   773→- Remaining advance
+   774→
+   775→### Footer
+   776→
+   777→- Statement generation date
+   778→- System-generated statement identifier
+   779→- Business contact information
+   780→- Notes/terms if required
+   781→
+   782→PDFs should be available for download from the dashboard even if WhatsApp delivery fails.
+   783→
+   784→---
+   785→
+   786→# 25. Automated WhatsApp Statements
+   787→
+   788→After monthly settlements are finalized, the system should automatically prepare and send the employee statement.
+   789→
+   790→Current requirement:
+   791→
+   792→**Unofficial WhatsApp automation**
+   793→
+   794→Possible implementation:
+   795→
+   796→- Baileys
+   797→- whatsapp-web.js
+   798→- Similar WhatsApp Web automation technology
+   799→
+   800→The WhatsApp system should be implemented as a separate module so that it can later be replaced by the official WhatsApp Business API without rewriting the accounting system.
+   801→
+   802→## WhatsApp Workflow
+   803→
+   804→1. Monthly settlement finalized.
+   805→2. PDF generated.
+   806→3. Employee WhatsApp number verified.
+   807→4. Message prepared.
+   808→5. PDF attached.
+   809→6. Message sent.
+   810→7. Delivery/send status recorded.
+   811→8. Failure logged.
+   812→9. Owner can retry manually.
+   813→
+   814→Possible statuses:
+   815→
+   816→- Pending
+   817→- Queued
+   818→- Sending
+   819→- Sent
+   820→- Failed
+   821→- Retry required
+   822→
+   823→The dashboard must always provide a manual PDF download fallback.
+   824→
+   825→---
+   826→
+   827→# 26. WhatsApp Automation Safety
+   828→
+   829→The system should include:
+   830→
+   831→- Sending queue
+   832→- Retry mechanism
+   833→- Rate limiting
+   834→- Delayed/staggered sending
+   835→- Failure handling
+   836→- Session health monitoring
+   837→- Connected/disconnected status
+   838→- Delivery logs
+   839→- Duplicate-send prevention
+   840→
+   841→The unofficial integration must remain isolated from the core application so that changing WhatsApp providers later does not affect the rest of the system.
+   842→
+   843→---
+   844→
+   845→# 27. Owner Expense Management
+   846→
+   847→A centralized expense system must track money spent by owners/business.
+   848→
+   849→Every expense should contain:
+   850→
+   851→- Date
+   852→- Business
+   853→- Owner
+   854→- Category
+   855→- Amount
+   856→- Payment method
+   857→- Description
+   858→- Recurring/non-recurring
+   859→- Attachment/receipt
+   860→- Notes
+   861→
+   862→---
+   863→
+   864→# 28. Expense Categories
+   865→
+   866→The system should support customizable categories.
+   867→
+   868→Examples:
+   869→
+   870→### Business Expenses
+   871→
+   872→- Office
+   873→- Salary
+   874→- Food
+   875→- Travel
+   876→- Fuel
+   877→- Repairs
+   878→- Equipment
+   879→- Software
+   880→- Internet
+   881→- Phone
+   882→- Marketing
+   883→- Legal
+   884→- Miscellaneous
+   885→
+   886→### Financial
+   887→
+   888→- EMI
+   889→- Loan payment
+   890→- Interest
+   891→- Bank charges
+   892→
+   893→### Owner Transactions
+   894→
+   895→- Owner withdrawal
+   896→- Personal draw
+   897→- Owner reimbursement
+   898→- Owner contribution
+   899→- Capital injection
+   900→
+   901→Categories should be configurable rather than hardcoded.
+   902→
+   903→---
+   904→
+   905→# 29. Recurring Expenses
+   906→
+   907→The expense module should support recurring records.
+   908→
+   909→Examples:
+   910→
+   911→- Monthly EMI
+   912→- Office rent
+   913→- Internet
+   914→- Software subscription
+   915→- Vehicle EMI
+   916→- Insurance
+   917→
+   918→A recurring expense can contain:
+   919→
+   920→- Frequency
+   921→- Start date
+   922→- End date
+   923→- Amount
+   924→- Category
+   925→- Business
+   926→- Owner
+   927→
+   928→The system can automatically generate the expense record according to the configured schedule, while keeping an audit trail.
+   929→
+   930→---
+   931→
+   932→# 30. Owner Financial Dashboard
+   933→
+   934→Because all owners have equal access, the dashboard should still show who spent what.
+   935→
+   936→Examples:
+   937→
+   938→> Yash — ₹25,000
+   939→
+   940→> Saurabh — ₹18,500
+   941→
+   942→> Santosh — ₹31,200
+   943→
+   944→And:
+   945→
+   946→- Total owner expenses
+   947→- Business expenses
+   948→- Personal withdrawals
+   949→- Owner contributions
+   950→- Reimbursements
+   951→- EMI payments
+   952→
+   953→Filtering should be available by:
+   954→
+   955→- Owner
+   956→- Date
+   957→- Category
+   958→- Business
+   959→
+   960→---
+   961→
+   962→# 31. MANPOWER DASHBOARD
+   963→
+   964→The manpower dashboard should provide an immediate operational and financial overview.
+   965→
+   966→## Today's Summary
+   967→
+   968→Display cards for:
+   969→
+   970→- Employees deployed
+   971→- Properties served
+   972→- Expected billing
+   973→- Employee payout
+   974→- Gross margin
+   975→- Amount received
+   976→- Amount pending
+   977→- Advances given today
+   978→- Expenses today
+   979→
+   980→## Operational View
+   981→
+   982→Show:
+   983→
+   984→- Today's properties
+   985→- Employees assigned
+   986→- Day shift
+   987→- Night shift
+   988→- Missing assignments
+   989→- Cancelled assignments
+   990→- Payment pending
+   991→
+   992→---
+   993→
+   994→# 32. Daily / Weekly / Monthly Analytics
+   995→
+   996→Every major dashboard should support:
+   997→
+   998→- Today
+   999→- Yesterday
+  1000→- This week
+  1001→- Last week
+  1002→- This month
+  1003→- Last month
+  1004→- Custom date range
+  1005→
+  1006→Metrics:
+  1007→
+  1008→- Revenue/billing
+  1009→- Employee cost
+  1010→- Gross margin
+  1011→- Expenses
+  1012→- Collections
+  1013→- Outstanding
+  1014→- Net profit approximation
+  1015→- Number of employees
+  1016→- Number of deployments
+  1017→- Number of properties
+  1018→
+  1019→---
+  1020→
+  1021→# 33. Dashboard Filtering
+  1022→
+  1023→Reports should support multiple filters.
+  1024→
+  1025→Examples:
+  1026→
+  1027→### Employee filter
+  1028→
+  1029→Show everything related to one employee.
+  1030→
+  1031→### Owner filter
+  1032→
+  1033→Show expenses/actions entered by a specific owner.
+  1034→
+  1035→### Property filter
+  1036→
+  1037→Show billing, employees, payments, and profitability for one property.
+  1038→
+  1039→### Date filter
+  1040→
+  1041→Show records for a specific period.
+  1042→
+  1043→### Shift filter
+  1044→
+  1045→Day/night/custom.
+  1046→
+  1047→### Business filter
+  1048→
+  1049→Manpower / Transport / Combined where appropriate.
+  1050→
+  1051→---
+  1052→
+  1053→# 34. MANPOWER REPORTS
+  1054→
+  1055→The system should generate professional reports such as:
+  1056→
+  1057→### Employee Earnings Report
+  1058→
+  1059→- Employee
+  1060→- Number of shifts
+  1061→- Properties
+  1062→- Earnings
+  1063→- Advances
+  1064→- Net payable
+  1065→
+  1066→### Property Revenue Report
+  1067→
+  1068→- Property
+  1069→- Total employees
+  1070→- Total shifts
+  1071→- Total billing
+  1072→- Received
+  1073→- Outstanding
+  1074→
+  1075→### Collection Report
+  1076→
+  1077→- Expected
+  1078→- Received
+  1079→- Pending
+  1080→- Collection percentage
+  1081→
+  1082→### Expense Report
+  1083→
+  1084→- Category
+  1085→- Owner
+  1086→- Amount
+  1087→- Date
+  1088→
+  1089→### Profitability Report
+  1090→
+  1091→- Billing
+  1092→- Employee payouts
+  1093→- Other expenses
+  1094→- Gross margin
+  1095→- Net result
+  1096→
+  1097→### Daily Operations Report
+  1098→
+  1099→- All deployments
+  1100→- Employees
+  1101→- Properties
+  1102→- Shifts
+  1103→- Billing
+  1104→
+  1105→### Monthly Settlement Report
+  1106→
+  1107→Complete payroll/settlement overview.
+  1108→
+  1109→All reports should be exportable where appropriate to:
+  1110→
+  1111→- PDF
+  1112→- Excel/CSV
+  1113→
+  1114→---
+  1115→
+  1116→# 35. BUSINESS 2 — TRANSPORT / VEHICLE BUSINESS
+  1117→
+  1118→The transport business must function as an independent business module.
+  1119→
+  1120→Its financial data must not automatically mix with manpower revenue, employee payouts, or manpower profitability.
+  1121→
+  1122→---
+  1123→
+  1124→# 36. Vehicle Management
+  1125→
+  1126→Currently there are:
+  1127→
+  1128→**2 vehicles**
+  1129→
+  1130→The system must support adding additional vehicles indefinitely.
+  1131→
+  1132→## Vehicle Profile
+  1133→
+  1134→Each vehicle should have:
+  1135→
+  1136→- Vehicle ID
+  1137→- Registration number
+  1138→- Vehicle name/model
+  1139→- Make
+  1140→- Model
+  1141→- Variant
+  1142→- Manufacturing year
+  1143→- Purchase date
+  1144→- Purchase price
+  1145→- Current status
+  1146→- Insurance details
+  1147→- Registration documents
+  1148→- Permit information
+  1149→- Fitness information
+  1150→- Driver information where applicable
+  1151→- Notes
+  1152→
+  1153→Status examples:
+  1154→
+  1155→- Available
+  1156→- Rented
+  1157→- On trip
+  1158→- Maintenance
+  1159→- Inactive
+  1160→
+  1161→---
+  1162→
+  1163→# 37. Vehicle Financial Information
+  1164→
+  1165→Each vehicle should independently maintain:
+  1166→
+  1167→- Purchase cost
+  1168→- EMI
+  1169→- Loan amount
+  1170→- EMI start date
+  1171→- EMI end date
+  1172→- Monthly EMI
+  1173→- Insurance
+  1174→- Maintenance
+  1175→- Fuel
+  1176→- Repairs
+  1177→- Other expenses
+  1178→- Rental revenue
+  1179→- Trip revenue
+  1180→- Other income
+  1181→
+  1182→This allows actual per-vehicle profitability.
+  1183→
+  1184→---
+  1185→
+  1186→# 38. Transport Clients
+  1187→
+  1188→Transport should have a client/customer module.
+  1189→
+  1190→Client profile:
+  1191→
+  1192→- Client ID
+  1193→- Name
+  1194→- Company
+  1195→- Phone
+  1196→- WhatsApp
+  1197→- Email
+  1198→- Address
+  1199→- Billing details
+  1200→- Notes
+  1201→- Payment history
+  1202→
+  1203→---
+  1204→
+  1205→# 39. Vehicle Rental / Trip Management
+  1206→
+  1207→Each rental/trip should record:
+  1208→
+  1209→- Vehicle
+  1210→- Client
+  1211→- Start date/time
+  1212→- End date/time
+  1213→- Pickup location
+  1214→- Destination
+  1215→- Trip type
+  1216→- Rental type
+  1217→- Agreed amount
+  1218→- Advance received
+  1219→- Final amount
+  1220→- Payment status
+  1221→- Fuel responsibility
+  1222→- Driver
+  1223→- Additional charges
+  1224→- Notes
+  1225→
+  1226→---
+  1227→
+  1228→# 40. Transport Revenue
+  1229→
+  1230→The dashboard should calculate:
+  1231→
+  1232→- Daily revenue
+  1233→- Weekly revenue
+  1234→- Monthly revenue
+  1235→- Revenue per vehicle
+  1236→- Revenue per client
+  1237→- Revenue per trip
+  1238→- Outstanding client payments
+  1239→
+  1240→---
+  1241→
+  1242→# 41. Vehicle Expenses
+  1243→
+  1244→Expenses should be recorded per vehicle.
+  1245→
+  1246→Examples:
+  1247→
+  1248→- Fuel
+  1249→- Service
+  1250→- Repairs
+  1251→- Tyres
+  1252→- Insurance
+  1253→- Permit
+  1254→- Tax
+  1255→- Cleaning
+  1256→- Parking
+  1257→- Toll
+  1258→- EMI
+  1259→- Driver costs
+  1260→- Miscellaneous
+  1261→
+  1262→Every expense should be linked to the appropriate vehicle wherever possible.
+  1263→
+  1264→---
+  1265→
+  1266→# 42. Vehicle Profitability
+  1267→
+  1268→Each vehicle should have its own profit calculation.
+  1269→
+  1270→Example:
+  1271→
+  1272→Revenue:
+  1273→
+  1274→₹80,000
+  1275→
+  1276→Expenses:
+  1277→
+  1278→₹25,000
+  1279→
+  1280→EMI:
+  1281→
+  1282→₹15,000
+  1283→
+  1284→Net operating result:
+  1285→
+  1286→₹40,000
+  1287→
+  1288→The system should clearly separate:
+  1289→
+  1290→- Revenue
+  1291→- Operating expenses
+  1292→- Financing/EMI
+  1293→- Net profit
+  1294→
+  1295→The exact accounting treatment can be configured later, but the dashboard must make the calculation transparent.
+  1296→
+  1297→---
+  1298→
+  1299→# 43. Vehicle History
+  1300→
+  1301→Each vehicle should have a complete timeline:
+  1302→
+  1303→- Rentals
+  1304→- Trips
+  1305→- Revenue
+  1306→- Payments
+  1307→- Expenses
+  1308→- Maintenance
+  1309→- EMI
+  1310→- Repairs
+  1311→- Documents
+  1312→- Availability status
+  1313→
+  1314→---
+  1315→
+  1316→# 44. TRANSPORT DASHBOARD
+  1317→
+  1318→The transport dashboard should show:
+  1319→
+  1320→### Today
+  1321→
+  1322→- Vehicles available
+  1323→- Vehicles on trip
+  1324→- Today's revenue
+  1325→- Today's expenses
+  1326→- Payments received
+  1327→- Pending payments
+  1328→
+  1329→### Month
+  1330→
+  1331→- Total revenue
+  1332→- Total expense
+  1333→- Total EMI
+  1334→- Net result
+  1335→- Revenue per vehicle
+  1336→- Most profitable vehicle
+  1337→
+  1338→### Operational
+  1339→
+  1340→- Current rentals
+  1341→- Upcoming rentals
+  1342→- Vehicles under maintenance
+  1343→- Expiring documents
+  1344→
+  1345→---
+  1346→
+  1347→# 45. Combined Management Dashboard
+  1348→
+  1349→There should be a high-level dashboard for the owners.
+  1350→
+  1351→However, this dashboard must clearly distinguish the two businesses.
+  1352→
+  1353→Example:
+  1354→
+  1355→## Manpower
+  1356→
+  1357→Revenue: ₹X
+  1358→
+  1359→Expenses: ₹Y
+  1360→
+  1361→Profit: ₹Z
+  1362→
+  1363→## Transport
+  1364→
+  1365→Revenue: ₹A
+  1366→
+  1367→Expenses: ₹B
+  1368→
+  1369→Profit: ₹C
+  1370→
+  1371→## Combined Business Overview
+  1372→
+  1373→Revenue: ₹X + ₹A
+  1374→
+  1375→Expenses: ₹Y + ₹B
+  1376→
+  1377→Net result: calculated separately and combined.
+  1378→
+  1379→The user should always be able to drill down into the originating business.
+  1380→
+  1381→---
+  1382→
+  1383→# 46. GLOBAL REPORTING SYSTEM
+  1384→
+  1385→The reporting system should support:
+  1386→
+  1387→- Daily
+  1388→- Weekly
+  1389→- Monthly
+  1390→- Yearly
+  1391→- Custom date range
+  1392→
+  1393→Reports should support filters and grouping.
+  1394→
+  1395→Possible grouping:
+  1396→
+  1397→- Owner
+  1398→- Property
+  1399→- Employee
+  1400→- Vehicle
+  1401→- Client
+  1402→- Category
+  1403→- Business
+  1404→- Shift
+  1405→
+  1406→---
+  1407→
+  1408→# 47. Search
+  1409→
+  1410→A global search should allow owners to quickly find:
+  1411→
+  1412→- Employee
+  1413→- Property
+  1414→- Owner
+  1415→- Vehicle
+  1416→- Client
+  1417→- Invoice/payment
+  1418→- Deployment
+  1419→- Expense
+  1420→- Advance
+  1421→- Statement
+  1422→
+  1423→Example:
+  1424→
+  1425→Searching:
+  1426→
+  1427→> "Rahul"
+  1428→
+  1429→could return:
+  1430→
+  1431→- Employee Rahul
+  1432→- Previous deployments
+  1433→- Advances
+  1434→- Monthly statements
+  1435→
+  1436→---
+  1437→
+  1438→# 48. Notifications
+  1439→
+  1440→The system should provide notifications for important events.
+  1441→
+  1442→Examples:
+  1443→
+  1444→- Property payment pending
+  1445→- Employee advance outstanding
+  1446→- Monthly settlement ready
+  1447→- WhatsApp statement failed
+  1448→- Vehicle EMI due
+  1449→- Vehicle insurance expiring
+  1450→- Maintenance due
+  1451→- Contract expiring
+  1452→- Important document expiring
+  1453→
+  1454→Notifications should be visible inside the application.
+  1455→
+  1456→---
+  1457→
+  1458→# 49. Audit Log
+  1459→
+  1460→Every important action should be recorded.
+  1461→
+  1462→Audit fields:
+  1463→
+  1464→- User/owner
+  1465→- Action
+  1466→- Module
+  1467→- Record
+  1468→- Previous value
+  1469→- New value
+  1470→- Date/time
+  1471→- IP/device information where appropriate
+  1472→
+  1473→Examples:
+  1474→
+  1475→> Yash changed Property A billing rate from ₹1,000 to ₹1,100.
+  1476→
+  1477→> Saurabh deleted an expense of ₹5,000.
+  1478→
+  1479→Critical financial records should preferably use soft-delete/reversal mechanisms instead of permanent deletion.
+  1480→
+  1481→---
+  1482→
+  1483→# 50. Data Integrity Rules
+  1484→
+  1485→The system should prevent common accounting mistakes.
+  1486→
+  1487→Examples:
+  1488→
+  1489→### Duplicate Deployment
+  1490→
+  1491→Prevent accidental duplicate assignment of the same employee to the same property, date, and shift unless explicitly allowed.
+  1492→
+  1493→### Historical Rate Protection
+  1494→
+  1495→Changing today's rate must not modify yesterday's records.
+  1496→
+  1497→### Finalized Statements
+  1498→
+  1499→Finalized monthly statements should not silently change.
+  1500→
+  1501→### Payment Validation
+  1502→
+  1503→Received amount should not accidentally exceed billed amount without an explicit adjustment/credit mechanism.
+  1504→
+  1505→### Advance Validation
+  1506→
+  1507→The system should clearly show remaining advance balances.
+  1508→
+  1509→### Vehicle Availability
+  1510→
+  1511→A vehicle already booked for a particular time should not automatically be available for another overlapping rental.
+  1512→
+  1513→---
+  1514→
+  1515→# 51. Attachments and Documents
+  1516→
+  1517→The system should allow attachments where useful:
+  1518→
+  1519→- Employee documents
+  1520→- Property contracts
+  1521→- Receipts
+  1522→- Expense bills
+  1523→- Vehicle documents
+  1524→- Insurance
+  1525→- RC
+  1526→- Permits
+  1527→- Payment proofs
+  1528→
+  1529→Documents should be securely stored and linked to their relevant records.
+  1530→
+  1531→---
+  1532→
+  1533→# 52. Backup and Recovery
+  1534→
+  1535→Because this is financial/business data, the system should include:
+  1536→
+  1537→- Automated database backups
+  1538→- Backup retention
+  1539→- Recovery process
+  1540→- Secure file backups
+  1541→- Error logging
+  1542→- Application monitoring
+  1543→
+  1544→The backup strategy should be planned before production deployment.
+  1545→
+  1546→---
+  1547→
+  1548→# 53. PWA / Mobile Experience
+  1549→
+  1550→The application should feel like a native mobile application.
+  1551→
+  1552→Requirements:
+  1553→
+  1554→- Responsive UI
+  1555→- Bottom navigation where appropriate
+  1556→- Large touch targets
+  1557→- Fast loading
+  1558→- Mobile-friendly forms
+  1559→- Sticky action buttons
+  1560→- Quick-add functionality
+  1561→- Minimal scrolling
+  1562→- Search-first interfaces
+  1563→- Installable PWA
+  1564→- App icon
+  1565→- Splash screen
+  1566→- Responsive desktop layout
+  1567→
+  1568→---
+  1569→
+  1570→# 54. Quick Actions
+  1571→
+  1572→The home/dashboard screen should provide prominent quick actions such as:
+  1573→
+  1574→### Manpower
+  1575→
+  1576→- + Deploy Employee
+  1577→- + Add Expense
+  1578→- + Record Payment
+  1579→- + Add Advance
+  1580→- + Add Employee
+  1581→- + Add Property
+  1582→
+  1583→### Transport
+  1584→
+  1585→- + New Rental
+  1586→- + Add Vehicle Expense
+  1587→- + Record Payment
+  1588→- + Add Maintenance
+  1589→
+  1590→The objective is that a common daily operation takes only a few taps.
+  1591→
+  1592→---
+  1593→
+  1594→# 55. Smart Auto-Fill
+  1595→
+  1596→The system should automatically fill known information.
+  1597→
+  1598→Example:
+  1599→
+  1600→Selecting:
+  1601→
+  1602→> Property A
+  1603→
+  1604→could automatically load:
+  1605→
+  1606→- Active contract
+  1607→- Applicable billing rate
+  1608→- Standard employee rates
+  1609→- Payment terms
+  1610→
+  1611→Selecting:
+  1612→
+  1613→> Employee Rahul
+  1614→
+  1615→could automatically load:
+  1616→
+  1617→- Employee rate
+  1618→- WhatsApp number
+  1619→- Current advance balance
+  1620→
+  1621→Selecting:
+  1622→
+  1623→> Vehicle MHXX1234
+  1624→
+  1625→could automatically load:
+  1626→
+  1627→- Vehicle information
+  1628→- Current availability
+  1629→- EMI
+  1630→- Current maintenance status
+  1631→
+  1632→---
+  1633→
+  1634→# 56. Month-End Automation
+  1635→
+  1636→At the end of each month, the system should run a settlement process.
+  1637→
+  1638→### Step 1
+  1639→
+  1640→Calculate employee work.
+  1641→
+  1642→### Step 2
+  1643→
+  1644→Calculate gross earnings.
+  1645→
+  1646→### Step 3
+  1647→
+  1648→Apply advances.
+  1649→
+  1650→### Step 4
+  1651→
+  1652→Apply approved adjustments.
+  1653→
+  1654→### Step 5
+  1655→
+  1656→Generate net payable.
+  1657→
+  1658→### Step 6
+  1659→
+  1660→Generate employee PDF.
+  1661→
+  1662→### Step 7
+  1663→
+  1664→Queue WhatsApp delivery.
+  1665→
+  1666→### Step 8
+  1667→
+  1668→Record delivery result.
+  1669→
+  1670→### Step 9
+  1671→
+  1672→Show completion/errors on owner dashboard.
+  1673→
+  1674→The owner should have a month-end control screen showing:
+  1675→
+  1676→> 15 employees processed
+  1677→
+  1678→> 13 statements sent
+  1679→
+  1680→> 1 failed
+  1681→
+  1682→> 1 pending review
+  1683→
+  1684→---
+  1685→
+  1686→# 57. Dashboard Design Philosophy
+  1687→
+  1688→Dashboards should not simply display dozens of numbers.
+  1689→
+  1690→They should answer practical business questions immediately.
+  1691→
+  1692→For example:
+  1693→
+  1694→### "How much should we collect today?"
+  1695→
+  1696→Show:
+  1697→
+  1698→₹XX,XXX
+  1699→
+  1700→### "How much have we collected?"
+  1701→
+  1702→Show:
+  1703→
+  1704→₹XX,XXX
+  1705→
+  1706→### "How much is still pending?"
+  1707→
+  1708→Show:
+  1709→
+  1710→₹XX,XXX
+  1711→
+  1712→### "How many employees are working today?"
+  1713→
+  1714→Show:
+  1715→
+  1716→XX
+  1717→
+  1718→### "How much do employees need to be paid?"
+  1719→
+  1720→Show:
+  1721→
+  1722→₹XX,XXX
+  1723→
+  1724→### "Which property owes us the most?"
+  1725→
+  1726→Show:
+  1727→
+  1728→Property + amount.
+  1729→
+  1730→### "Which vehicle made the most this month?"
+  1731→
+  1732→Show:
+  1733→
+  1734→Vehicle + revenue/profit.
+  1735→
+  1736→---
+  1737→
+  1738→# 58. Financial Dashboard
+  1739→
+  1740→The financial dashboard should allow owners to understand:
+  1741→
+  1742→### Revenue
+  1743→
+  1744→- Manpower billing
+  1745→- Transport revenue
+  1746→- Total revenue
+  1747→
+  1748→### Costs
+  1749→
+  1750→- Employee payouts
+  1751→- Business expenses
+  1752→- Vehicle expenses
+  1753→- EMI
+  1754→- Other costs
+  1755→
+  1756→### Profitability
+  1757→
+  1758→- Gross margin
+  1759→- Operating expenses
+  1760→- Net result
+  1761→
+  1762→### Cash Position
+  1763→
+  1764→- Amount received
+  1765→- Amount pending
+  1766→- Employee payable
+  1767→- Outstanding advances
+  1768→- Owner withdrawals
+  1769→
+  1770→All figures should be drill-down capable.
+  1771→
+  1772→For example, tapping:
+  1773→
+  1774→> ₹75,000 outstanding
+  1775→
+  1776→should open the exact properties and transactions contributing to that amount.
+  1777→
+  1778→---
+  1779→
+  1780→# 59. Reports Must Be Actionable
+  1781→
+  1782→Every major number should ideally be clickable.
+  1783→
+  1784→For example:
+  1785→
+  1786→**Pending ₹42,500**
+  1787→
+  1788→→ Open pending property payments.
+  1789→
+  1790→**Employee payout ₹1,20,000**
+  1791→
+  1792→→ Open employee-wise payout breakdown.
+  1793→
+  1794→**Expenses ₹32,000**
+  1795→
+  1796→→ Open detailed expense report.
+  1797→
+  1798→**Vehicle profit ₹45,000**
+  1799→
+  1800→→ Open vehicle revenue/expense breakdown.
+  1801→
+  1802→---
+  1803→
+  1804→# 60. Exporting
+  1805→
+  1806→Relevant reports should support:
+  1807→
+  1808→- PDF
+  1809→- Excel
+  1810→- CSV
+  1811→
+  1812→Exports should preserve:
+  1813→
+  1814→- Selected date range
+  1815→- Selected filters
+  1816→- Selected business
+  1817→- Selected grouping
+  1818→
+  1819→Example:
+  1820→
+  1821→If the owner filters:
+  1822→
+  1823→> Property = Property A  
+  1824→> Date = August 2026
+  1825→
+  1826→the exported report should reflect exactly that filtered dataset.
+  1827→
+  1828→---
+  1829→
+  1830→# 61. Settings
+  1831→
+  1832→The settings section should contain:
+  1833→
+  1834→### Business settings
+  1835→
+  1836→- Business name
+  1837→- Logo
+  1838→- Address
+  1839→- Contact information
+  1840→- Tax information if applicable
+  1841→- Statement branding
+  1842→
+  1843→### Manpower settings
+  1844→
+  1845→- Shifts
+  1846→- Expense categories
+  1847→- Adjustment types
+  1848→- Rate configurations
+  1849→- Settlement settings
+  1850→
+  1851→### Transport settings
+  1852→
+  1853→- Vehicle categories
+  1854→- Expense categories
+  1855→- Rental types
+  1856→- Payment methods
+  1857→
+  1858→### Notification settings
+  1859→
+  1860→- WhatsApp
+  1861→- Statement automation
+  1862→- Reminder settings
+  1863→
+  1864→### System
+  1865→
+  1866→- Backup
+  1867→- Audit log
+  1868→- Session/device management
+  1869→- System preferences
+  1870→
+  1871→---
+  1872→
+  1873→# 62. Technology / Architecture
+  1874→
+  1875→The proposed technology stack is:
+  1876→
+  1877→### Frontend
+  1878→
+  1879→**React**
+  1880→
+  1881→Used to create the responsive, mobile-first PWA.
+  1882→
+  1883→### Backend
+  1884→
+  1885→**Laravel**
+  1886→
+  1887→Used for:
+  1888→
+  1889→- REST/API
+  1890→- Authentication
+  1891→- Business logic
+  1892→- Financial calculations
+  1893→- PDF generation
+  1894→- Scheduled jobs
+  1895→- Notifications
+  1896→- Reporting
+  1897→
+  1898→### Database
+  1899→
+  1900→**MySQL**
+  1901→
+  1902→Used as the central relational database.
+  1903→
+  1904→### WhatsApp
+  1905→
+  1906→Unofficial WhatsApp automation through a dedicated service/module using a suitable library such as:
+  1907→
+  1908→- Baileys
+  1909→- whatsapp-web.js
+  1910→
+  1911→This must be isolated from the core Laravel application.
+  1912→
+  1913→### PDF Generation
+  1914→
+  1915→Laravel-compatible PDF generation such as:
+  1916→
+  1917→- DomPDF
+  1918→- Similar server-side PDF library
+  1919→
+  1920→### Hosting
+  1921→
+  1922→Initial target:
+  1923→
+  1924→**Hostinger**
+  1925→
+  1926→The final deployment architecture should account for whether the selected Hostinger plan supports the required Laravel processes, queues, scheduled jobs, persistent WhatsApp session, and background services. If it does not, those components should be deployed separately rather than weakening the core architecture.
+  1927→
+  1928→---
+  1929→
+  1930→# 63. Recommended System Architecture
+  1931→
+  1932→The architecture should conceptually be:
+  1933→
+  1934→**React PWA**
+  1935→↓
+  1936→**Laravel API**
+  1937→↓
+  1938→**MySQL Database**
+  1939→
+  1940→With supporting services:
+  1941→
+  1942→**Laravel Queue / Scheduler**
+  1943→→ Monthly settlements  
+  1944→→ Notifications  
+  1945→→ Reports  
+  1946→→ Automated jobs
+  1947→
+  1948→**PDF Service**
+  1949→→ Employee statements
+  1950→
+  1951→**WhatsApp Service**
+  1952→→ Automated statement delivery
+  1953→
+  1954→**File Storage**
+  1955→→ Documents / receipts / PDFs
+  1956→
+  1957→**Backup System**
+  1958→→ Database + files
+  1959→
+  1960→---
+  1961→
+  1962→# 64. Important Architecture Requirement
+  1963→
+  1964→The system should be modular.
+  1965→
+  1966→At minimum, these modules should be logically separated:
+  1967→
+  1968→- Authentication
+  1969→- Owners
+  1970→- Employees
+  1971→- Properties
+  1972→- Contracts
+  1973→- Deployments
+  1974→- Attendance
+  1975→- Property Payments
+  1976→- Employee Advances
+  1977→- Employee Settlements
+  1978→- Expenses
+  1979→- Reports
+  1980→- WhatsApp
+  1981→- Notifications
+  1982→- Vehicles
+  1983→- Clients
+  1984→- Rentals/Trips
+  1985→- Vehicle Expenses
+  1986→- Maintenance
+  1987→- Audit Logs
+  1988→- Settings
+  1989→
+  1990→This is important because the system will grow over time.
+  1991→
+  1992→---
+  1993→
+  1994→# 65. Future Scalability
+  1995→
+  1996→Although the current business has approximately:
+  1997→
+  1998→- 15 owners
+  1999→- Manpower employees
+  2000→- Restaurant properties
+
+[showing lines 1-2000 of 2224; use offset=2001 with limit to continue reading]

@@ -1,0 +1,447 @@
+// BizHub — Business Management SaaS schema
+// Two financially separated businesses: MANPOWER and TRANSPORT.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Auth & Governance ----------
+
+model Owner {
+  id           String    @id @default(cuid())
+  name         String
+  username     String    @unique
+  passwordHash String
+  mobile       String?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  ownerId   String
+  owner     Owner    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  userAgent String?
+  ip        String?
+}
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  ownerId       String?
+  ownerName     String
+  action        String // CREATE / UPDATE / DELETE / STATUS / LOGIN / FINALIZE / PAYMENT / GENERATE
+  module        String // EMPLOYEE / PROPERTY / CONTRACT / DEPLOYMENT / PAYMENT / ADVANCE / SETTLEMENT / EXPENSE / VEHICLE / CLIENT / TRIP / EMI / MAINTENANCE / OWNER / SETTINGS / AUTH
+  recordId      String?
+  recordLabel   String?
+  previousValue String?
+  newValue      String?
+  createdAt     DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([module, createdAt])
+  @@index([ownerName])
+}
+
+// ---------- Business 1: Manpower ----------
+
+model Employee {
+  id                     String       @id @default(cuid())
+  code                   String       @unique
+  fullName               String
+  photoUrl               String?
+  dob                    DateTime?
+  gender                 String?
+  mobile                 String?
+  whatsapp               String?
+  address                String?
+  city                   String?
+  emergencyContact       String?
+  joiningDate            DateTime     @default(now())
+  designation            String?
+  skills                 String?
+  standardRate           Float        @default(0)
+  rateType               String       @default("PER_DAY")
+  status                 String       @default("ACTIVE") // ACTIVE/INACTIVE/SUSPENDED/LEFT
+  bankDetails            String?
+  upiId                  String?
+  preferredPaymentMethod String?
+  notes                  String?
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  deployments Deployment[]
+  advances    Advance[]
+  adjustments Adjustment[]
+  settlements Settlement[]
+
+  @@index([status])
+  @@index([fullName])
+}
+
+model Property {
+  id            String    @id @default(cuid())
+  name          String
+  brandName     String?
+  type          String?
+  address       String?
+  contactPerson String?
+  contactNumber String?
+  whatsapp      String?
+  email         String?
+  startDate     DateTime?
+  status        String    @default("ACTIVE") // ACTIVE/INACTIVE
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  contracts   Contract[]
+  deployments Deployment[]
+  payments    PropertyPayment[]
+
+  @@index([status])
+}
+
+model Contract {
+  id           String    @id @default(cuid())
+  propertyId   String
+  property     Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  name         String
+  startDate    DateTime
+  endDate      DateTime?
+  billingRate  Float
+  payoutRate   Float
+  shift        String?
+  category     String?
+  maxEmployees Int?
+  paymentTerms String?
+  notes        String?
+  status       String    @default("ACTIVE") // ACTIVE/ENDED
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  deployments Deployment[]
+
+  @@index([propertyId, status])
+}
+
+// Immutable daily work record — historical rates snapshotted here.
+model Deployment {
+  id               String    @id @default(cuid())
+  date             DateTime
+  employeeId       String
+  employee         Employee  @relation(fields: [employeeId], references: [id])
+  propertyId       String
+  property         Property  @relation(fields: [propertyId], references: [id])
+  contractId       String?
+  contract         Contract? @relation(fields: [contractId], references: [id])
+  shift            String // DAY / NIGHT / custom
+  workCategory     String?
+  billingRate      Float
+  payoutRate       Float
+  billingAmount    Float
+  payoutAmount     Float
+  adjustmentAmount Float     @default(0)
+  adjustmentNote   String?
+  status           String    @default("SCHEDULED") // SCHEDULED/CONFIRMED/COMPLETED/PARTIAL/CANCELLED/NO_SHOW
+  paidAmount       Float     @default(0) // derived/dynamic, persisted for quick list rendering
+  notes            String?
+  createdById      String?
+  createdByName    String?
+  createdAt        DateTime  @default(now())
+
+  @@unique([employeeId, propertyId, date, shift])
+  @@index([date])
+  @@index([propertyId, date])
+  @@index([employeeId, date])
+  @@index([status])
+}
+
+model PropertyPayment {
+  id            String   @id @default(cuid())
+  propertyId    String
+  property      Property @relation(fields: [propertyId], references: [id])
+  date          DateTime
+  amount        Float
+  method        String?
+  reference     String?
+  notes         String?
+  receivedById  String?
+  receivedByName String?
+  createdAt     DateTime @default(now())
+
+  @@index([propertyId, date])
+  @@index([date])
+}
+
+model Advance {
+  id           String      @id @default(cuid())
+  employeeId   String
+  employee     Employee    @relation(fields: [employeeId], references: [id])
+  date         DateTime
+  amount       Float
+  reason       String?
+  method       String?
+  reference    String?
+  notes        String?
+  givenById    String?
+  givenByName  String?
+  createdAt    DateTime    @default(now())
+  settlementId String? // set when deducted by a settlement
+  settlement   Settlement? @relation(fields: [settlementId], references: [id])
+
+  @@index([employeeId, date])
+}
+
+model Adjustment {
+  id            String   @id @default(cuid())
+  employeeId    String
+  employee      Employee @relation(fields: [employeeId], references: [id])
+  date          DateTime
+  type          String // BONUS/OVERTIME/DEDUCTION/PENALTY/OTHER
+  amount        Float // signed: positive = addition, negative = deduction
+  reason        String?
+  createdById   String?
+  createdByName String?
+  createdAt     DateTime @default(now())
+
+  @@index([employeeId, date])
+}
+
+model Settlement {
+  id                  String    @id @default(cuid())
+  employeeId          String
+  employee            Employee  @relation(fields: [employeeId], references: [id])
+  month               String // YYYY-MM
+  totalDays           Int       @default(0)
+  dayShifts           Int       @default(0)
+  nightShifts         Int       @default(0)
+  grossEarnings       Float     @default(0)
+  additions           Float     @default(0)
+  advanceDeducted     Float     @default(0)
+  otherDeductions     Float     @default(0)
+  netPayable          Float     @default(0)
+  advanceCarryForward Float     @default(0)
+  status              String    @default("DRAFT") // DRAFT/FINALIZED/PAID
+  finalizedAt         DateTime?
+  finalizedByName     String?
+  paymentDate         DateTime?
+  paymentMethod       String?
+  notes               String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  lines     SettlementLine[]
+  advances  Advance[]
+
+  @@unique([employeeId, month])
+  @@index([month, status])
+}
+
+model SettlementLine {
+  id           String     @id @default(cuid())
+  settlementId String
+  settlement   Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  date         DateTime
+  propertyName String
+  shift        String
+  rate         Float
+  amount       Float
+}
+
+// ---------- Shared Finance ----------
+
+model Expense {
+  id            String    @id @default(cuid())
+  date          DateTime
+  business      String // MANPOWER / TRANSPORT
+  categoryId    String?
+  categoryName  String?
+  amount        Float
+  method        String?
+  description   String?
+  notes         String?
+  vehicleId     String?
+  vehicle       Vehicle?  @relation(fields: [vehicleId], references: [id])
+  vehicleName   String?
+  spentById     String?
+  spentByName   String?
+  createdById   String?
+  createdByName String?
+  reference     String? // idempotency key for auto-generated records (EMI-xxx, MNT-xxx, REC-xxx)
+  createdAt     DateTime  @default(now())
+
+  @@index([business, date])
+  @@index([vehicleId])
+  @@index([date])
+}
+
+model ExpenseCategory {
+  id        String  @id @default(cuid())
+  name      String
+  business  String // MANPOWER / TRANSPORT / COMMON
+  kind      String  @default("EXPENSE") // EXPENSE / FINANCIAL / OWNER
+  isActive  Boolean @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([name, business])
+}
+
+model RecurringExpense {
+  id                String   @id @default(cuid())
+  name              String
+  business          String
+  categoryId        String?
+  categoryName      String?
+  amount            Float
+  frequency         String   @default("MONTHLY")
+  startDate         DateTime
+  endDate           DateTime?
+  method            String?
+  notes             String?
+  lastGeneratedMonth String? // YYYY-MM
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+}
+
+// ---------- Business 2: Transport ----------
+
+model Vehicle {
+  id                String    @id @default(cuid())
+  code              String    @unique
+  registrationNumber String   @unique
+  name              String
+  make              String?
+  model             String?
+  variant           String?
+  year              Int?
+  purchaseDate      DateTime?
+  purchasePrice     Float?
+  status            String    @default("AVAILABLE") // AVAILABLE/RENTED/TRIP/MAINTENANCE/INACTIVE
+  insuranceCompany  String?
+  insuranceNumber   String?
+  insuranceExpiry   DateTime?
+  permitInfo        String?
+  fitnessExpiry     DateTime?
+  notes             String?
+  loanAmount        Float?
+  monthlyEmi        Float?
+  emiStartDate      DateTime?
+  emiCount          Int?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  trips       Trip[]
+  expenses    Expense[]
+  emiPayments VehicleEmiPayment[]
+  maintenance Maintenance[]
+}
+
+model Client {
+  id            String   @id @default(cuid())
+  name          String
+  company       String?
+  phone         String?
+  whatsapp      String?
+  email         String?
+  address       String?
+  billingDetails String?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  trips Trip[]
+}
+
+model Trip {
+  id                String    @id @default(cuid())
+  vehicleId         String
+  vehicle           Vehicle   @relation(fields: [vehicleId], references: [id])
+  clientId          String
+  client            Client    @relation(fields: [clientId], references: [id])
+  startAt           DateTime
+  endAt             DateTime?
+  tripType          String    @default("RENTAL") // RENTAL / TRIP
+  rentalType        String    @default("DAILY") // DAILY/WEEKLY/MONTHLY/OUTSTATION/LOCAL
+  pickup            String?
+  destination       String?
+  driver            String?
+  agreedAmount      Float
+  advanceReceived   Float     @default(0)
+  extraCharges      Float     @default(0)
+  finalAmount       Float?
+  paidAmount        Float     @default(0)
+  paymentStatus     String    @default("PENDING") // PENDING/PARTIAL/PAID
+  status            String    @default("CONFIRMED") // CONFIRMED/ACTIVE/COMPLETED/CANCELLED
+  fuelResponsibility String?
+  notes             String?
+  createdById       String?
+  createdByName     String?
+  createdAt         DateTime  @default(now())
+
+  @@index([vehicleId, startAt])
+  @@index([status])
+  @@index([clientId])
+}
+
+model VehicleEmiPayment {
+  id        String    @id @default(cuid())
+  vehicleId String
+  vehicle   Vehicle   @relation(fields: [vehicleId], references: [id])
+  month     String // YYYY-MM
+  dueDate   DateTime
+  amount    Float
+  paidDate  DateTime?
+  status    String    @default("PENDING") // PENDING/PAID
+  reference String?
+  notes     String?
+
+  @@unique([vehicleId, month])
+}
+
+model Maintenance {
+  id            String    @id @default(cuid())
+  vehicleId     String
+  vehicle       Vehicle   @relation(fields: [vehicleId], references: [id])
+  date          DateTime
+  type          String // SERVICE/REPAIR/TYRES/OTHER
+  description   String?
+  cost          Float     @default(0)
+  nextDueDate   DateTime?
+  status        String    @default("SCHEDULED") // SCHEDULED/DONE
+  createdById   String?
+  createdByName String?
+  createdAt     DateTime  @default(now())
+
+  @@index([vehicleId, date])
+}
+
+// ---------- System ----------
+
+model NotificationDismiss {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  createdAt DateTime @default(now())
+}
+
+model AppSetting {
+  key   String @id
+  value String
+}
+
+model Shift {
+  id        String @id @default(cuid())
+  name      String @unique
+  startTime String?
+  endTime   String?
+  sortOrder Int    @default(0)
+}
