@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  BarChart3, Building2, CalendarCheck, CarFront, Crown, Download, Play, Receipt,
+  BarChart3, Building2, CalendarCheck, CarFront, Crown, Download, Play, Printer, Receipt,
   ReceiptText, TrendingUp, Users, Wallet, type LucideIcon,
 } from "lucide-react";
 import {
@@ -119,13 +119,20 @@ function computeRange(range: RangeKey, customFrom: string, customTo: string): { 
 
 function fmtCell(v: unknown, type?: string): React.ReactNode {
   if (v === null || v === undefined || v === "") return <span className="text-muted-foreground">—</span>;
-  if (type === "money") return formatINR(Number(v));
+  if (type === "money" || type === "currency") return formatINR(Number(v));
+  if (type === "date") return fmtDayText(String(v));
   return String(v);
+}
+
+function fmtDayText(v: string): string {
+  const d = new Date(v.length === 10 ? `${v}T00:00:00` : v);
+  return Number.isNaN(d.getTime()) ? v : d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
 
 function fmtCellText(v: unknown, type?: string): string {
   if (v === null || v === undefined || v === "") return "";
-  if (type === "money") return formatINR(Number(v));
+  if (type === "money" || type === "currency") return formatINR(Number(v));
+  if (type === "date") return fmtDayText(String(v));
   return String(v);
 }
 
@@ -137,7 +144,7 @@ function labelFor(key: string, cols: ReportColumn[]): string {
 
 function fmtTotal(v: unknown, cols: ReportColumn[], key: string): string {
   const t = cols.find((c) => c.key === key)?.type;
-  if (t === "money") return formatINR(Number(v));
+  if (t === "money" || t === "currency") return formatINR(Number(v));
   if (typeof v === "number") return v.toLocaleString("en-IN");
   return String(v ?? "—");
 }
@@ -198,7 +205,7 @@ export default function ReportsView(_props: ViewProps) {
         key: c.key,
         label: c.label,
         primary: idx === 0,
-        className: c.type === "money" || c.type === "number" ? "text-right" : undefined,
+        className: c.type === "money" || c.type === "currency" || c.type === "number" ? "text-right" : undefined,
         render: (row: Record<string, unknown>) => fmtCell(row[c.key], c.type),
         value: (row: Record<string, unknown>) => fmtCellText(row[c.key], c.type),
       })),
@@ -228,6 +235,15 @@ export default function ReportsView(_props: ViewProps) {
     downloadCSV(`bizhub-${def.type}-${todayStr()}.csv`, csv);
     toast.success("Report exported as CSV");
   };
+
+  // Human-readable period for the print header.
+  const periodLabel = useMemo(() => {
+    if (!def) return "";
+    if (def.config === "date") return date;
+    if (def.config === "month") return month;
+    const { from, to } = computeRange(custom ? "custom" : range, customFrom, customTo);
+    return from === to ? from : `${from} → ${to}`;
+  }, [def, date, month, custom, range, customFrom, customTo]);
 
   return (
     <div className="space-y-4">
@@ -343,26 +359,42 @@ export default function ReportsView(_props: ViewProps) {
                 </Field>
               )}
 
-              <div className="flex gap-2 pt-1">
-                <Button className="min-h-10 flex-1 gap-1.5" onClick={() => void reload()} disabled={loading}>
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <Button className="min-h-10 gap-1.5" onClick={() => void reload()} disabled={loading}>
                   <Play className="h-4 w-4" aria-hidden />
-                  {loading ? "Running…" : "Run Report"}
+                  {loading ? "Running…" : "Run"}
                 </Button>
                 <Button
                   variant="outline"
-                  className="min-h-10 flex-1 gap-1.5"
+                  className="min-h-10 gap-1.5"
                   onClick={exportCSV}
                   disabled={loading || !data || data.rows.length === 0}
                 >
                   <Download className="h-4 w-4" aria-hidden />
-                  Export CSV
+                  CSV
+                </Button>
+                <Button
+                  variant="outline"
+                  className="col-span-2 min-h-10 gap-1.5"
+                  onClick={() => window.print()}
+                  disabled={loading || !data || data.rows.length === 0}
+                >
+                  <Printer className="h-4 w-4" aria-hidden />
+                  Print / Save PDF
                 </Button>
               </div>
             </CardContent>
           </Card>
 
-          {/* Results */}
-          <div className="min-w-0 flex-1 space-y-3">
+          {/* Results — printed via the .print-area block (header + table only) */}
+          <div className="print-area min-w-0 flex-1 space-y-3">
+            {/* Print-only report header (hidden on screen) */}
+            <div className="hidden print:block">
+              <h1 className="text-lg font-bold">{def.title} — BizHub</h1>
+              <p className="text-xs">Period: {periodLabel}</p>
+              <p className="text-xs">Generated {new Date().toLocaleString("en-IN")}</p>
+              <hr className="my-2" />
+            </div>
             {error ? (
               <ErrorState message={error} onRetry={reload} />
             ) : (

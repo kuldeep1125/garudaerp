@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api-client";
 import { formatINR, parseAmount } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
@@ -20,11 +20,12 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
-  Phone, MessageCircle, HandCoins, Pencil, CalendarDays, Wallet, ReceiptText,
+  Phone, MessageCircle, HandCoins, Pencil, CalendarDays, Wallet, ReceiptText, Activity,
 } from "lucide-react";
 import {
-  AdvanceRec, DeploymentRec, EmployeeRec, Field, GiveAdvanceDialog, InitialAvatar, Option,
-  SelectInput, SettlementRec, ShiftBadgeInline, errMessage, fmtDay, todayStr, useMutation,
+  AdvanceRec, AreaTrend, CHART_COLORS, DeploymentRec, EmployeeRec, Field, GiveAdvanceDialog,
+  InitialAvatar, Option, SelectInput, SettlementRec, ShiftBadgeInline, errMessage, fmtDay,
+  todayStr, useMutation,
 } from "./_shared";
 
 interface AdjustmentRec {
@@ -198,6 +199,32 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
   const adjustments = Array.isArray(data?.adjustments) ? (data?.adjustments as AdjustmentRec[]) : ((data?.adjustments as { items?: AdjustmentRec[] })?.items ?? []);
   const emp = data?.employee;
 
+  // Last-30-day activity derived client-side from the 100 most recent deployments.
+  const activity = useMemo(() => {
+    const days = 30;
+    const byDay = new Map<string, { shifts: number; billing: number }>();
+    for (const d of data?.deployments ?? []) {
+      if (!d.date) continue;
+      const key = String(d.date).slice(0, 10);
+      const row = byDay.get(key) ?? { shifts: 0, billing: 0 };
+      row.shifts += 1;
+      row.billing += d.billingAmount ?? 0;
+      byDay.set(key, row);
+    }
+    const list: { date: string; shifts: number; billing: number }[] = [];
+    const now = new Date();
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const row = byDay.get(key);
+      list.push({ date: key, shifts: row?.shifts ?? 0, billing: row?.billing ?? 0 });
+    }
+    const worked = list.filter((d) => d.shifts > 0).length;
+    const totalShifts = list.reduce((s, d) => s + d.shifts, 0);
+    const billed = list.reduce((s, d) => s + d.billing, 0);
+    return { list, worked, totalShifts, billed };
+  }, [data?.deployments]);
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -293,7 +320,52 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
           </TabsList>
         </div>
 
-        <TabsContent value="work" className="mt-3">
+        <TabsContent value="work" className="mt-3 space-y-3">
+          {/* Last-30-days activity: presence strip + billing trend */}
+          <Card>
+            <CardContent className="p-4">
+              <p className="flex items-center gap-2 text-sm font-semibold">
+                <Activity className="h-4 w-4 text-primary" aria-hidden />
+                Last 30 days
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+                <span><span className="font-bold tabular-nums text-foreground">{activity.worked}</span>/30 days worked</span>
+                <span><span className="font-bold tabular-nums text-foreground">{activity.totalShifts}</span> shifts</span>
+                <span><span className="font-bold tabular-nums text-foreground">{formatINR(activity.billed, { compact: true })}</span> billed</span>
+              </div>
+              <div className="mt-2.5 flex gap-[3px]" role="img" aria-label={`Worked ${activity.worked} of the last 30 days`}>
+                {activity.list.map((d) => (
+                  <div
+                    key={d.date}
+                    className={cn(
+                      "h-5 flex-1 rounded-[3px] transition-transform hover:scale-125",
+                      d.shifts === 0 && "bg-muted",
+                      d.shifts === 1 && "bg-emerald-300 dark:bg-emerald-700",
+                      d.shifts >= 2 && "bg-emerald-600 dark:bg-emerald-500"
+                    )}
+                    title={`${d.date} · ${d.shifts} shift${d.shifts === 1 ? "" : "s"} · ${formatINR(d.billing)}`}
+                  />
+                ))}
+              </div>
+              <div className="mt-1.5 flex justify-between text-[10px] text-muted-foreground">
+                <span>30 days ago</span>
+                <span className="flex items-center gap-1">Less <span className="h-2 w-3 rounded-[2px] bg-muted" aria-hidden /><span className="h-2 w-3 rounded-[2px] bg-emerald-300 dark:bg-emerald-700" aria-hidden /><span className="h-2 w-3 rounded-[2px] bg-emerald-600 dark:bg-emerald-500" aria-hidden /> More</span>
+                <span>Today</span>
+              </div>
+              {activity.totalShifts > 0 && (
+                <div className="mt-4">
+                  <p className="mb-1 text-[11px] font-medium text-muted-foreground">Daily billing</p>
+                  <AreaTrend
+                    data={activity.list as unknown as Record<string, unknown>[]}
+                    xKey="date"
+                    height={140}
+                    series={[{ key: "billing", label: "Billing", color: CHART_COLORS.emerald }]}
+                  />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           <DataTable
             columns={workColumns}
             rows={data?.deployments ?? []}

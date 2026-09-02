@@ -214,7 +214,12 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
           <Button variant="ghost" size="icon" className="h-10 w-10 relative" onClick={() => navigate("notifications")} aria-label={`Notifications${notifCount ? `, ${notifCount} active` : ""}`}>
             <Bell className="h-5 w-5" />
             {notifCount > 0 && (
-              <span className="absolute right-1.5 top-1.5 flex h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-background" aria-hidden />
+              <span
+                className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold tabular-nums text-white ring-2 ring-background"
+                aria-hidden
+              >
+                {notifCount > 9 ? "9+" : notifCount}
+              </span>
             )}
           </Button>
           <ThemeToggle />
@@ -286,11 +291,17 @@ function BusinessBanner() {
             key={o.key}
             onClick={() => { setScope(o.key); navigate(o.key === "MANPOWER" ? "manpower" : o.key === "TRANSPORT" ? "transport" : "dashboard"); }}
             className={cn(
-              "rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors min-h-[26px]",
+              "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors min-h-[26px]",
               scope === o.key ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
             )}
             aria-pressed={scope === o.key}
           >
+            {o.key !== "ALL" && (
+              <span
+                className={cn("h-1.5 w-1.5 shrink-0 rounded-full", o.key === "MANPOWER" ? "bg-emerald-500" : "bg-amber-500")}
+                aria-hidden
+              />
+            )}
             {o.label}
           </button>
         ))}

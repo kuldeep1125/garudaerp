@@ -124,3 +124,22 @@ Stage Summary:
 - New endpoint: /api/dashboard/manpower-heatmap?days=N (clamp 7-30).
 - Heat-map maxes at 8 rows by design; unlisted shifts surfaced via unlistedShifts caption.
 - Next-step candidates: PDF export bundle for reports; employee-wise utilization chart on employee-detail; monthly owner summary email mock; i18n (Hindi) scaffolding per SRS Phase 2.
+
+---
+Task ID: 6
+Agent: main (orchestrator)
+Task: QA round; Reports print/PDF export; employee-detail 30-day activity analytics; report currency formatting bug fix; TopBar/banner styling details.
+
+Work Log:
+- QA: lint + tsc clean; agent-browser cycle of Reports/Employees/Settlements/Vehicles/Audit — no console errors. Dev server had died mid-round (curl 000, no next process) → restarted via `bun run dev`, confirmed 200. Session cookie survived restart.
+- BUG FOUND & FIXED (reports formatting): all 9 report APIs tag money columns as type "currency", but reports-view only formatted type "money" → raw decimals like 10967.78 shown. fmtCell/fmtCellText/fmtTotal/column className now accept "money" OR "currency"; also added "date" type formatting (en-IN short date) for the 2 date-typed columns. Verified: Property Revenue now shows ₹10,968 / ₹6,300 etc., right-aligned.
+- NEW FEATURE (Reports print/PDF): "Print / Save PDF" button (full-width, 3rd in the Run/CSV grid) → window.print(); results column wrapped in .print-area with a print-only header (report title — BizHub, period label from date/month/computed range, generated timestamp). globals.css print block extended: `.print-area * { overflow: visible !important; max-height: none !important; }` so the DataTable's max-h-[70vh] scroll container prints fully. END-TO-END VERIFIED via agent-browser `pdf` command: 2-page PDF with ONLY the report (no sidebar/topbar), formatted ₹ values and TOTAL footer row.
+- NEW FEATURE (employee-detail analytics): "Last 30 days" card at top of Work History tab — computed client-side via useMemo from the 100 most recent deployments (no new API): summary line (X/30 days worked · N shifts · ₹billed compact), 30-cell presence strip (muted / emerald-300 / emerald-600 by shift count, hover scale + title tooltip, aria role=img), Less→More legend, and a daily-billing AreaTrend (140px, emerald) shown when shifts exist. Verified live for Amit Verma: 28/30 days, 75 shifts, ₹68.8K billed.
+- STYLING DETAILS: (1) business scope pills in BusinessBanner now carry colored dots (emerald=Manpower, amber=Transport, visible in both active/inactive states); (2) TopBar bell upgraded from bare red dot to numbered badge (h-4 min-w-4 rounded-full, "9+" cap, ring-2 ring-background). Verified on screen.
+- Data-semantics observation (not a bug, noted for review): Property Revenue per-window "Received" can exceed "Billed" (Green Leaf ₹77,847 vs ₹5,280 → 1474% collection, negative outstanding) because payments received in the window may settle deployments billed before the window; totals Outstanding −₹50,645 follows the same window logic. Consider clamping or labeling in a future round.
+
+Stage Summary:
+- Reports now have three export paths: on-screen table, CSV download, print/PDF (with self-contained print header + full-table release).
+- Employee detail Work History is now analytics-led (30-day strip + billing trend above the raw table).
+- Report column-type contract: treat "currency" and "money" as synonyms on any new report consumers.
+- Next-step candidates: window-vs-FIFO outstanding semantics on the collections report (label or clamp negatives); owner monthly summary; i18n scaffolding (SRS Phase 2); attendance-style month grid on deployments view.

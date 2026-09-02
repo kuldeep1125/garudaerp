@@ -159,6 +159,12 @@
     padding: 0;
     margin: 0;
   }
+  /* Release scroll containers inside the print area so long tables print fully */
+  .print-area *,
+  .print-area {
+    overflow: visible !important;
+    max-height: none !important;
+  }
   .no-print {
     display: none !important;
   }
