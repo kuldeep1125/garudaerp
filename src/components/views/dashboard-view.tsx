@@ -4,18 +4,21 @@ import { useState } from "react";
 import { api } from "@/lib/api-client";
 import { formatINR } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
+import { useAuth } from "@/components/providers";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { RangeSelector, type RangeKey } from "@/components/shared/filters";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
   Users, Truck, Wallet, IndianRupee, Landmark, CalendarCheck, Receipt, HandCoins, ReceiptText,
-  Route, AlertTriangle, AlertCircle, Info, ChevronRight, Building2,
+  Route, AlertTriangle, AlertCircle, Info, ChevronRight, Building2, RefreshCw, Activity, PieChart as PieChartIcon, History,
 } from "lucide-react";
-import { ErrorState, useAsync } from "./_shared";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
+import { ErrorState, useAsync, AreaTrend, CHART_COLORS } from "./_shared";
 
 interface AttentionItem {
   key: string;
@@ -45,6 +48,13 @@ interface SummaryResp {
   attention: AttentionItem[];
 }
 
+interface TrendRow { date: string; billing: number; collections: number; transport: number; expenses: number }
+
+interface AuditItem {
+  id: string; ownerName: string; action: string; module: string;
+  recordLabel: string | null; createdAt: string;
+}
+
 const SEVERITY_STYLE: Record<string, { icon: typeof Info; cls: string }> = {
   CRITICAL: { icon: AlertCircle, cls: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50" },
   WARNING: { icon: AlertTriangle, cls: "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50" },
@@ -60,26 +70,91 @@ const QUICK_ACTIONS = [
   { label: "Settlements", icon: ReceiptText, view: "settlements" },
 ];
 
+const ACTION_BADGE: Record<string, string> = {
+  CREATE: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  UPDATE: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  DELETE: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+};
+
+const TOOLTIP_STYLE = {
+  borderRadius: 10,
+  border: "1px solid hsl(var(--border))",
+  background: "hsl(var(--card))",
+  color: "hsl(var(--foreground))",
+  fontSize: 12,
+} as const;
+
+function greetingForHour(): string {
+  const h = new Date().getHours();
+  if (h < 5) return "Burning the midnight oil";
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+function fmtRel(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
+
+function prettyDate(): string {
+  return new Intl.DateTimeFormat("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date());
+}
+
 export default function DashboardView({ navigate }: ViewProps) {
+  const { owner } = useAuth();
   const [range, setRange] = useState<RangeKey>("today");
   const { data, loading, error, reload } = useAsync<SummaryResp>(
     () => api.get<SummaryResp>("/api/dashboard/summary" + (range !== "custom" ? `?range=${range}` : `?range=month`)),
     [range]
+  );
+  const { data: trend, loading: trendLoading, reload: reloadTrend } = useAsync<{ trend: TrendRow[] }>(
+    () => api.get<{ trend: TrendRow[] }>("/api/dashboard/combined-trend?days=14"),
+    []
+  );
+  const { data: audit, loading: auditLoading, reload: reloadAudit } = useAsync<{ items: AuditItem[] }>(
+    () => api.get<{ items: AuditItem[] }>("/api/audit?page=1&pageSize=6"),
+    []
   );
 
   const m = data?.manpower;
   const t = data?.transport;
   const c = data?.collections;
   const net = data?.combined.net ?? 0;
+  const busy = loading || trendLoading;
+
+  const refreshAll = () => { reload(); reloadTrend(); reloadAudit(); };
+
+  const firstName = (owner?.name ?? "Owner").split(" ")[0];
+  const expenseSplit = [
+    { name: "Manpower", value: m?.expenses ?? 0, color: CHART_COLORS.emerald },
+    { name: "Transport", value: t?.expenses ?? 0, color: CHART_COLORS.amber },
+  ].filter((d) => d.value > 0);
+  const expenseTotal = expenseSplit.reduce((s, d) => s + d.value, 0);
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Dashboard"
-        subtitle="Both businesses at a glance"
-        actions={<Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => navigate("reports")}>
-          <Landmark className="h-3.5 w-3.5" aria-hidden />Reports
-        </Button>}
+        title={`${greetingForHour()}, ${firstName}`}
+        subtitle={prettyDate()}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={refreshAll} aria-label="Refresh dashboard">
+              <RefreshCw className={cn("h-3.5 w-3.5", busy && "animate-spin")} aria-hidden />
+              <span className="hidden sm:inline">Refresh</span>
+            </Button>
+            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => navigate("reports")}>
+              <Landmark className="h-3.5 w-3.5" aria-hidden />Reports
+            </Button>
+          </div>
+        }
       />
 
       <RangeSelector value={range} onChange={setRange} />
@@ -91,9 +166,9 @@ export default function DashboardView({ navigate }: ViewProps) {
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
             {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)}
           </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <Skeleton className="h-48 rounded-xl" />
-            <Skeleton className="h-48 rounded-xl" />
+          <div className="grid gap-3 lg:grid-cols-3">
+            <Skeleton className="h-64 rounded-xl lg:col-span-2" />
+            <Skeleton className="h-64 rounded-xl" />
           </div>
         </div>
       )}
@@ -109,6 +184,98 @@ export default function DashboardView({ navigate }: ViewProps) {
             <StatCard label="Transport Revenue" value={formatINR(t?.revenue ?? 0, { compact: true })} icon={Truck} tone="transport" onClick={() => navigate("transport")} hint={`${t?.onTripVehicles ?? 0} on trip`} />
             <StatCard label="Net Result" value={formatINR(net, { compact: true })} icon={Landmark} tone={net >= 0 ? "positive" : "negative"} onClick={() => navigate("reports")} hint="Revenue − all expenses" />
           </div>
+
+          {/* Row 2 — 14-day performance trend + expense split */}
+          <section className="grid gap-3 lg:grid-cols-3" aria-label="Trends">
+            <Card className="lg:col-span-2">
+              <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+                <div className="space-y-1">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Activity className="h-4 w-4 text-primary" aria-hidden />
+                    14-day performance
+                  </CardTitle>
+                  <CardDescription className="text-xs">Manpower billing · collections · transport revenue</CardDescription>
+                </div>
+                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("reports")}>Reports</Button>
+              </CardHeader>
+              <CardContent>
+                {trendLoading ? (
+                  <Skeleton className="h-[220px] w-full rounded-lg" />
+                ) : (
+                  <AreaTrend
+                    data={(trend?.trend ?? []) as unknown as Record<string, unknown>[]}
+                    xKey="date"
+                    height={220}
+                    series={[
+                      { key: "billing", label: "Manpower billing", color: CHART_COLORS.emerald },
+                      { key: "collections", label: "Collections", color: CHART_COLORS.teal },
+                      { key: "transport", label: "Transport revenue", color: CHART_COLORS.amber },
+                    ]}
+                  />
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <PieChartIcon className="h-4 w-4 text-primary" aria-hidden />
+                  Expense split
+                </CardTitle>
+                <CardDescription className="text-xs">This range, by business</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {expenseTotal === 0 ? (
+                  <p className="flex h-[220px] items-center justify-center text-center text-xs text-muted-foreground">
+                    No expenses recorded in this range
+                  </p>
+                ) : (
+                  <div className="relative h-[220px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={expenseSplit}
+                          dataKey="value"
+                          nameKey="name"
+                          innerRadius="64%"
+                          outerRadius="88%"
+                          paddingAngle={3}
+                          strokeWidth={0}
+                        >
+                          {expenseSplit.map((d) => (
+                            <Cell key={d.name} fill={d.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Total</p>
+                      <p className="text-sm font-bold tabular-nums">{formatINR(expenseTotal, { compact: true })}</p>
+                    </div>
+                  </div>
+                )}
+                {expenseTotal > 0 && (
+                  <div className="mt-2 space-y-1.5">
+                    {expenseSplit.map((d) => (
+                      <div key={d.name} className="flex items-center justify-between text-xs">
+                        <span className="flex items-center gap-1.5 text-muted-foreground">
+                          <span className="h-2 w-2 rounded-full" style={{ background: d.color }} aria-hidden />
+                          {d.name}
+                        </span>
+                        <span className="font-semibold tabular-nums">
+                          {formatINR(d.value, { compact: true })}
+                          <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+                            {Math.round((d.value / expenseTotal) * 100)}%
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </section>
 
           {/* Business split */}
           <section aria-label="Business split" className="grid gap-3 md:grid-cols-2">
@@ -229,6 +396,53 @@ export default function DashboardView({ navigate }: ViewProps) {
                     </button>
                   );
                 })}
+              </CardContent>
+            </Card>
+          </section>
+
+          {/* Recent activity */}
+          <section aria-label="Recent activity">
+            <Card>
+              <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+                <div className="space-y-1">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <History className="h-4 w-4 text-primary" aria-hidden />
+                    Recent activity
+                  </CardTitle>
+                  <CardDescription className="text-xs">Latest actions across both businesses — fully audited</CardDescription>
+                </div>
+                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("audit")}>View all</Button>
+              </CardHeader>
+              <CardContent>
+                {auditLoading ? (
+                  <div className="space-y-2">
+                    {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-10 w-full rounded-lg" />)}
+                  </div>
+                ) : (
+                  <ul className="divide-y">
+                    {(audit?.items ?? []).map((a) => (
+                      <li key={a.id} className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
+                        <Badge
+                          variant="secondary"
+                          className={cn("w-[68px] shrink-0 justify-center text-[10px] font-semibold", ACTION_BADGE[a.action] ?? "bg-muted text-muted-foreground")}
+                        >
+                          {a.action}
+                        </Badge>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-medium">
+                            {a.recordLabel || a.module}
+                            <span className="ml-1.5 font-normal text-muted-foreground">· {a.module}</span>
+                          </p>
+                          <p className="truncate text-[11px] text-muted-foreground">{a.ownerName}</p>
+                        </div>
+                        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{fmtRel(a.createdAt)}</span>
+                      </li>
+                    ))}
+                    {(audit?.items?.length ?? 0) === 0 && (
+                      <li className="py-4 text-center text-xs text-muted-foreground">No activity yet</li>
+                    )}
+                  </ul>
+                )}
               </CardContent>
             </Card>
           </section>

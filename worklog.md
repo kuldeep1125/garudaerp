@@ -83,3 +83,23 @@ Work Log:
 Stage Summary:
 - PRODUCTION-READY state: 24 views, ~70 API routes, seeded demo data. Two businesses fully separated (emerald/amber theming + scoped nav + business field on finance records).
 - Known acceptable limitations: WhatsApp delivery is mocked-out by design (Phase 2 per SRS; statement print-to-PDF works); file attachments not implemented (Phase 2); employee photos use initials avatars.
+
+---
+Task ID: 4
+Agent: main (orchestrator)
+Task: Status assessment, agent-browser QA round, styling detail fixes, dashboard feature expansion, PWA install.
+
+Work Log:
+- QA assessment: lint + tsc clean (src/ only; examples/skills noise pre-existing). agent-browser E2E: login → all 14 sidebar views cycled via snapshot refs — ZERO console errors. Screenshots verified at 375px / 768px / 1280px / 1920px: bottom nav, card lists, sticky footer, sidebar all correct. Verified dev.log error lines are historical (dbg-params route deleted; params now awaited by handleRoute line 28; 5000ms txn timeout already raised to 15/20s per Task 3).
+- BUG FIX (styling): TopBar global-search button wrapped to 2 lines at 768px → added min-w-0 + truncate + whitespace-nowrap + shrink-0; also hover:border-primary/40 detail.
+- NEW API: GET /api/dashboard/combined-trend?days=7..60 (clamped, default 14) — per-day { billing, collections, transport, expenses } from deployments (BILLABLE), propertyPayments, non-cancelled trips (paidAmount), all expenses; reuses lastNDays/dayKey helpers from api/_lib/dashboard. Verified via curl with auth cookie.
+- Dashboard upgrade (dashboard-view.tsx rewritten): (1) greeting header "Good morning/afternoon…, {firstName}" + full en-IN date + Refresh button (spins while any fetch in flight, reloads summary+trend+audit) + Reports; (2) "14-day performance" card with AreaTrend 3-series (Manpower billing emerald / Collections teal / Transport amber) in lg:col-span-2; (3) "Expense split" donut card — recharts PieChart in ResponsiveContainer (first attempt with bare PieChart rendered 0-size, fixed), innerRadius 64%, center Total overlay, per-business legend rows with % shares, empty-state when no expenses; (4) "Recent activity" card — /api/audit?pageSize=6, action badges (CREATE emerald / UPDATE amber / DELETE red / LOGIN·GENERATE·PAYMENT gray), recordLabel+module, owner, relative time (fmtRel), View all → audit view. Loading skeletons per card; toasts via useAsync preserved.
+- PWA install: new src/components/shared/pwa-install.ts using useSyncExternalStore (canonical external-store pattern — avoids lint error react-hooks/set-state-in-effect that the first useState/useEffect attempt triggered) wrapping beforeinstallprompt + appinstalled + standalone media-query listeners. "Install app" item added to owner dropdown menu (Smartphone icon, toast on accepted) and Settings About card upgraded to dynamic copy (installed / can-install w/ button / manual add-to-homescreen instructions per platform).
+- Styling detail pass: StatCard (used by all 3 dashboards + more) got tone-colored icon chips (ICON_CHIPS map: emerald/red/amber/teal per tone incl. dark variants) + hover lift (hover:-translate-y-0.5 with active:scale compensation).
+- Verification: agent-browser screenshots of new dashboard at 1280/768/375 in light+dark; donut + chart + activity feed render with live data (Manpower ₹6.7K 59% / Transport ₹4.7K 41%); trend API returns correct series; mobile donut fixed; lint + tsc clean; curl / → 200; console clean (only dev-mode Fast Refresh artifacts from editing).
+
+Stage Summary:
+- App remains production-ready; main dashboard is now analytics-rich (trend + split + activity) instead of stats-only.
+- New endpoint contract: /api/dashboard/combined-trend?days=N → { days, trend: [{date, billing, collections, transport, expenses}] } (N clamped 7–60).
+- pwa-install.ts is a module singleton (listeners registered at import) — import only from client components.
+- Next-step candidates: toast on new notification while polling; workforce heat-map on manpower dashboard; trip-wise profit report chart; export whole dashboard to PDF.

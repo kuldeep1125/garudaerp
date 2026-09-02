@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "next-themes";
+import { toast } from "sonner";
 import { useAuth, useNav, useBusiness, type BusinessScope } from "@/components/providers";
+import { usePwaInstall } from "@/components/shared/pwa-install";
 import { VIEWS, getView } from "@/lib/views";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -13,7 +15,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import {
-  Bell, Building2, CarFront, ChevronsLeft, Home, LayoutGrid, LogOut, Moon, Search, Sun,
+  Bell, Building2, CarFront, ChevronsLeft, Home, LayoutGrid, LogOut, Moon, Search, Smartphone, Sun,
   Truck, Users, Wallet, ShieldCheck, Boxes,
 } from "lucide-react";
 
@@ -141,6 +143,7 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
   const { owner, logout } = useAuth();
   const { navigate } = useNav();
   const [notifCount, setNotifCount] = useState(0);
+  const { canInstall, install } = usePwaInstall();
 
   useEffect(() => {
     let alive = true;
@@ -172,13 +175,13 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
         {/* Global search trigger */}
         <button
           onClick={() => navigate("search")}
-          className="ml-0 hidden sm:flex h-9 flex-1 max-w-md items-center gap-2 rounded-xl border bg-muted/40 px-3 text-sm text-muted-foreground hover:bg-muted transition-colors"
+          className="ml-0 hidden sm:flex h-9 min-w-0 flex-1 max-w-md items-center gap-2 rounded-xl border bg-muted/40 px-3 text-sm text-muted-foreground hover:bg-muted hover:border-primary/40 transition-colors"
           aria-label="Global search"
         >
-          <Search className="h-4 w-4" />
-          <span className="hidden md:inline">Search employees, properties, vehicles…</span>
-          <span className="md:hidden">Search…</span>
-          <kbd className="ml-auto hidden md:inline-flex rounded border bg-background px-1.5 font-mono text-[10px]">Ctrl K</kbd>
+          <Search className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 truncate whitespace-nowrap hidden md:inline">Search employees, properties, vehicles…</span>
+          <span className="md:hidden whitespace-nowrap">Search…</span>
+          <kbd className="ml-auto hidden md:inline-flex shrink-0 rounded border bg-background px-1.5 font-mono text-[10px]">Ctrl K</kbd>
         </button>
 
         <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
@@ -212,6 +215,17 @@ function TopBar({ onOpenMore }: { onOpenMore: () => void }) {
               <DropdownMenuItem onClick={() => navigate("settings")}>
                 <Building2 className="mr-2 h-4 w-4" /> Business settings
               </DropdownMenuItem>
+              {canInstall && (
+                <DropdownMenuItem
+                  onClick={() =>
+                    install().then((r) => {
+                      if (r === "accepted") toast.success("BizHub installed — find it on your home screen");
+                    })
+                  }
+                >
+                  <Smartphone className="mr-2 h-4 w-4" /> Install app
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => logout()} className="text-red-600 dark:text-red-400">
                 <LogOut className="mr-2 h-4 w-4" /> Log out

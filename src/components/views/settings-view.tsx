@@ -14,6 +14,7 @@ import {
   Building2, Crown, History, Receipt, ReceiptText, Settings, Smartphone, Sparkles, Truck, Users,
 } from "lucide-react";
 import { Field, useAsync, useMutation } from "./_shared";
+import { usePwaInstall } from "@/components/shared/pwa-install";
 
 // ---------------------------------------------------------------------------
 // Settings shape (GET /api/settings → { business })
@@ -34,6 +35,7 @@ interface SettingsResp {
 type SettingsForm = { name: string; address: string; contact: string; gstin: string; logoText: string };
 
 export default function SettingsView({ navigate }: ViewProps) {
+  const { canInstall, install, isStandalone } = usePwaInstall();
   const { data, loading, error, reload } = useAsync<SettingsResp>(
     () => api.get<SettingsResp>("/api/settings"),
     []
@@ -231,10 +233,35 @@ export default function SettingsView({ navigate }: ViewProps) {
             </div>
             <div className="flex items-start gap-2 rounded-lg bg-muted/60 p-3">
               <Smartphone className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                <span className="font-medium text-foreground">Installable on phones — add to home screen</span> from your
-                browser menu for a full-screen app experience.
-              </p>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {isStandalone ? (
+                    <span className="font-medium text-foreground">BizHub is running as an installed app — enjoy the full-screen experience.</span>
+                  ) : canInstall ? (
+                    <span className="font-medium text-foreground">Install BizHub on this device for a full-screen, offline-friendly app experience.</span>
+                  ) : (
+                    <span className="font-medium text-foreground">Add to home screen</span>
+                  )}
+                  {!isStandalone && !canInstall && (
+                    <>
+                      {" "}from your browser menu (Share → Add to Home Screen on iOS, ⋮ → Install app on Android/Chrome).
+                    </>
+                  )}
+                </p>
+              </div>
+              {canInstall && (
+                <Button
+                  size="sm"
+                  className="h-8 shrink-0"
+                  onClick={() =>
+                    install().then((r) => {
+                      if (r === "accepted") toast.success("BizHub installed — find it on your home screen");
+                    })
+                  }
+                >
+                  Install
+                </Button>
+              )}
             </div>
             <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
               <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />

@@ -24,6 +24,15 @@ const TONES: Record<NonNullable<StatCardProps["tone"]>, string> = {
   transport: "text-amber-600 dark:text-amber-400",
 };
 
+const ICON_CHIPS: Record<NonNullable<StatCardProps["tone"]>, string> = {
+  default: "bg-muted text-muted-foreground",
+  positive: "bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400",
+  negative: "bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400",
+  warning: "bg-amber-100 text-amber-600 dark:bg-amber-950 dark:text-amber-400",
+  info: "bg-teal-100 text-teal-600 dark:bg-teal-950 dark:text-teal-400",
+  transport: "bg-amber-100 text-amber-600 dark:bg-amber-950 dark:text-amber-400",
+};
+
 // Responsive stat card: tappable, answers a business question at a glance.
 export function StatCard({ label, value, icon: Icon, tone = "default", hint, onClick, className }: StatCardProps) {
   const interactive = Boolean(onClick);
@@ -31,7 +40,7 @@ export function StatCard({ label, value, icon: Icon, tone = "default", hint, onC
     <Card
       className={cn(
         "border-border/70 shadow-sm transition-all",
-        interactive && "cursor-pointer hover:shadow-md hover:border-primary/40 active:scale-[0.99]",
+        interactive && "cursor-pointer hover:shadow-md hover:border-primary/40 hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.99]",
         className
       )}
       onClick={onClick}
@@ -44,8 +53,8 @@ export function StatCard({ label, value, icon: Icon, tone = "default", hint, onC
         <div className="flex items-start justify-between gap-2">
           <p className="text-[11px] sm:text-xs font-medium text-muted-foreground leading-tight">{label}</p>
           {Icon && (
-            <div className="shrink-0 rounded-lg bg-muted p-1.5">
-              <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+            <div className={cn("shrink-0 rounded-lg p-1.5", ICON_CHIPS[tone])}>
+              <Icon className="h-3.5 w-3.5" aria-hidden />
             </div>
           )}
         </div>
