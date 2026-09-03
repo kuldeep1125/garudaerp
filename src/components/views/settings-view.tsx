@@ -16,9 +16,11 @@ import {
 import { toast } from "sonner";
 import {
   AlertTriangle, Building2, Check, Crown, Database, Download, History, Languages, Loader2, Receipt,
-  ReceiptText, RefreshCw, Settings, ShieldCheck, Smartphone, Sparkles, Truck, Users,
+  ReceiptText, RefreshCw, Settings, ShieldCheck, Smartphone, Sparkles, Truck, Upload, Users,
 } from "lucide-react";
 import { errMessage, Field, todayStr, useAsync, useMutation } from "./_shared";
+import { CsvImportDialog } from "@/components/shared/csv-import-dialog";
+import { BackupRestoreDialog } from "@/components/shared/backup-restore-dialog";
 import { usePwaInstall } from "@/components/shared/pwa-install";
 import { useLang, t, type Lang } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -55,6 +57,7 @@ interface BackupResp {
 function BackupCard() {
   const { lang } = useLang();
   const [exporting, setExporting] = useState(false);
+  const [csvOpen, setCsvOpen] = useState(false);
 
   const exportBackup = async () => {
     setExporting(true);
@@ -84,16 +87,30 @@ function BackupCard() {
         <CardDescription>{t(lang, "settings.backupDesc")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        <Button variant="outline" className="min-h-10 gap-2" onClick={() => void exportBackup()} disabled={exporting}>
-          {exporting ? (
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-          ) : (
-            <Download className="h-4 w-4" aria-hidden />
-          )}
-          {exporting ? t(lang, "settings.backupWorking") : t(lang, "settings.backupAction")}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" className="min-h-10 flex-1 gap-2" onClick={() => void exportBackup()} disabled={exporting}>
+            {exporting ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+            ) : (
+              <Download className="h-4 w-4" aria-hidden />
+            )}
+            {exporting ? t(lang, "settings.backupWorking") : t(lang, "settings.backupAction")}
+          </Button>
+          <Button variant="outline" className="min-h-10 flex-1 gap-2" onClick={() => setCsvOpen(true)}>
+            <Upload className="h-4 w-4" aria-hidden />
+            Import CSV
+          </Button>
+          <BackupRestoreDialog onRestored={() => { /* views refetch on mount; restore suggests its own refresh */ }} />
+        </div>
         <p className="text-xs leading-relaxed text-muted-foreground">{t(lang, "settings.backupNote")}</p>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          <span className="font-medium text-foreground">Import CSV</span> bulk-adds expenses or employees from a
+          spreadsheet (dry-run preview included). <span className="font-medium text-foreground">Import backup (merge)</span> restores
+          a previously exported JSON backup — existing records are never overwritten or deleted.
+        </p>
       </CardContent>
+
+      <CsvImportDialog open={csvOpen} onOpenChange={setCsvOpen} onImported={() => {}} />
     </Card>
   );
 }

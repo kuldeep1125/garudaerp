@@ -152,6 +152,20 @@
   display: none;
 }
 
+/* Scroll shadows — edge fade hints on horizontally scrollable tables.
+   Covers attach to the scroll box (local), shadows stay fixed (scroll),
+   so they only show when there is overflow to scroll in that direction. */
+.scroll-shadows {
+  background:
+    linear-gradient(to right, var(--card) 30%, color-mix(in oklab, var(--card) 0%, transparent)) left center,
+    linear-gradient(to left, var(--card) 30%, color-mix(in oklab, var(--card) 0%, transparent)) right center,
+    radial-gradient(farthest-side at 0 50%, color-mix(in oklab, var(--foreground) 10%, transparent), transparent) left center,
+    radial-gradient(farthest-side at 100% 50%, color-mix(in oklab, var(--foreground) 10%, transparent), transparent) right center;
+  background-repeat: no-repeat;
+  background-size: 36px 100%, 36px 100%, 12px 100%, 12px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+
 /* Custom scrollbar for lists */
 *::-webkit-scrollbar {
   width: 8px;
@@ -165,8 +179,16 @@
   background: transparent;
 }
 
+/* Print-only blocks — letterheads etc. Hidden on screen, shown in print. */
+.print-only {
+  display: none;
+}
+
 /* Print styles for statements/reports */
 @media print {
+  .print-only {
+    display: block;
+  }
   body * {
     visibility: hidden;
   }
@@ -204,7 +226,12 @@
   }
 }
 .view-enter {
-  animation: view-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: view-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  /* fill-mode must NOT be "forwards"/"both": a retained transform would turn
+     this wrapper into the containing block for position:fixed descendants
+     (view FABs, the DataTable bulk bar) and pin them to the content instead
+     of the viewport. The end keyframe equals the natural state, so dropping
+     forwards changes nothing visually. */
 }
 @media (prefers-reduced-motion: reduce) {
   .view-enter {

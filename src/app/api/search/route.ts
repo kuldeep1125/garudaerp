@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { handleRoute } from "@/lib/api-helpers";
 import { dayKey } from "@/app/api/_lib/engine";
+import { formatINR } from "@/lib/money";
 
 export interface SearchItem {
   id: string;
@@ -74,13 +75,37 @@ export const GET = handleRoute(async ({ req }) => {
     view: "employee-detail",
     params: { id: e.id }, // detail views read params.id (was employeeId — clicking results showed an endless skeleton)
   }));
-  const propItems: SearchItem[] = properties.map((p) => ({
+  // Property previews carry the live outstanding amount so the palette can show
+  // it without opening the property (Σ deployed billing − Σ payments received).
+  let propItems: SearchItem[] = properties.map((p) => ({
     id: p.id,
     title: p.name,
     subtitle: [p.brandName, p.type, p.status].filter(Boolean).join(" · "),
     view: "property-detail",
     params: { id: p.id }, // detail views read params.id (was propertyId)
   }));
+  if (properties.length > 0) {
+    const ids = properties.map((p) => p.id);
+    const [billAgg, payAgg] = await Promise.all([
+      db.deployment.groupBy({ by: ["propertyId"], where: { propertyId: { in: ids } }, _sum: { billingAmount: true } }),
+      db.propertyPayment.groupBy({ by: ["propertyId"], where: { propertyId: { in: ids } }, _sum: { amount: true } }),
+    ]);
+    const billBy = new Map(billAgg.map((a) => [a.propertyId, a._sum.billingAmount ?? 0]));
+    const payBy = new Map(payAgg.map((a) => [a.propertyId, a._sum.amount ?? 0]));
+    propItems = properties.map((p) => {
+      const outstanding = Math.max(0, (billBy.get(p.id) ?? 0) - (payBy.get(p.id) ?? 0));
+      return {
+        id: p.id,
+        title: p.name,
+        subtitle: [
+          [p.brandName, p.type, p.status].filter(Boolean).join(" · "),
+          outstanding > 0 ? `${formatINR(outstanding, { compact: true })} due` : "",
+        ].filter(Boolean).join(" · "),
+        view: "property-detail",
+        params: { id: p.id },
+      };
+    });
+  }
   const vehItems: SearchItem[] = vehicles.map((v) => ({
     id: v.id,
     title: v.name,

@@ -1,0 +1,580 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useEffect, useMemo, useRef, useState } from "react";
+     4→     4→import { useTheme } from "next-themes";
+     5→     5→import { toast } from "sonner";
+     6→     6→import { useAuth, useNav, useBusiness, type BusinessScope } from "@/components/providers";
+     7→     7→import { usePwaInstall } from "@/components/shared/pwa-install";
+     8→     8→import { CommandPalette } from "@/components/shared/command-palette";
+     9→     9→import { UndoCenter } from "@/components/shared/undo-center";
+    10→    10→import { ShortcutsDialog } from "@/components/shared/shortcuts-dialog";
+    11→    11→import { readMutedGroups, NOTIF_MUTED_EVENT, NOTIF_CHANGED_EVENT } from "@/lib/notif-mute";
+    12→    12→import { VIEWS, getView } from "@/lib/views";
+    13→    13→import { cn } from "@/lib/utils";
+    14→    14→import { Button } from "@/components/ui/button";
+    15→    15→import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+    16→    16→import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+    17→    17→import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+    18→    18→import { ScrollArea } from "@/components/ui/scroll-area";
+    19→    19→import { Separator } from "@/components/ui/separator";
+    20→    20→import { Badge } from "@/components/ui/badge";
+    21→    21→import {
+    22→    22→  Bell, Building2, CarFront, Check, ChevronsLeft, History, Home, Keyboard, Languages, LayoutGrid, LogOut, Moon, Search, Smartphone, Sun,
+    23→    23→  Truck, Users, Wallet, ShieldCheck, Boxes, AlertTriangle, AlertCircle, Info,
+    24→    24→} from "lucide-react";
+    25→    25→import { useLang, t, viewLabel } from "@/lib/i18n";
+    26→    26→
+    27→    27→const GROUP_ICONS: Record<string, React.ReactNode> = {
+    28→    28→  MAIN: <Home className="h-3 w-3" />,
+    29→    29→  MANPOWER: <Users className="h-3 w-3" />,
+    30→    30→  TRANSPORT: <Truck className="h-3 w-3" />,
+    31→    31→  SYSTEM: <Boxes className="h-3 w-3" />,
+    32→    32→};
+    33→    33→
+    34→    34→const GROUP_ACCENT: Record<string, string> = {
+    35→    35→  MAIN: "",
+    36→    36→  MANPOWER: "text-emerald-600 dark:text-emerald-400",
+    37→    37→  TRANSPORT: "text-amber-600 dark:text-amber-400",
+    38→    38→  SYSTEM: "",
+    39→    39→};
+    40→    40→
+    41→    41→// Desktop sidebar (collapsible) — also the content of the mobile "More" sheet.
+    42→    42→function SideNav({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onToggle?: () => void; onNavigate?: () => void }) {
+    43→    43→  const { view, navigate } = useNav();
+    44→    44→  const { scope } = useBusiness();
+    45→    45→  const { lang } = useLang();
+    46→    46→
+    47→    47→  const groups = useMemo(() => {
+    48→    48→    const order = ["MAIN", "MANPOWER", "TRANSPORT", "SYSTEM"] as const;
+    49→    49→    return order.map((g) => ({
+    50→    50→      key: g,
+    51→    51→      items: VIEWS.filter((v) => v.group === g && !v.hidden && !(g === "MAIN" && v.id === "dashboard" && collapsed === undefined) ),
+    52→    52→    })).filter((g) => g.items.length > 0);
+    53→    53→  }, [collapsed]);
+    54→    54→
+    55→    55→  return (
+    56→    56→    <nav aria-label="Main navigation" className="flex h-full flex-col">
+    57→    57→      <div className={cn("flex items-center gap-2 px-3 py-4", collapsed ? "justify-center" : "justify-between")}>
+    58→    58→        <button
+    59→    59→          className="flex items-center gap-2.5 min-w-0"
+    60→    60→          onClick={() => { navigate("dashboard"); onNavigate?.(); }}
+    61→    61→          aria-label="Go to dashboard"
+    62→    62→        >
+    63→    63→          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white font-bold shadow-sm">
+    64→    64→            <span className="text-sm">B</span>
+    65→    65→          </div>
+    66→    66→          {!collapsed && (
+    67→    67→            <div className="min-w-0 text-left">
+    68→    68→              <p className="truncate text-sm font-bold leading-tight">BizHub</p>
+    69→    69→              <p className="truncate text-[10px] text-muted-foreground leading-tight">Business Control Center</p>
+    70→    70→            </div>
+    71→    71→          )}
+    72→    72→        </button>
+    73→    73→        {onToggle && !collapsed && (
+    74→    74→          <Button variant="ghost" size="icon" className="hidden lg:inline-flex h-8 w-8" onClick={onToggle} aria-label="Collapse sidebar">
+    75→    75→            <ChevronsLeft className="h-4 w-4" />
+    76→    76→          </Button>
+    77→    77→        )}
+    78→    78→      </div>
+    79→    79→      {/* Keyed by view so the nav's internal scroll resets on navigation */}
+    80→    80→      <ScrollArea key={view} className="min-h-0 flex-1 px-2 pb-4">
+    81→    81→        <div className="space-y-4">
+    82→    82→          {groups.map((group) => (
+    83→    83→            <div key={group.key}>
+    84→    84→              {!collapsed && (
+    85→    85→                <p className={cn("mb-1.5 flex items-center gap-1.5 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground", GROUP_ACCENT[group.key])}>
+    86→    86→                  {GROUP_ICONS[group.key]}
+    87→    87→                  {t(lang, `nav.group.${group.key}`)}
+    88→    88→                </p>
+    89→    89→              )}
+    90→    90→              <ul className="space-y-0.5">
+    91→    91→                {group.items
+    92→    92→                  .filter((v) => scope === "ALL" || v.group === "MAIN" || v.group === "SYSTEM" || v.group === scope)
+    93→    93→                  .map((v) => {
+    94→    94→                    const active = view === v.id || (v.id === "manpower" && view === "manpower") || (v.id === "transport" && view === "transport");
+    95→    95→                    return (
+    96→    96→                      <li key={v.id}>
+    97→    97→                        <button
+    98→    98→                          onClick={() => { navigate(v.id); onNavigate?.(); }}
+    99→    99→                          aria-current={active ? "page" : undefined}
+   100→   100→                          className={cn(
+   101→   101→                            "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors min-h-[40px]",
+   102→   102→                            collapsed && "justify-center px-0",
+   103→   103→                            active
+   104→   104→                              ? "bg-primary/12 text-primary font-semibold"
+   105→   105→                              : "text-muted-foreground font-medium hover:bg-muted hover:text-foreground"
+   106→   106→                          )}
+   107→   107→                          title={collapsed ? viewLabel(lang, v.id, v.label) : undefined}
+   108→   108→                        >
+   109→   109→                          <v.icon className={cn("h-4 w-4 shrink-0", active && GROUP_ACCENT[group.key], !active && "text-muted-foreground")} aria-hidden />
+   110→   110→                          {!collapsed && <span className="truncate">{viewLabel(lang, v.id, v.label)}</span>}
+   111→   111→                        </button>
+   112→   112→                      </li>
+   113→   113→                    );
+   114→   114→                  })}
+   115→   115→              </ul>
+   116→   116→              {!collapsed && <Separator className="mt-3" />}
+   117→   117→            </div>
+   118→   118→          ))}
+   119→   119→        </div>
+   120→   120→      </ScrollArea>
+   121→   121→    </nav>
+   122→   122→  );
+   123→   123→}
+   124→   124→
+   125→   125→function ThemeToggle() {
+   126→   126→  const { resolvedTheme, setTheme } = useTheme();
+   127→   127→  const dark = resolvedTheme === "dark";
+   128→   128→  return (
+   129→   129→    <Button
+   130→   130→      variant="ghost"
+   131→   131→      size="icon"
+   132→   132→      className="h-10 w-10"
+   133→   133→      onClick={() => setTheme(dark ? "light" : "dark")}
+   134→   134→      aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
+   135→   135→    >
+   136→   136→      {dark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+   137→   137→    </Button>
+   138→   138→  );
+   139→   139→}
+   140→   140→
+   141→   141→// Live notification shape (subset of the engine payload).
+   142→   142→interface AppNotification {
+   143→   143→  key: string;
+   144→   144→  severity: "CRITICAL" | "WARNING" | "INFO";
+   145→   145→  title: string;
+   146→   146→  message: string;
+   147→   147→  view: string;
+   148→   148→  params?: Record<string, string>;
+   149→   149→}
+   150→   150→
+   151→   151→const SEVERITY_ICON: Record<AppNotification["severity"], React.ReactNode> = {
+   152→   152→  CRITICAL: <AlertTriangle className="h-5 w-5 text-red-500" />,
+   153→   153→  WARNING: <AlertCircle className="h-5 w-5 text-amber-500" />,
+   154→   154→  INFO: <Info className="h-5 w-5 text-sky-500" />,
+   155→   155→};
+   156→   156→
+   157→   157→// Sticky top header
+   158→   158→function TopBar({ onOpenMore, onOpenPalette, onOpenShortcuts }: { onOpenMore: () => void; onOpenPalette: () => void; onOpenShortcuts: () => void }) {
+   159→   159→  const { owner, logout } = useAuth();
+   160→   160→  const { navigate } = useNav();
+   161→   161→  const { lang, setLang } = useLang();
+   162→   162→  const [notifCount, setNotifCount] = useState(0);
+   163→   163→  const [pulse, setPulse] = useState(false);
+   164→   164→  const [undoOpen, setUndoOpen] = useState(false);
+   165→   165→  const [notifRefresh, setNotifRefresh] = useState(0);
+   166→   166→  const { canInstall, install } = usePwaInstall();
+   167→   167→  const prevKeysRef = useRef<Set<string> | null>(null);
+   168→   168→  const firstLoadRef = useRef(true);
+   169→   169→  const pulseTimerRef = useRef<number | null>(null);
+   170→   170→
+   171→   171→  useEffect(() => {
+   172→   172→    let alive = true;
+   173→   173→    const load = async () => {
+   174→   174→      try {
+   175→   175→        const items = await import("@/lib/api-client").then(({ api }) =>
+   176→   176→          api.get<AppNotification[]>("/api/notifications")
+   177→   177→        );
+   178→   178→        if (!alive || !Array.isArray(items)) return;
+   179→   179→        // Respect muted categories (localStorage) — the bell only counts alerts
+   180→   180→        // the owner hasn't muted from the notifications view.
+   181→   181→        const muted = readMutedGroups();
+   182→   182→        const visible = muted.length > 0 ? items.filter((n) => !muted.includes(n.severity)) : items;
+   183→   183→        setNotifCount(visible.length);
+   184→   184→        const prevKeys = prevKeysRef.current;
+   185→   185→        prevKeysRef.current = new Set(items.map((n) => n.key));
+   186→   186→        // Announce only genuine arrivals (skip initial load), when the tab is
+   187→   187→        // visible and the alert isn't muted.
+   188→   188→        if (!firstLoadRef.current && prevKeys && document.visibilityState === "visible") {
+   189→   189→          const fresh = visible.filter((n) => !prevKeys.has(n.key));
+   190→   190→          if (fresh.length > 0) {
+   191→   191→            const rank = { CRITICAL: 0, WARNING: 1, INFO: 2 } as const;
+   192→   192→            const headline =
+   193→   193→              [...fresh].sort((a, b) => rank[a.severity] - rank[b.severity])[0] ?? fresh[0];
+   194→   194→            toast(headline.title, {
+   195→   195→              description:
+   196→   196→                fresh.length > 1
+   197→   197→                  ? `${headline.message} — and ${fresh.length - 1} more new alert${fresh.length === 2 ? "" : "s"}.`
+   198→   198→                  : headline.message,
+   199→   199→              icon: SEVERITY_ICON[headline.severity] ?? SEVERITY_ICON.INFO,
+   200→   200→              action: { label: "View", onClick: () => navigate("notifications") },
+   201→   201→            });
+   202→   202→            // Bell ripple — brief ping so the eye is drawn to the new alert.
+   203→   203→            setPulse(true);
+   204→   204→            if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
+   205→   205→            pulseTimerRef.current = window.setTimeout(() => setPulse(false), 2400);
+   206→   206→          }
+   207→   207→        }
+   208→   208→        firstLoadRef.current = false;
+   209→   209→      } catch { /* ignore */ }
+   210→   210→    };
+   211→   211→    load();
+   212→   212→    const t = setInterval(load, 60_000);
+   213→   213→    // Re-check immediately when the user returns to the tab.
+   214→   214→    const onVis = () => { if (document.visibilityState === "visible") void load(); };
+   215→   215→    // Mute toggles + dismissals (this tab via custom event, other tabs via
+   216→   216→    // storage) re-count instantly.
+   217→   217→    const onMuteChange = () => { void load(); };
+   218→   218→    document.addEventListener("visibilitychange", onVis);
+   219→   219→    window.addEventListener(NOTIF_MUTED_EVENT, onMuteChange);
+   220→   220→    window.addEventListener(NOTIF_CHANGED_EVENT, onMuteChange);
+   221→   221→    window.addEventListener("storage", onMuteChange);
+   222→   222→    return () => {
+   223→   223→      alive = false; clearInterval(t);
+   224→   224→      document.removeEventListener("visibilitychange", onVis);
+   225→   225→      window.removeEventListener(NOTIF_MUTED_EVENT, onMuteChange);
+   226→   226→      window.removeEventListener(NOTIF_CHANGED_EVENT, onMuteChange);
+   227→   227→      window.removeEventListener("storage", onMuteChange);
+   228→   228→      if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
+   229→   229→    };
+   230→   230→  }, [navigate, notifRefresh]);
+   231→   231→
+   232→   232→  const initials = (owner?.name ?? "?").slice(0, 2).toUpperCase();
+   233→   233→
+   234→   234→  return (
+   235→   235→    <>
+   236→   236→    <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+   237→   237→      <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-2 px-3 sm:px-5">
+   238→   238→        <button className="flex items-center gap-2 md:hidden" onClick={() => navigate("dashboard")} aria-label="BizHub home">
+   239→   239→          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600 text-white font-bold">
+   240→   240→            <span className="text-xs">B</span>
+   241→   241→          </div>
+   242→   242→          <span className="text-sm font-bold">BizHub</span>
+   243→   243→        </button>
+   244→   244→
+   245→   245→        <Button variant="ghost" size="icon" className="hidden lg:inline-flex h-9 w-9 lg:hidden" aria-hidden tabIndex={-1} />
+   246→   246→
+   247→   247→        {/* Global search trigger — opens the command palette (Ctrl K) */}
+   248→   248→        <button
+   249→   249→          onClick={onOpenPalette}
+   250→   250→          className="ml-0 hidden sm:flex h-9 min-w-0 flex-1 max-w-md items-center gap-2 rounded-xl border bg-muted/40 px-3 text-sm text-muted-foreground hover:bg-muted hover:border-primary/40 transition-colors"
+   251→   251→          aria-label="Open command palette"
+   252→   252→        >
+   253→   253→          <Search className="h-4 w-4 shrink-0" />
+   254→   254→          <span className="min-w-0 truncate whitespace-nowrap hidden md:inline">{t(lang, "topbar.search")}</span>
+   255→   255→          <span className="md:hidden whitespace-nowrap">{t(lang, "topbar.searchShort")}</span>
+   256→   256→          <kbd className="ml-auto hidden md:inline-flex shrink-0 rounded border bg-background px-1.5 font-mono text-[10px]">Ctrl K</kbd>
+   257→   257→        </button>
+   258→   258→
+   259→   259→        <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
+   260→   260→          <Button variant="ghost" size="icon" className="sm:hidden h-10 w-10" onClick={onOpenPalette} aria-label="Open command palette">
+   261→   261→            <Search className="h-5 w-5" />
+   262→   262→          </Button>
+   263→   263→          <Button
+   264→   264→            variant="ghost"
+   265→   265→            size="icon"
+   266→   266→            className="h-10 w-10"
+   267→   267→            onClick={() => setUndoOpen(true)}
+   268→   268→            aria-label="Undo center"
+   269→   269→            title="Undo center"
+   270→   270→          >
+   271→   271→            <History className="h-5 w-5" />
+   272→   272→          </Button>
+   273→   273→          <Button variant="ghost" size="icon" className="h-10 w-10 relative" onClick={() => navigate("notifications")} aria-label={`Notifications${notifCount ? `, ${notifCount} active` : ""}`}>
+   274→   274→            {pulse && <span className="absolute inset-0 rounded-full bg-red-500/30 animate-ping" aria-hidden />}
+   275→   275→            <Bell className={cn("h-5 w-5 transition-transform", pulse && "scale-110")} />
+   276→   276→            {notifCount > 0 && (
+   277→   277→              <span
+   278→   278→                className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold tabular-nums text-white ring-2 ring-background"
+   279→   279→                aria-hidden
+   280→   280→              >
+   281→   281→                {notifCount > 9 ? "9+" : notifCount}
+   282→   282→              </span>
+   283→   283→            )}
+   284→   284→          </Button>
+   285→   285→          <ThemeToggle />
+   286→   286→          <DropdownMenu>
+   287→   287→            <DropdownMenuTrigger asChild>
+   288→   288→              <Button variant="ghost" size="icon" className="h-10 w-10" aria-label={t(lang, "topbar.language")} title={t(lang, "topbar.language")}>
+   289→   289→                <Languages className="h-5 w-5" />
+   290→   290→              </Button>
+   291→   291→            </DropdownMenuTrigger>
+   292→   292→            <DropdownMenuContent align="end" className="w-40">
+   293→   293→              <DropdownMenuLabel>{t(lang, "topbar.language")}</DropdownMenuLabel>
+   294→   294→              <DropdownMenuSeparator />
+   295→   295→              <DropdownMenuItem onClick={() => setLang("en")} aria-checked={lang === "en"} role="menuitemradio">
+   296→   296→                {lang === "en" ? <Check className="mr-2 h-4 w-4 text-primary" /> : <span className="mr-2 inline-block h-4 w-4" aria-hidden />}
+   297→   297→                {t(lang, "lang.en")}
+   298→   298→              </DropdownMenuItem>
+   299→   299→              <DropdownMenuItem onClick={() => setLang("hi")} aria-checked={lang === "hi"} role="menuitemradio">
+   300→   300→                {lang === "hi" ? <Check className="mr-2 h-4 w-4 text-primary" /> : <span className="mr-2 inline-block h-4 w-4" aria-hidden />}
+   301→   301→                {t(lang, "lang.hi")}
+   302→   302→              </DropdownMenuItem>
+   303→   303→            </DropdownMenuContent>
+   304→   304→          </DropdownMenu>
+   305→   305→          <DropdownMenu>
+   306→   306→            <DropdownMenuTrigger asChild>
+   307→   307→              <button className="ml-0.5 flex items-center gap-2 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Owner menu">
+   308→   308→                <Avatar className="h-9 w-9 border">
+   309→   309→                  <AvatarFallback className="bg-emerald-100 text-emerald-800 text-xs font-bold dark:bg-emerald-900 dark:text-emerald-200">{initials}</AvatarFallback>
+   310→   310→                </Avatar>
+   311→   311→              </button>
+   312→   312→            </DropdownMenuTrigger>
+   313→   313→            <DropdownMenuContent align="end" className="w-52">
+   314→   314→              <DropdownMenuLabel>
+   315→   315→                <p className="text-sm font-semibold">{owner?.name}</p>
+   316→   316→                <p className="text-xs text-muted-foreground">@{owner?.username}</p>
+   317→   317→              </DropdownMenuLabel>
+   318→   318→              <DropdownMenuSeparator />
+   319→   319→              <DropdownMenuItem onClick={() => navigate("owners")}>
+   320→   320→                <ShieldCheck className="mr-2 h-4 w-4" /> {t(lang, "menu.owners")}
+   321→   321→              </DropdownMenuItem>
+   322→   322→              <DropdownMenuItem onClick={() => navigate("settings")}>
+   323→   323→                <Building2 className="mr-2 h-4 w-4" /> {t(lang, "menu.settings")}
+   324→   324→              </DropdownMenuItem>
+   325→   325→              {canInstall && (
+   326→   326→                <DropdownMenuItem
+   327→   327→                  onClick={() =>
+   328→   328→                    install().then((r) => {
+   329→   329→                      if (r === "accepted") toast.success("BizHub installed — find it on your home screen");
+   330→   330→                    })
+   331→   331→                  }
+   332→   332→                >
+   333→   333→                  <Smartphone className="mr-2 h-4 w-4" /> {t(lang, "menu.install")}
+   334→   334→                </DropdownMenuItem>
+   335→   335→              )}
+   336→   336→              <DropdownMenuSeparator />
+   337→   337→              <DropdownMenuItem onClick={onOpenShortcuts}>
+   338→   338→                <Keyboard className="mr-2 h-4 w-4" /> Press ? for shortcuts
+   339→   339→              </DropdownMenuItem>
+   340→   340→              <DropdownMenuSeparator />
+   341→   341→              <DropdownMenuItem onClick={() => logout()} className="text-red-600 dark:text-red-400">
+   342→   342→                <LogOut className="mr-2 h-4 w-4" /> {t(lang, "menu.logout")}
+   343→   343→              </DropdownMenuItem>
+   344→   344→            </DropdownMenuContent>
+   345→   345→          </DropdownMenu>
+   346→   346→        </div>
+   347→   347→      </div>
+   348→   348→    </header>
+   349→   349→
+   350→   350→    <UndoCenter
+   351→   351→      open={undoOpen}
+   352→   352→      onOpenChange={setUndoOpen}
+   353→   353→      onChanged={() => setNotifRefresh((n) => n + 1)}
+   354→   354→    />
+   355→   355→    </>
+   356→   356→  );
+   357→   357→}
+   358→   358→
+   359→   359→function BusinessBanner() {
+   360→   360→  const { scope, setScope } = useBusiness();
+   361→   361→  const { navigate } = useNav();
+   362→   362→  const { lang } = useLang();
+   363→   363→  const scopeInfo = {
+   364→   364→    ALL: { label: t(lang, "scope.badge.ALL"), cls: "bg-muted text-muted-foreground border" },
+   365→   365→    MANPOWER: { label: t(lang, "scope.badge.MANPOWER"), cls: "bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300" },
+   366→   366→    TRANSPORT: { label: t(lang, "scope.badge.TRANSPORT"), cls: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-300" },
+   367→   367→  }[scope];
+   368→   368→  const options: { key: BusinessScope; label: string }[] = [
+   369→   369→    { key: "ALL", label: t(lang, "scope.ALL") },
+   370→   370→    { key: "MANPOWER", label: t(lang, "scope.MANPOWER") },
+   371→   371→    { key: "TRANSPORT", label: t(lang, "scope.TRANSPORT") },
+   372→   372→  ];
+   373→   373→  return (
+   374→   374→    <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-2 px-3 pt-2.5 sm:px-5">
+   375→   375→      <div className="flex items-center gap-2 overflow-hidden">
+   376→   376→        <Badge variant="outline" className={cn("shrink-0 font-semibold", scopeInfo.cls)}>{scopeInfo.label}</Badge>
+   377→   377→        <span className="hidden text-xs text-muted-foreground truncate sm:inline">{t(lang, `scope.hint.${scope}`)}</span>
+   378→   378→      </div>
+   379→   379→      <div className="flex shrink-0 items-center rounded-full border bg-card p-0.5" role="group" aria-label="Business scope">
+   380→   380→        {options.map((o) => (
+   381→   381→          <button
+   382→   382→            key={o.key}
+   383→   383→            onClick={() => { setScope(o.key); navigate(o.key === "MANPOWER" ? "manpower" : o.key === "TRANSPORT" ? "transport" : "dashboard"); }}
+   384→   384→            className={cn(
+   385→   385→              "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors min-h-[26px]",
+   386→   386→              scope === o.key ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
+   387→   387→            )}
+   388→   388→            aria-pressed={scope === o.key}
+   389→   389→          >
+   390→   390→            {o.key !== "ALL" && (
+   391→   391→              <span
+   392→   392→                className={cn("h-1.5 w-1.5 shrink-0 rounded-full", o.key === "MANPOWER" ? "bg-emerald-500" : "bg-amber-500")}
+   393→   393→                aria-hidden
+   394→   394→              />
+   395→   395→            )}
+   396→   396→            {o.label}
+   397→   397→          </button>
+   398→   398→        ))}
+   399→   399→      </div>
+   400→   400→    </div>
+   401→   401→  );
+   402→   402→}
+   403→   403→
+   404→   404→function BottomNav({ onOpenMore }: { onOpenMore: () => void }) {
+   405→   405→  const { view, navigate } = useNav();
+   406→   406→  const { setScope } = useBusiness();
+   407→   407→  const { lang } = useLang();
+   408→   408→  const items = [
+   409→   409→    { key: "dashboard", label: t(lang, "nav.home"), icon: Home, action: () => { setScope("ALL"); navigate("dashboard"); } },
+   410→   410→    { key: "manpower", label: viewLabel(lang, "manpower", "Manpower"), icon: Users, action: () => { setScope("MANPOWER"); navigate("manpower"); } },
+   411→   411→    { key: "transport", label: viewLabel(lang, "transport", "Transport"), icon: Truck, action: () => { setScope("TRANSPORT"); navigate("transport"); } },
+   412→   412→    { key: "payments", label: viewLabel(lang, "payments", "Collections"), icon: Wallet, action: () => navigate("payments") },
+   413→   413→  ];
+   414→   414→  return (
+   415→   415→    <nav aria-label="Bottom navigation" className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85 md:hidden pb-[env(safe-area-inset-bottom)]">
+   416→   416→      <div className="mx-auto grid max-w-lg grid-cols-5">
+   417→   417→        {items.map((item) => {
+   418→   418→          const active = view === item.key;
+   419→   419→          return (
+   420→   420→            <button
+   421→   421→              key={item.key}
+   422→   422→              onClick={item.action}
+   423→   423→              aria-current={active ? "page" : undefined}
+   424→   424→              className={cn(
+   425→   425→                "flex min-h-[56px] flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-[10px] font-medium transition-colors active:scale-95",
+   426→   426→                active ? "text-primary" : "text-muted-foreground hover:text-foreground"
+   427→   427→              )}
+   428→   428→            >
+   429→   429→              <item.icon
+   430→   430→                className={cn(
+   431→   431→                  "h-5 w-5 transition-all duration-300 ease-out",
+   432→   432→                  active ? "-translate-y-px scale-110 drop-shadow-sm" : "scale-100"
+   433→   433→                )}
+   434→   434→                aria-hidden
+   435→   435→              />
+   436→   436→              {item.label}
+   437→   437→              {/* animated active indicator — grows from center */}
+   438→   438→              <span
+   439→   439→                className={cn(
+   440→   440→                  "h-0.5 rounded-full bg-primary transition-all duration-300 ease-out",
+   441→   441→                  active ? "w-7 opacity-100" : "w-0 opacity-0"
+   442→   442→                )}
+   443→   443→                aria-hidden
+   444→   444→              />
+   445→   445→            </button>
+   446→   446→          );
+   447→   447→        })}
+   448→   448→        <button
+   449→   449→          onClick={onOpenMore}
+   450→   450→          className="flex min-h-[56px] flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-[10px] font-medium text-muted-foreground hover:text-foreground"
+   451→   451→          aria-label="More menu"
+   452→   452→        >
+   453→   453→          <LayoutGrid className="h-5 w-5" aria-hidden />
+   454→   454→          {t(lang, "nav.more")}
+   455→   455→          <span className="h-0.5 w-6 rounded-full bg-transparent" aria-hidden />
+   456→   456→        </button>
+   457→   457→      </div>
+   458→   458→    </nav>
+   459→   459→  );
+   460→   460→}
+   461→   461→
+   462→   462→export function AppShell({ children }: { children: React.ReactNode }) {
+   463→   463→  const { navigate, view } = useNav();
+   464→   464→  const [collapsed, setCollapsed] = useState(false);
+   465→   465→  const [moreOpen, setMoreOpen] = useState(false);
+   466→   466→  const [paletteOpen, setPaletteOpen] = useState(false);
+   467→   467→  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+   468→   468→
+   469→   469→  useEffect(() => {
+   470→   470→    // "G then key" chord: pendingG holds the timeout id while waiting for the
+   471→   471→    // second key (1s window). Cleared by typing anywhere else.
+   472→   472→    let pendingG: number | null = null;
+   473→   473→    const clearPendingG = () => {
+   474→   474→      if (pendingG !== null) window.clearTimeout(pendingG);
+   475→   475→      pendingG = null;
+   476→   476→    };
+   477→   477→    const GO_CHORDS: Record<string, string> = {
+   478→   478→      d: "dashboard", e: "employees", p: "properties", t: "trips",
+   479→   479→    };
+   480→   480→    const isTypingTarget = (el: EventTarget | null): boolean => {
+   481→   481→      const t = el as HTMLElement | null;
+   482→   482→      return Boolean(
+   483→   483→        t &&
+   484→   484→        (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)
+   485→   485→      );
+   486→   486→    };
+   487→   487→    const onKey = (e: KeyboardEvent) => {
+   488→   488→      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+   489→   489→        e.preventDefault();
+   490→   490→        clearPendingG();
+   491→   491→        setPaletteOpen((o) => !o);
+   492→   492→        return;
+   493→   493→      }
+   494→   494→      // Palette is open → its input owns the keyboard; ignore global chords.
+   495→   495→      if (paletteOpen) return;
+   496→   496→      if (e.altKey || e.ctrlKey || e.metaKey) return;
+   497→   497→      // Typing in a field always cancels any pending chord.
+   498→   498→      if (isTypingTarget(e.target)) {
+   499→   499→        clearPendingG();
+   500→   500→        return;
+   501→   501→      }
+   502→   502→      if (pendingG !== null) {
+   503→   503→        const target = GO_CHORDS[e.key.toLowerCase()];
+   504→   504→        clearPendingG();
+   505→   505→        if (target) {
+   506→   506→          e.preventDefault();
+   507→   507→          navigate(target);
+   508→   508→        }
+   509→   509→        return;
+   510→   510→      }
+   511→   511→      if (e.key === "g" || e.key === "G") {
+   512→   512→        pendingG = window.setTimeout(clearPendingG, 1000);
+   513→   513→        return;
+   514→   514→      }
+   515→   515→      if (e.key === "?") {
+   516→   516→        e.preventDefault();
+   517→   517→        setShortcutsOpen(true);
+   518→   518→      }
+   519→   519→    };
+   520→   520→    window.addEventListener("keydown", onKey);
+   521→   521→    return () => {
+   522→   522→      window.removeEventListener("keydown", onKey);
+   523→   523→      clearPendingG();
+   524→   524→    };
+   525→   525→  }, [navigate, paletteOpen]);
+   526→   526→
+   527→   527→  const currentView = getView(view);
+   528→   528→  const isWide = ["dashboard", "manpower", "transport"].includes(view);
+   529→   529→
+   530→   530→  return (
+   531→   531→    <div className="flex min-h-screen bg-muted/30">
+   532→   532→      {/* Desktop sidebar */}
+   533→   533→      <aside className={cn("sticky top-0 hidden h-screen shrink-0 border-r bg-background transition-all md:block", collapsed ? "w-[68px]" : "w-60")}>
+   534→   534→        <SideNav collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
+   535→   535→      </aside>
+   536→   536→
+   537→   537→      <div className="flex min-w-0 flex-1 flex-col">
+   538→   538→        <TopBar onOpenMore={() => setMoreOpen(true)} onOpenPalette={() => setPaletteOpen(true)} onOpenShortcuts={() => setShortcutsOpen(true)} />
+   539→   539→        <BusinessBanner />
+   540→   540→        <main
+   541→   541→          id="main-scroll"
+   542→   542→          className={cn("mx-auto w-full max-w-[1600px] flex-1 px-3 pb-24 pt-3 sm:px-5 sm:pt-4 md:pb-10", !isWide && "max-w-[1400px]")}
+   543→   543→          aria-label={currentView?.label ?? "Content"}
+   544→   544→        >
+   545→   545→          {/* Keyed by view → remounts on navigation and plays the enter animation */}
+   546→   546→          <div key={view} className="view-enter">
+   547→   547→            {children}
+   548→   548→          </div>
+   549→   549→        </main>
+   550→   550→        <footer className="mt-auto hidden border-t bg-background py-3 md:block">
+   551→   551→          <div className="mx-auto flex max-w-[1600px] items-center justify-between px-5 text-[11px] text-muted-foreground">
+   552→   552→            <p>BizHub — one control center for Manpower & Transport businesses.</p>
+   553→   553→            <p className="tabular-nums">{new Date().getFullYear()} · All financial actions are audited.</p>
+   554→   554→          </div>
+   555→   555→        </footer>
+   556→   556→      </div>
+   557→   557→
+   558→   558→      {/* Mobile bottom nav */}
+   559→   559→      <BottomNav onOpenMore={() => setMoreOpen(true)} />
+   560→   560→
+   561→   561→      {/* Global command palette (Ctrl/Cmd+K, search buttons) */}
+   562→   562→      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+   563→   563→
+   564→   564→      {/* Keyboard shortcuts overlay (? key or owner menu) */}
+   565→   565→      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+   566→   566→
+   567→   567→      {/* Mobile "More" sheet with full nav */}
+   568→   568→      <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
+   569→   569→        <SheetTrigger className="hidden" aria-hidden />
+   570→   570→        <SheetContent side="left" className="w-[280px] p-0">
+   571→   571→          <SheetHeader className="sr-only">
+   572→   572→            <SheetTitle>All navigation</SheetTitle>
+   573→   573→          </SheetHeader>
+   574→   574→          <SideNav onNavigate={() => setMoreOpen(false)} />
+   575→   575→        </SheetContent>
+   576→   576→      </Sheet>
+   577→   577→    </div>
+   578→   578→  );
+   579→   579→}
+   580→   580→

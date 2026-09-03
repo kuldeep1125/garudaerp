@@ -5,7 +5,8 @@ import { api, qs } from "@/lib/api-client";
 import { formatINR, parseAmount } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
 import { PageHeader } from "@/components/shared/page-header";
-import { DataTable, type Column } from "@/components/shared/data-table";
+import { ViewFab } from "@/components/shared/view-fab";
+import { DataTable, downloadCsv, type Column } from "@/components/shared/data-table";
 import { RangeSelector, type RangeKey } from "@/components/shared/filters";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -24,11 +25,11 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useLang, t } from "@/lib/i18n";
-import { CalendarCheck, Pencil, Trash2, CalendarDays, ChevronDown } from "lucide-react";
+import { CalendarCheck, Pencil, Trash2, CalendarDays, ChevronDown, Download } from "lucide-react";
 import {
   DeploymentRec, DeployWizard, ListResp, MoneyInput, Option, PropertyRec, SelectInput, ShiftBadgeInline,
   SHIFT_OPTIONS, SHIFT_UNITS, errMessage, fmtDateTime, fmtDay, todayStr, useAsync, useMutation,
-  undoRequest,
+  undoRequest, UNDO_APPLIED_EVENT,
 } from "./_shared";
 
 const SHIFT_FILTER_OPTIONS: Option[] = [
@@ -102,6 +103,9 @@ export default function DeploymentsView({ params }: ViewProps) {
   const [editRates, setEditRates] = useState(false);
   const [rateForm, setRateForm] = useState({ shift: "DAY", billingRate: "", payoutRate: "", adjustmentAmount: "", adjustmentNote: "", notes: "" });
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Bulk selection + delete
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkConfirm, setBulkConfirm] = useState(false);
   const { mutate, saving } = useMutation();
 
   // Attendance month grid — fetched lazily, only while expanded.
@@ -180,6 +184,13 @@ export default function DeploymentsView({ params }: ViewProps) {
 
   useEffect(() => { void load(); }, [load]);
 
+  // An undo applied from the global Undo Center may have restored rows — refresh.
+  useEffect(() => {
+    const onUndoApplied = () => void load();
+    window.addEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
+    return () => window.removeEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
+  }, [load]);
+
   const rows = useMemo(() => data?.items ?? [], [data]);
   const totals = data?.totals;
 
@@ -222,6 +233,43 @@ export default function DeploymentsView({ params }: ViewProps) {
     );
     setConfirmDelete(false);
     if (res.ok) { setDetail(null); void load(); }
+  };
+
+  // Bulk remove: one DELETE at a time (allSettled semantics) — sequential so
+  // concurrent FIFO recomputes can't race; every row is snapshotted by the
+  // DELETE endpoint, so one Undo action restores the whole batch zero-mismatch.
+  const bulkDelete = async () => {
+    const ids = rows.filter((r) => selectedIds.has(r.id)).map((r) => r.id);
+    if (ids.length === 0) { setBulkConfirm(false); return; }
+    setBulkConfirm(false);
+    const results: PromiseSettledResult<unknown>[] = [];
+    for (const id of ids) {
+      try {
+        results.push({ status: "fulfilled", value: await api.del(`/api/deployments/${id}`) });
+      } catch (e) {
+        results.push({ status: "rejected", reason: e });
+      }
+    }
+    const okIds = ids.filter((_, i) => results[i].status === "fulfilled");
+    if (okIds.length > 0) {
+      toast.success(`Removed ${okIds.length} of ${ids.length} deployment${ids.length === 1 ? "" : "s"}`, {
+        duration: 8000,
+        action: {
+          label: "Undo",
+          onClick: () => {
+            void (async () => {
+              for (const id of okIds) {
+                await undoRequest({ module: "DEPLOYMENT", recordId: id, onUndo: () => void load() });
+              }
+            })();
+          },
+        },
+      });
+    } else {
+      toast.error("Could not remove the selected deployments");
+    }
+    setSelectedIds(new Set());
+    void load();
   };
 
   const columns: Column<DeploymentRec>[] = [
@@ -292,7 +340,7 @@ export default function DeploymentsView({ params }: ViewProps) {
           <CardContent className="border-t pt-3">
             <div className="mb-3 flex items-center justify-between gap-2">
               <div className="flex items-center gap-1">
-                <Button variant="outline" size="sm" className="h-7 w-7 p-0" aria-label="Previous month" onClick={() => setAttMonth((m) => shiftMonth(m, -1))}>
+                <Button variant="outline" size="sm" className="h-9 w-9 sm:h-7 sm:w-7 p-0" aria-label="Previous month" onClick={() => setAttMonth((m) => shiftMonth(m, -1))}>
                   ‹
                 </Button>
                 <Button
@@ -306,7 +354,7 @@ export default function DeploymentsView({ params }: ViewProps) {
                 >
                   This month
                 </Button>
-                <Button variant="outline" size="sm" className="h-7 w-7 p-0" aria-label="Next month" onClick={() => setAttMonth((m) => shiftMonth(m, 1))}>
+                <Button variant="outline" size="sm" className="h-9 w-9 sm:h-7 sm:w-7 p-0" aria-label="Next month" onClick={() => setAttMonth((m) => shiftMonth(m, 1))}>
                   ›
                 </Button>
               </div>
@@ -493,10 +541,45 @@ export default function DeploymentsView({ params }: ViewProps) {
               rowKey={(r) => r.id}
               onRowClick={openDetail}
               exportName="deployments"
+              stickyFirstCol
               loading={loading}
               emptyIcon={CalendarCheck}
               emptyTitle="No deployments for this filter"
               emptyDescription="Use the Deploy Employees button to create today's roster."
+              selectKey={(r) => r.id}
+              selectedIds={selectedIds}
+              onSelectedChange={setSelectedIds}
+              bulkBar={(ids) => (
+                <>
+                  <span className="px-1.5 text-xs font-semibold tabular-nums whitespace-nowrap">
+                    {ids.length} selected
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs"
+                    onClick={() =>
+                      downloadCsv(
+                        "deployments-selected",
+                        columns,
+                        rows.filter((r) => ids.includes(r.id))
+                      )
+                    }
+                    aria-label={`Export ${ids.length} selected deployments as CSV`}
+                  >
+                    <Download className="h-3.5 w-3.5" aria-hidden />Export CSV
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs"
+                    onClick={() => setBulkConfirm(true)}
+                    aria-label={`Remove ${ids.length} selected deployments`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" aria-hidden />Remove
+                  </Button>
+                </>
+              )}
             />
           </CardContent>
         </Card>
@@ -635,6 +718,33 @@ export default function DeploymentsView({ params }: ViewProps) {
             <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
             <AlertDialogAction className="min-h-10 bg-red-600 text-white hover:bg-red-700" onClick={() => void deleteDeployment()}>
               {saving ? "Removing…" : "Remove entry"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Mobile FAB — alternate trigger for the wizard (hidden while bulk rows
+          are selected so the sticky bulk bar stays unobstructed) */}
+      {selectedIds.size === 0 && (
+        <ViewFab icon={CalendarCheck} label="Deploy employees" onClick={() => setWizardOpen(true)} />
+      )}
+
+      {/* Bulk remove confirmation */}
+      <AlertDialog open={bulkConfirm} onOpenChange={setBulkConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove {selectedIds.size} selected deployment{selectedIds.size === 1 ? "" : "s"}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Every removed row is fully snapshotted — a single Undo action after removal restores the whole batch, including FIFO payment allocation.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="min-h-10 bg-red-600 text-white hover:bg-red-700"
+              onClick={(e) => { e.preventDefault(); void bulkDelete(); }}
+            >
+              Remove {selectedIds.size}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

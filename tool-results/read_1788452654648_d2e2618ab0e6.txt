@@ -1,0 +1,652 @@
+     1→"use client";
+     2→
+     3→import { useMemo, useState } from "react";
+     4→import { api, downloadCSV, qs, toCSV } from "@/lib/api-client";
+     5→import { formatINR } from "@/lib/money";
+     6→import type { ViewProps } from "@/components/view-types";
+     7→import { PageHeader } from "@/components/shared/page-header";
+     8→import { DataTable, type Column } from "@/components/shared/data-table";
+     9→import { RangeSelector, type RangeKey } from "@/components/shared/filters";
+    10→import { MonthPicker, toMonth } from "@/components/shared/month-picker";
+    11→import { EmptyState } from "@/components/shared/empty-state";
+    12→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+    13→import { Button } from "@/components/ui/button";
+    14→import { Input } from "@/components/ui/input";
+    15→import { cn } from "@/lib/utils";
+    16→import { toast } from "sonner";
+    17→import {
+    18→  BarChart3, Building2, CalendarCheck, CarFront, Crown, Download, Info, MapPin, Play, Printer,
+    19→  Receipt, ReceiptText, Route, TrendingUp, Users, Wallet, type LucideIcon,
+    20→} from "lucide-react";
+    21→import {
+    22→  BarsCompare, CHART_COLORS, ErrorState, Field, Option, SelectInput, todayStr, useAsync,
+    23→} from "./_shared";
+    24→
+    25→// ---------------------------------------------------------------------------
+    26→// Report catalog
+    27→// ---------------------------------------------------------------------------
+    28→
+    29→type ReportConfig = "range" | "range-business" | "date" | "month";
+    30→
+    31→interface ReportDef {
+    32→  type: string;
+    33→  title: string;
+    34→  subtitle: string;
+    35→  icon: LucideIcon;
+    36→  config: ReportConfig;
+    37→}
+    38→
+    39→const REPORTS: ReportDef[] = [
+    40→  { type: "employee-earnings", title: "Employee Earnings", subtitle: "Shifts, advances & net pay by employee", icon: Users, config: "range" },
+    41→  { type: "property-revenue", title: "Property Revenue", subtitle: "Billing vs collections by property", icon: Building2, config: "range" },
+    42→  { type: "collections", title: "Collections", subtitle: "Daily billed & received with outstanding", icon: Wallet, config: "range" },
+    43→  { type: "expenses", title: "Expenses", subtitle: "Expense entries by category & business", icon: Receipt, config: "range-business" },
+    44→  { type: "profitability", title: "Profitability", subtitle: "Billing, payout, expenses & net margin", icon: TrendingUp, config: "range-business" },
+    45→  { type: "vehicle-profitability", title: "Vehicle Profitability", subtitle: "Revenue, opex, EMI & net by vehicle", icon: CarFront, config: "range" },
+    46→  { type: "trip-profit", title: "Trip Profitability", subtitle: "Per-trip revenue, estimated cost & margin", icon: Route, config: "range" },
+    47→  { type: "daily-operations", title: "Daily Operations", subtitle: "All deployments for a single day", icon: CalendarCheck, config: "date" },
+    48→  { type: "owner-expenses", title: "Owner Expenses", subtitle: "Spending by owner with withdrawals", icon: Crown, config: "range" },
+    49→  { type: "settlement-summary", title: "Settlement Summary", subtitle: "Month payroll summary per employee", icon: ReceiptText, config: "month" },
+    50→];
+    51→
+    52→const BUSINESS_OPTIONS: Option[] = [
+    53→  { label: "All businesses", value: "" },
+    54→  { label: "Manpower", value: "MANPOWER" },
+    55→  { label: "Transport", value: "TRANSPORT" },
+    56→];
+    57→
+    58→// ---------------------------------------------------------------------------
+    59→// Report response shape (per API contract)
+    60→// ---------------------------------------------------------------------------
+    61→
+    62→interface ReportColumn {
+    63→  key: string;
+    64→  label: string;
+    65→  type?: string;
+    66→}
+    67→
+    68→interface ReportResp {
+    69→  columns: ReportColumn[];
+    70→  rows: Record<string, unknown>[];
+    71→  totals?: Record<string, unknown> | null;
+    72→  meta?: unknown;
+    73→  note?: string;
+    74→  chart?: { label: string; revenue: number; cost: number; profit: number; marginPct: number }[] | null;
+    75→  // Drill-down extras (employee-earnings with employeeId)
+    76→  employee?: { id: string; fullName: string; code: string; designation: string | null; status: string } | null;
+    77→  days?: { date: string; propertyName: string; shift: string; payoutRate: number; earnings: number }[];
+    78→  dayTotals?: { daysWorked: number; shifts: number; earnings: number };
+    79→  propertySummary?: { propertyName: string; shifts?: number; employees?: number; dayShifts: number; nightShifts: number; earnings?: number; billing?: number; payout?: number }[];
+    80→}
+    81→
+    82→interface PickerItem { id: string; name?: string; fullName?: string; code?: string }
+    83→
+    84→// ---------------------------------------------------------------------------
+    85→// Local helpers (not added to _shared.tsx by policy)
+    86→// ---------------------------------------------------------------------------
+    87→
+    88→function ymd(d: Date): string {
+    89→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    90→}
+    91→
+    92→function computeRange(range: RangeKey, customFrom: string, customTo: string): { from: string; to: string } {
+    93→  const now = new Date();
+    94→  const t = todayStr();
+    95→  switch (range) {
+    96→    case "today":
+    97→      return { from: t, to: t };
+    98→    case "yesterday":
+    99→      return { from: todayStr(-1), to: todayStr(-1) };
+   100→    case "week": {
+   101→      const dow = now.getDay();
+   102→      const monday = new Date(now);
+   103→      monday.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1));
+   104→      return { from: ymd(monday), to: t };
+   105→    }
+   106→    case "lastweek": {
+   107→      const dow = now.getDay();
+   108→      const monday = new Date(now);
+   109→      monday.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1) - 7);
+   110→      const sunday = new Date(monday);
+   111→      sunday.setDate(monday.getDate() + 6);
+   112→      return { from: ymd(monday), to: ymd(sunday) };
+   113→    }
+   114→    case "month":
+   115→      return { from: `${t.slice(0, 7)}-01`, to: t };
+   116→    case "lastmonth": {
+   117→      const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+   118→      const last = new Date(now.getFullYear(), now.getMonth(), 0);
+   119→      return { from: ymd(first), to: ymd(last) };
+   120→    }
+   121→    case "custom": {
+   122→      let from = customFrom || t;
+   123→      let to = customTo || customFrom || t;
+   124→      if (from > to) [from, to] = [to, from];
+   125→      return { from, to };
+   126→    }
+   127→  }
+   128→}
+   129→
+   130→function fmtCell(v: unknown, type?: string): React.ReactNode {
+   131→  if (v === null || v === undefined || v === "") return <span className="text-muted-foreground">—</span>;
+   132→  if (type === "money" || type === "currency") return formatINR(Number(v));
+   133→  if (type === "date") return fmtDayText(String(v));
+   134→  return String(v);
+   135→}
+   136→
+   137→function fmtDayText(v: string): string {
+   138→  const d = new Date(v.length === 10 ? `${v}T00:00:00` : v);
+   139→  return Number.isNaN(d.getTime()) ? v : d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+   140→}
+   141→
+   142→function fmtCellText(v: unknown, type?: string): string {
+   143→  if (v === null || v === undefined || v === "") return "";
+   144→  if (type === "money" || type === "currency") return formatINR(Number(v));
+   145→  if (type === "date") return fmtDayText(String(v));
+   146→  return String(v);
+   147→}
+   148→
+   149→function labelFor(key: string, cols: ReportColumn[]): string {
+   150→  const found = cols.find((c) => c.key === key);
+   151→  if (found) return found.label;
+   152→  return key.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase());
+   153→}
+   154→
+   155→function fmtTotal(v: unknown, cols: ReportColumn[], key: string): string {
+   156→  const t = cols.find((c) => c.key === key)?.type;
+   157→  if (t === "money" || t === "currency") return formatINR(Number(v));
+   158→  if (typeof v === "number") return v.toLocaleString("en-IN");
+   159→  return String(v ?? "—");
+   160→}
+   161→
+   162→/** Small shift badge — sun for DAY, moon for NIGHT, dual for FULL. */
+   163→function ShiftPill({ shift }: { shift: string }) {
+   164→  const s = shift.toUpperCase();
+   165→  const isNight = s === "NIGHT";
+   166→  return (
+   167→    <span
+   168→      className={cn(
+   169→        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+   170→        s === "FULL" ? "bg-primary text-primary-foreground" : isNight ? "bg-secondary text-secondary-foreground" : "bg-accent text-accent-foreground"
+   171→      )}
+   172→    >
+   173→      {s === "DAY" ? "DAY" : s === "NIGHT" ? "NIGHT" : "FULL (D+N)"}
+   174→    </span>
+   175→  );
+   176→}
+   177→
+   178→function metaText(meta: unknown): string | null {
+   179→  if (meta === null || meta === undefined) return null;
+   180→  if (typeof meta === "string") return meta;
+   181→  if (typeof meta === "object") {
+   182→    try {
+   183→      const parts = Object.entries(meta as Record<string, unknown>).map(([k, v]) => `${k}: ${String(v)}`);
+   184→      return parts.length > 0 ? parts.join(" · ") : null;
+   185→    } catch {
+   186→      return null;
+   187→    }
+   188→  }
+   189→  return String(meta);
+   190→}
+   191→
+   192→// ---------------------------------------------------------------------------
+   193→// View
+   194→// ---------------------------------------------------------------------------
+   195→
+   196→export default function ReportsView(_props: ViewProps) {
+   197→  const [type, setType] = useState<string | null>(null);
+   198→  const [range, setRange] = useState<RangeKey>("month");
+   199→  const [custom, setCustom] = useState(false);
+   200→  const [customFrom, setCustomFrom] = useState(todayStr(-29));
+   201→  const [customTo, setCustomTo] = useState(todayStr());
+   202→  const [business, setBusiness] = useState("");
+   203→  const [date, setDate] = useState(todayStr());
+   204→  const [month, setMonth] = useState(toMonth());
+   205→  const [employeeId, setEmployeeId] = useState("");
+   206→  const [propertyId, setPropertyId] = useState("");
+   207→
+   208→  const def = REPORTS.find((r) => r.type === type) ?? null;
+   209→
+   210→  // Picker options — loaded only for the report that needs them
+   211→  const employees = useAsync<{ items: PickerItem[] }>(
+   212→    () => (def?.type === "employee-earnings" ? api.get("/api/employees?pageSize=200") : Promise.resolve({ items: [] })),
+   213→    [def?.type]
+   214→  );
+   215→  const properties = useAsync<{ items: PickerItem[] }>(
+   216→    () => (def?.type === "daily-operations" ? api.get("/api/properties?pageSize=200") : Promise.resolve({ items: [] })),
+   217→    [def?.type]
+   218→  );
+   219→
+   220→  const params = useMemo<Record<string, string>>(() => {
+   221→    if (!def) return {};
+   222→    if (def.config === "date") return { date, ...(propertyId ? { propertyId } : {}) };
+   223→    if (def.config === "month") return { month };
+   224→    const { from, to } = computeRange(custom ? "custom" : range, customFrom, customTo);
+   225→    const p: Record<string, string> = { from, to };
+   226→    if (def.config === "range-business" && business) p.business = business;
+   227→    if (def.type === "employee-earnings" && employeeId) p.employeeId = employeeId;
+   228→    return p;
+   229→  }, [def, range, custom, customFrom, customTo, business, date, month, employeeId, propertyId]);
+   230→
+   231→  const { data, loading, error, reload } = useAsync<ReportResp | null>(
+   232→    () => (def ? api.get<ReportResp>(`/api/reports/${def.type}${qs(params)}`) : Promise.resolve(null)),
+   233→    [def, params]
+   234→  );
+   235→
+   236→  const rows = useMemo(
+   237→    () => (data?.rows ?? []).map((r, i) => ({ __idx: i, ...r })),
+   238→    [data]
+   239→  );
+   240→
+   241→  const columns = useMemo<Column<Record<string, unknown>>[]>(
+   242→    () =>
+   243→      (data?.columns ?? []).map((c, idx) => ({
+   244→        key: c.key,
+   245→        label: c.label,
+   246→        primary: idx === 0,
+   247→        className: c.type === "money" || c.type === "currency" || c.type === "number" ? "text-right" : undefined,
+   248→        render: (row: Record<string, unknown>) => fmtCell(row[c.key], c.type),
+   249→        value: (row: Record<string, unknown>) => fmtCellText(row[c.key], c.type),
+   250→      })),
+   251→    [data]
+   252→  );
+   253→
+   254→  // Day-by-day sheet columns for the employee drill-down card
+   255→  const dayColumns = useMemo<Column<Record<string, unknown>>[]>(
+   256→    () => [
+   257→      { key: "date", label: "Date", primary: true, render: (r) => fmtDayText(String(r.date)), value: (r) => String(r.date) },
+   258→      { key: "propertyName", label: "Property", render: (r) => <span className="flex items-center gap-1"><MapPin className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />{String(r.propertyName)}</span>, value: (r) => String(r.propertyName) },
+   259→      { key: "shift", label: "Shift", render: (r) => <ShiftPill shift={String(r.shift)} />, value: (r) => String(r.shift) },
+   260→      { key: "payoutRate", label: "Rate", hideOnMobile: true, className: "text-right", render: (r) => formatINR(Number(r.payoutRate)), value: (r) => String(r.payoutRate) },
+   261→      { key: "earnings", label: "Earned", className: "text-right", render: (r) => <span className="font-semibold tabular-nums">{formatINR(Number(r.earnings))}</span>, value: (r) => String(r.earnings) },
+   262→    ],
+   263→    []
+   264→  );
+   265→
+   266→  const caption = metaText(data?.meta);
+   267→
+   268→  const totalsNode =
+   269→    data?.totals && Object.keys(data.totals).length > 0 ? (
+   270→      <div className="mt-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
+   271→        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+   272→          <span className="text-[10px] font-bold uppercase tracking-wider text-primary">Total</span>
+   273→          {Object.entries(data.totals).map(([k, v]) => (
+   274→            <span key={k} className="text-xs text-muted-foreground">
+   275→              {labelFor(k, data.columns)}:{" "}
+   276→              <span className="font-semibold tabular-nums text-foreground">{fmtTotal(v, data.columns, k)}</span>
+   277→            </span>
+   278→          ))}
+   279→        </div>
+   280→      </div>
+   281→    ) : null;
+   282→
+   283→  const exportCSV = () => {
+   284→    if (!data || !def || data.rows.length === 0) return;
+   285→    const csv = toCSV(data.rows, data.columns.map((c) => ({ key: c.key, label: c.label })));
+   286→    downloadCSV(`bizhub-${def.type}-${todayStr()}.csv`, csv);
+   287→    toast.success("Report exported as CSV");
+   288→  };
+   289→
+   290→  // Human-readable period for the print header.
+   291→  const periodLabel = useMemo(() => {
+   292→    if (!def) return "";
+   293→    if (def.config === "date") return date;
+   294→    if (def.config === "month") return month;
+   295→    const { from, to } = computeRange(custom ? "custom" : range, customFrom, customTo);
+   296→    return from === to ? from : `${from} → ${to}`;
+   297→  }, [def, date, month, custom, range, customFrom, customTo]);
+   298→
+   299→  return (
+   300→    <div className="space-y-4">
+   301→      <PageHeader title="Reports" subtitle="Run, review and export business reports" icon={BarChart3} />
+   302→
+   303→      {/* Report selector — 2 cols mobile, 3 cols tablet+ */}
+   304→      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3" aria-label="Available reports">
+   305→        {REPORTS.map((r) => {
+   306→          const active = r.type === type;
+   307→          return (
+   308→            <button
+   309→              key={r.type}
+   310→              type="button"
+   311→              aria-pressed={active}
+   312→              onClick={() => {
+   313→                setType(r.type);
+   314→                setEmployeeId("");
+   315→                setPropertyId("");
+   316→              }}
+   317→              className={cn(
+   318→                "flex min-h-10 flex-col items-start gap-1.5 rounded-xl border bg-card p-3 text-left transition-all",
+   319→                "hover:border-primary/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+   320→                active && "border-primary bg-primary/5 ring-1 ring-primary"
+   321→              )}
+   322→            >
+   323→              <span
+   324→                className={cn(
+   325→                  "rounded-lg p-1.5",
+   326→                  active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+   327→                )}
+   328→                aria-hidden
+   329→              >
+   330→                <r.icon className="h-4 w-4" />
+   331→              </span>
+   332→              <span className="text-[13px] font-semibold leading-tight">{r.title}</span>
+   333→              <span className="line-clamp-2 text-[10px] leading-snug text-muted-foreground">{r.subtitle}</span>
+   334→            </button>
+   335→          );
+   336→        })}
+   337→      </div>
+   338→
+   339→      {!def && (
+   340→        <EmptyState
+   341→          icon={BarChart3}
+   342→          title="Select a report"
+   343→          description="Pick a report above, adjust the period or filters, then run it. Results can be exported to CSV."
+   344→        />
+   345→      )}
+   346→
+   347→      {def && (
+   348→        <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+   349→          {/* Config panel — sidebar on desktop, stacked on mobile */}
+   350→          <Card className="lg:w-72 lg:shrink-0">
+   351→            <CardContent className="space-y-3 p-4">
+   352→              <div>
+   353→                <p className="flex items-center gap-1.5 text-sm font-semibold">
+   354→                  <def.icon className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+   355→                  <span className="truncate">{def.title}</span>
+   356→                </p>
+   357→                <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{def.subtitle}</p>
+   358→              </div>
+   359→
+   360→              {def.config === "date" && (
+   361→                <Field label="Date">
+   362→                  <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
+   363→                </Field>
+   364→              )}
+   365→
+   366→              {def.config === "month" && (
+   367→                <Field label="Month">
+   368→                  <MonthPicker month={month} onChange={setMonth} />
+   369→                </Field>
+   370→              )}
+   371→
+   372→              {(def.config === "range" || def.config === "range-business") && (
+   373→                <>
+   374→                  <Field label="Period">
+   375→                    <RangeSelector
+   376→                      value={custom ? ("" as RangeKey) : range}
+   377→                      onChange={(v) => {
+   378→                        setCustom(false);
+   379→                        setRange(v);
+   380→                      }}
+   381→                    />
+   382→                  </Field>
+   383→                  <div className="flex flex-wrap items-center gap-2">
+   384→                    <Button
+   385→                      type="button"
+   386→                      size="sm"
+   387→                      variant={custom ? "default" : "outline"}
+   388→                      className="h-8 rounded-full px-3 text-xs"
+   389→                      aria-pressed={custom}
+   390→                      onClick={() => setCustom(true)}
+   391→                    >
+   392→                      Custom
+   393→                    </Button>
+   394→                    {custom && (
+   395→                      <span className="text-[11px] text-muted-foreground">Pick exact dates below</span>
+   396→                    )}
+   397→                  </div>
+   398→                  {custom && (
+   399→                    <div className="grid grid-cols-2 gap-2">
+   400→                      <Field label="From">
+   401→                        <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="h-10" />
+   402→                      </Field>
+   403→                      <Field label="To">
+   404→                        <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-10" />
+   405→                      </Field>
+   406→                    </div>
+   407→                  )}
+   408→                </>
+   409→              )}
+   410→
+   411→              {def.config === "range-business" && (
+   412→                <Field label="Business">
+   413→                  <SelectInput value={business} onChange={setBusiness} options={BUSINESS_OPTIONS} placeholder="All businesses" />
+   414→                </Field>
+   415→              )}
+   416→
+   417→              {def.type === "employee-earnings" && (
+   418→                <Field label="Employee detail (optional)">
+   419→                  <SelectInput
+   420→                    value={employeeId}
+   421→                    onChange={setEmployeeId}
+   422→                    options={[
+   423→                      { label: "All employees", value: "" },
+   424→                      ...employees.data?.items.map((e) => ({
+   425→                        label: `${e.fullName}${e.code ? ` (${e.code})` : ""}`,
+   426→                        value: e.id,
+   427→                      })) ?? [],
+   428→                    ]}
+   429→                    placeholder="All employees"
+   430→                  />
+   431→                  <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+   432→                    Pick one employee to see every day: which property, which shift, how much earned.
+   433→                  </p>
+   434→                </Field>
+   435→              )}
+   436→
+   437→              {def.type === "daily-operations" && (
+   438→                <Field label="Property detail (optional)">
+   439→                  <SelectInput
+   440→                    value={propertyId}
+   441→                    onChange={setPropertyId}
+   442→                    options={[
+   443→                      { label: "All properties", value: "" },
+   444→                      ...properties.data?.items.map((p) => ({ label: p.name ?? p.id, value: p.id })) ?? [],
+   445→                    ]}
+   446→                    placeholder="All properties"
+   447→                  />
+   448→                  <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+   449→                    Pick one property to focus the day sheet on it.
+   450→                  </p>
+   451→                </Field>
+   452→              )}
+   453→
+   454→              <div className="grid grid-cols-2 gap-2 pt-1">
+   455→                <Button className="min-h-10 gap-1.5" onClick={() => void reload()} disabled={loading}>
+   456→                  <Play className="h-4 w-4" aria-hidden />
+   457→                  {loading ? "Running…" : "Run"}
+   458→                </Button>
+   459→                <Button
+   460→                  variant="outline"
+   461→                  className="min-h-10 gap-1.5"
+   462→                  onClick={exportCSV}
+   463→                  disabled={loading || !data || data.rows.length === 0}
+   464→                >
+   465→                  <Download className="h-4 w-4" aria-hidden />
+   466→                  CSV
+   467→                </Button>
+   468→                <Button
+   469→                  variant="outline"
+   470→                  className="col-span-2 min-h-10 gap-1.5"
+   471→                  onClick={() => window.print()}
+   472→                  disabled={loading || !data || data.rows.length === 0}
+   473→                >
+   474→                  <Printer className="h-4 w-4" aria-hidden />
+   475→                  Print / Save PDF
+   476→                </Button>
+   477→              </div>
+   478→            </CardContent>
+   479→          </Card>
+   480→
+   481→          {/* Results — printed via the .print-area block (header + table only) */}
+   482→          <div className="print-area min-w-0 flex-1 space-y-3">
+   483→            {/* Print-only report header (hidden on screen) */}
+   484→            <div className="hidden print:block">
+   485→              <h1 className="text-lg font-bold">{def.title} — BizHub</h1>
+   486→              <p className="text-xs">Period: {periodLabel}</p>
+   487→              <p className="text-xs">Generated {new Date().toLocaleString("en-IN")}</p>
+   488→              <hr className="my-2" />
+   489→            </div>
+   490→            {error ? (
+   491→              <ErrorState message={error} onRetry={reload} />
+   492→            ) : (
+   493→              <>
+   494→                {caption && (
+   495→                  <p className="text-[11px] text-muted-foreground" aria-live="polite">
+   496→                    {caption}
+   497→                  </p>
+   498→                )}
+   499→                {data?.note && (
+   500→                  <div
+   501→                    className="flex items-start gap-2 rounded-lg border border-border/70 bg-muted/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground print:bg-transparent"
+   502→                    role="note"
+   503→                  >
+   504→                    <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+   505→                    <span>{data.note}</span>
+   506→                  </div>
+   507→                )}
+   508→                {/* Employee day-by-day drill-down — Employee Earnings report */}
+   509→                {def.type === "employee-earnings" && data?.employee && (
+   510→                  <Card className="overflow-hidden print:break-inside-avoid">
+   511→                    <div className="h-0.5 w-full bg-gradient-to-r from-emerald-500/70 via-amber-500/70 to-emerald-500/70" aria-hidden />
+   512→                    <CardHeader className="pb-0">
+   513→                      <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+   514→                        <Users className="h-4 w-4 text-primary" aria-hidden />
+   515→                        <span>{data.employee.fullName}</span>
+   516→                        {data.employee.code && (
+   517→                          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] tracking-tight text-muted-foreground">{data.employee.code}</span>
+   518→                        )}
+   519→                        {data.employee.designation && (
+   520→                          <span className="text-xs font-normal text-muted-foreground">· {data.employee.designation}</span>
+   521→                        )}
+   522→                      </CardTitle>
+   523→                      <CardDescription className="text-xs">
+   524→                        Day-by-day movement — where the employee worked, which shift, what they earned
+   525→                      </CardDescription>
+   526→                    </CardHeader>
+   527→                    <CardContent className="space-y-3 pt-2">
+   528→                      {data.dayTotals && (
+   529→                        <div className="grid grid-cols-3 gap-2">
+   530→                          {[
+   531→                            { label: "Days worked", value: String(data.dayTotals.daysWorked) },
+   532→                            { label: "Shifts", value: String(data.dayTotals.shifts) },
+   533→                            { label: "Earnings", value: formatINR(data.dayTotals.earnings) },
+   534→                          ].map((s) => (
+   535→                            <div key={s.label} className="rounded-lg border bg-muted/40 px-2.5 py-2 text-center">
+   536→                              <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{s.label}</p>
+   537→                              <p className="mt-0.5 text-sm font-bold tabular-nums">{s.value}</p>
+   538→                            </div>
+   539→                          ))}
+   540→                        </div>
+   541→                      )}
+   542→                      <DataTable
+   543→                        columns={dayColumns}
+   544→                        rows={(data.days ?? []).map((d, i) => ({ __idx: i, ...d }))}
+   545→                        rowKey={(r) => String(r.__idx)}
+   546→                        emptyIcon={CalendarCheck}
+   547→                        emptyTitle="No shifts in this period"
+   548→                        emptyDescription="This employee has no confirmed deployments in the selected range."
+   549→                        className="max-h-72 overflow-y-auto"
+   550→                      />
+   551→                      {data.propertySummary && data.propertySummary.length > 0 && (
+   552→                        <div className="flex flex-wrap gap-1.5" aria-label="Per-property summary">
+   553→                          {data.propertySummary.map((p) => (
+   554→                            <span
+   555→                              key={p.propertyName}
+   556→                              className="inline-flex items-center gap-1 rounded-full border bg-muted/50 px-2.5 py-1 text-[11px]"
+   557→                            >
+   558→                              <MapPin className="h-3 w-3 text-primary" aria-hidden />
+   559→                              <span className="font-medium">{p.propertyName}</span>
+   560→                              <span className="text-muted-foreground">
+   561→                                {p.shifts} shift{p.shifts === 1 ? "" : "s"} · {formatINR(p.earnings ?? 0)}
+   562→                              </span>
+   563→                            </span>
+   564→                          ))}
+   565→                        </div>
+   566→                      )}
+   567→                    </CardContent>
+   568→                  </Card>
+   569→                )}
+   570→
+   571→                {/* Property focus summary — Daily Operations report */}
+   572→                {def.type === "daily-operations" && propertyId && data?.totals && (
+   573→                  <Card className="overflow-hidden print:break-inside-avoid">
+   574→                    <div className="h-0.5 w-full bg-gradient-to-r from-teal-500/70 via-emerald-500/70 to-amber-500/70" aria-hidden />
+   575→                    <CardHeader className="pb-0">
+   576→                      <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+   577→                        <Building2 className="h-4 w-4 text-primary" aria-hidden />
+   578→                        Day sheet — {String((data.meta as Record<string, unknown>)?.property ?? "property")}
+   579→                      </CardTitle>
+   580→                      <CardDescription className="text-xs">
+   581→                        Every employee who attended, their shift and the day's money at a glance
+   582→                      </CardDescription>
+   583→                    </CardHeader>
+   584→                    <CardContent className="pt-2">
+   585→                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+   586→                        {[
+   587→                          { label: "Deployments", value: String(data.totals.deployments ?? 0) },
+   588→                          { label: "Employees", value: String(data.totals.employees ?? 0) },
+   589→                          { label: "Billing", value: formatINR(Number(data.totals.billing ?? 0)) },
+   590→                          { label: "Payout", value: formatINR(Number(data.totals.payout ?? 0)) },
+   591→                        ].map((s) => (
+   592→                          <div key={s.label} className="rounded-lg border bg-muted/40 px-2.5 py-2 text-center">
+   593→                            <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{s.label}</p>
+   594→                            <p className="mt-0.5 text-sm font-bold tabular-nums">{s.value}</p>
+   595→                          </div>
+   596→                        ))}
+   597→                      </div>
+   598→                    </CardContent>
+   599→                  </Card>
+   600→                )}
+   601→
+   602→                {/* Trip-profit chart — only for the Trip Profitability report */}
+   603→                {def.type === "trip-profit" && data?.chart && data.chart.length > 0 && (
+   604→                  <Card className="overflow-hidden print:break-inside-avoid">
+   605→                    <div className="h-0.5 w-full bg-gradient-to-r from-emerald-500/70 via-teal-500/70 to-red-500/70" aria-hidden />
+   606→                    <CardHeader className="pb-0">
+   607→                      <CardTitle className="flex items-center gap-2 text-base">
+   608→                        <Route className="h-4 w-4 text-primary" aria-hidden />
+   609→                        Trip-wise profit — revenue vs estimated cost
+   610→                      </CardTitle>
+   611→                      <CardDescription className="text-xs">
+   612→                        The most profitable trips plus the biggest loss-makers in the period
+   613→                      </CardDescription>
+   614→                    </CardHeader>
+   615→                    <CardContent className="pt-2">
+   616→                      <BarsCompare
+   617→                        data={data.chart}
+   618→                        xKey="label"
+   619→                        height={260}
+   620→                        series={[
+   621→                          { key: "revenue", label: "Revenue", color: CHART_COLORS.emerald },
+   622→                          { key: "cost", label: "Est. cost", color: CHART_COLORS.red },
+   623→                          { key: "profit", label: "Profit", color: CHART_COLORS.teal },
+   624→                        ]}
+   625→                      />
+   626→                    </CardContent>
+   627→                  </Card>
+   628→ )}
+   629→                <Card>
+   630→                  <CardContent className="p-3 sm:p-4">
+   631→                    <DataTable
+   632→                      columns={columns}
+   633→                      rows={rows}
+   634→                      rowKey={(r) => String(r.__idx)}
+   635→                      loading={loading}
+   636→                      emptyIcon={BarChart3}
+   637→                      emptyTitle="No data for this period"
+   638→                      emptyDescription="Try widening the date range or changing filters, then run the report again."
+   639→                      footer={totalsNode}
+   640→                      className="max-h-[70vh] overflow-y-auto"
+   641→                    />
+   642→                  </CardContent>
+   643→                </Card>
+   644→              </>
+   645→            )}
+   646→          </div>
+   647→        </div>
+   648→      )}
+   649→    </div>
+   650→  );
+   651→}
+   652→

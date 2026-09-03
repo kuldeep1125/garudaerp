@@ -15,7 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   AlertCircle, ArrowRight, Building2, CalendarCheck, CarFront, Contact2,
-  CornerDownLeft, HandCoins, Plus, Receipt, Search, UserRound, Wallet, type LucideIcon,
+  CornerDownLeft, HandCoins, Plus, Receipt, Route, Search, UserRound, Wallet, type LucideIcon,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -49,6 +49,15 @@ const GROUP_TINT: Record<string, string> = {
   TRANSPORT: "text-amber-600 dark:text-amber-400",
   SYSTEM: "text-muted-foreground",
 };
+
+// Top "Actions" group — the four highest-frequency destinations, first thing
+// in the list so they're reachable with zero typing.
+const TOP_ACTIONS: { label: string; icon: LucideIcon; view: string; tint: string }[] = [
+  { label: "Deploy employees", icon: CalendarCheck, view: "deployments", tint: "text-emerald-600 dark:text-emerald-400" },
+  { label: "Record payment", icon: Wallet, view: "payments", tint: "text-emerald-600 dark:text-emerald-400" },
+  { label: "New expense", icon: Receipt, view: "expenses", tint: "text-muted-foreground" },
+  { label: "New trip", icon: Route, view: "trips", tint: "text-amber-600 dark:text-amber-400" },
+];
 
 // Quick actions — first-class destinations beyond the sidebar (icons come from VIEWS).
 const ACTIONS = [
@@ -126,6 +135,25 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       />
       <CommandList className="max-h-[min(420px,60vh)]">
         <CommandEmpty>{t(lang, "palette.empty")}</CommandEmpty>
+
+        {/* Actions — always first, one keystroke away */}
+        <CommandGroup heading={t(lang, "palette.quickActions")}>
+          {TOP_ACTIONS.map((a) => (
+            <CommandItem
+              key={`qa-${a.view}`}
+              value={`qa-${a.label}`}
+              onSelect={() => go(a.view)}
+              className="gap-3 rounded-lg aria-selected:translate-x-0.5"
+            >
+              <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/70", a.tint)}>
+                <a.icon className="h-4 w-4" aria-hidden />
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{a.label}</span>
+              <kbd className="shrink-0 rounded border bg-background px-1.5 font-mono text-[10px] text-muted-foreground" aria-hidden>↵</kbd>
+            </CommandItem>
+          ))}
+        </CommandGroup>
+        <CommandSeparator />
 
         {/* Live entity results (query ≥ 2 chars) — group renders whenever live so
             the "full search" handoff stays reachable even with zero live matches. */}

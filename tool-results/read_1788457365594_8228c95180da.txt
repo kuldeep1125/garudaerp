@@ -1,0 +1,602 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+     4→     4→import { useTheme } from "next-themes";
+     5→     5→import { toast } from "sonner";
+     6→     6→import { useAuth, useNav, useBusiness, type BusinessScope } from "@/components/providers";
+     7→     7→import { usePwaInstall } from "@/components/shared/pwa-install";
+     8→     8→import { CommandPalette } from "@/components/shared/command-palette";
+     9→     9→import { UndoCenter } from "@/components/shared/undo-center";
+    10→    10→import { ShortcutsDialog } from "@/components/shared/shortcuts-dialog";
+    11→    11→import { readMutedGroups, NOTIF_MUTED_EVENT, NOTIF_CHANGED_EVENT } from "@/lib/notif-mute";
+    12→    12→import { VIEWS, getView } from "@/lib/views";
+    13→    13→import { cn } from "@/lib/utils";
+    14→    14→import { Button } from "@/components/ui/button";
+    15→    15→import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+    16→    16→import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+    17→    17→import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+    18→    18→import { ScrollArea } from "@/components/ui/scroll-area";
+    19→    19→import { Separator } from "@/components/ui/separator";
+    20→    20→import { Badge } from "@/components/ui/badge";
+    21→    21→import {
+    22→    22→  Bell, Building2, CarFront, Check, ChevronsLeft, History, Home, Keyboard, Languages, LayoutGrid, LogOut, Moon, Search, Smartphone, Sun,
+    23→    23→  Truck, Users, Wallet, ShieldCheck, Boxes, AlertTriangle, AlertCircle, Info,
+    24→    24→} from "lucide-react";
+    25→    25→import { useLang, t, viewLabel } from "@/lib/i18n";
+    26→    26→
+    27→    27→const GROUP_ICONS: Record<string, React.ReactNode> = {
+    28→    28→  MAIN: <Home className="h-3 w-3" />,
+    29→    29→  MANPOWER: <Users className="h-3 w-3" />,
+    30→    30→  TRANSPORT: <Truck className="h-3 w-3" />,
+    31→    31→  SYSTEM: <Boxes className="h-3 w-3" />,
+    32→    32→};
+    33→    33→
+    34→    34→const GROUP_ACCENT: Record<string, string> = {
+    35→    35→  MAIN: "",
+    36→    36→  MANPOWER: "text-emerald-600 dark:text-emerald-400",
+    37→    37→  TRANSPORT: "text-amber-600 dark:text-amber-400",
+    38→    38→  SYSTEM: "",
+    39→    39→};
+    40→    40→
+    41→    41→// Media-query rail detection for md–lg widths (tablets / narrow laptops):
+    42→    42→// the sidebar becomes an icons-only rail there, while <md hides it entirely
+    43→    43→// and lg+ shows the full collapsible sidebar. useSyncExternalStore keeps this
+    44→    44→// SSR-safe (server snapshot = false, so hydration never mismatches).
+    45→    45→const RAIL_QUERY = "(min-width: 768px) and (max-width: 1023.98px)";
+    46→    46→function useIsRailWidth(): boolean {
+    47→    47→  return useSyncExternalStore(
+    48→    48→    (onStoreChange) => {
+    49→    49→      const mq = window.matchMedia(RAIL_QUERY);
+    50→    50→      mq.addEventListener("change", onStoreChange);
+    51→    51→      return () => mq.removeEventListener("change", onStoreChange);
+    52→    52→    },
+    53→    53→    () => window.matchMedia(RAIL_QUERY).matches,
+    54→    54→    () => false
+    55→    55→  );
+    56→    56→}
+    57→    57→
+    58→    58→// Desktop sidebar (collapsible; icons-only rail at md–lg) — also the content
+    59→    59→// of the mobile "More" sheet (which always keeps full labels).
+    60→    60→function SideNav({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onToggle?: () => void; onNavigate?: () => void }) {
+    61→    61→  const { view, navigate } = useNav();
+    62→    62→  const { scope } = useBusiness();
+    63→    63→  const { lang } = useLang();
+    64→    64→
+    65→    65→  const groups = useMemo(() => {
+    66→    66→    const order = ["MAIN", "MANPOWER", "TRANSPORT", "SYSTEM"] as const;
+    67→    67→    return order.map((g) => ({
+    68→    68→      key: g,
+    69→    69→      items: VIEWS.filter((v) => v.group === g && !v.hidden && !(g === "MAIN" && v.id === "dashboard" && collapsed === undefined) ),
+    70→    70→    })).filter((g) => g.items.length > 0);
+    71→    71→  }, [collapsed]);
+    72→    72→
+    73→    73→  return (
+    74→    74→    <nav aria-label="Main navigation" className="flex h-full flex-col">
+    75→    75→      <div className={cn("flex items-center gap-2 px-3 py-4", collapsed ? "justify-center" : "justify-between")}>
+    76→    76→        <button
+    77→    77→          className="flex items-center gap-2.5 min-w-0"
+    78→    78→          onClick={() => { navigate("dashboard"); onNavigate?.(); }}
+    79→    79→          aria-label="Go to dashboard"
+    80→    80→        >
+    81→    81→          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white font-bold shadow-sm">
+    82→    82→            <span className="text-sm">B</span>
+    83→    83→          </div>
+    84→    84→          {!collapsed && (
+    85→    85→            <div className="min-w-0 text-left">
+    86→    86→              <p className="truncate text-sm font-bold leading-tight">BizHub</p>
+    87→    87→              <p className="truncate text-[10px] text-muted-foreground leading-tight">Business Control Center</p>
+    88→    88→            </div>
+    89→    89→          )}
+    90→    90→        </button>
+    91→    91→        {onToggle && !collapsed && (
+    92→    92→          <Button variant="ghost" size="icon" className="hidden lg:inline-flex h-8 w-8" onClick={onToggle} aria-label="Collapse sidebar">
+    93→    93→            <ChevronsLeft className="h-4 w-4" />
+    94→    94→          </Button>
+    95→    95→        )}
+    96→    96→      </div>
+    97→    97→      {/* Keyed by view so the nav's internal scroll resets on navigation */}
+    98→    98→      <ScrollArea key={view} className="min-h-0 flex-1 px-2 pb-4">
+    99→    99→        <div className="space-y-4">
+   100→   100→          {groups.map((group) => (
+   101→   101→            <div key={group.key}>
+   102→   102→              {!collapsed && (
+   103→   103→                <p className={cn("mb-1.5 flex items-center gap-1.5 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground", GROUP_ACCENT[group.key])}>
+   104→   104→                  {GROUP_ICONS[group.key]}
+   105→   105→                  {t(lang, `nav.group.${group.key}`)}
+   106→   106→                </p>
+   107→   107→              )}
+   108→   108→              <ul className="space-y-0.5">
+   109→   109→                {group.items
+   110→   110→                  .filter((v) => scope === "ALL" || v.group === "MAIN" || v.group === "SYSTEM" || v.group === scope)
+   111→   111→                  .map((v) => {
+   112→   112→                    const active = view === v.id || (v.id === "manpower" && view === "manpower") || (v.id === "transport" && view === "transport");
+   113→   113→                    return (
+   114→   114→                      <li key={v.id}>
+   115→   115→                        <button
+   116→   116→                          onClick={() => { navigate(v.id); onNavigate?.(); }}
+   117→   117→                          aria-current={active ? "page" : undefined}
+   118→   118→                          className={cn(
+   119→   119→                            "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors min-h-[40px]",
+   120→   120→                            collapsed && "justify-center px-0",
+   121→   121→                            active
+   122→   122→                              ? "bg-primary/12 text-primary font-semibold"
+   123→   123→                              : "text-muted-foreground font-medium hover:bg-muted hover:text-foreground"
+   124→   124→                          )}
+   125→   125→                          title={collapsed ? viewLabel(lang, v.id, v.label) : undefined}
+   126→   126→                        >
+   127→   127→                          <v.icon className={cn("h-4 w-4 shrink-0", active && GROUP_ACCENT[group.key], !active && "text-muted-foreground")} aria-hidden />
+   128→   128→                          {!collapsed && <span className="truncate">{viewLabel(lang, v.id, v.label)}</span>}
+   129→   129→                        </button>
+   130→   130→                      </li>
+   131→   131→                    );
+   132→   132→                  })}
+   133→   133→              </ul>
+   134→   134→              {!collapsed && <Separator className="mt-3" />}
+   135→   135→            </div>
+   136→   136→          ))}
+   137→   137→        </div>
+   138→   138→      </ScrollArea>
+   139→   139→    </nav>
+   140→   140→  );
+   141→   141→}
+   142→   142→
+   143→   143→function ThemeToggle() {
+   144→   144→  const { resolvedTheme, setTheme } = useTheme();
+   145→   145→  const dark = resolvedTheme === "dark";
+   146→   146→  return (
+   147→   147→    <Button
+   148→   148→      variant="ghost"
+   149→   149→      size="icon"
+   150→   150→      className="h-10 w-10"
+   151→   151→      onClick={() => setTheme(dark ? "light" : "dark")}
+   152→   152→      aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
+   153→   153→    >
+   154→   154→      {dark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+   155→   155→    </Button>
+   156→   156→  );
+   157→   157→}
+   158→   158→
+   159→   159→// Live notification shape (subset of the engine payload).
+   160→   160→interface AppNotification {
+   161→   161→  key: string;
+   162→   162→  severity: "CRITICAL" | "WARNING" | "INFO";
+   163→   163→  title: string;
+   164→   164→  message: string;
+   165→   165→  view: string;
+   166→   166→  params?: Record<string, string>;
+   167→   167→}
+   168→   168→
+   169→   169→const SEVERITY_ICON: Record<AppNotification["severity"], React.ReactNode> = {
+   170→   170→  CRITICAL: <AlertTriangle className="h-5 w-5 text-red-500" />,
+   171→   171→  WARNING: <AlertCircle className="h-5 w-5 text-amber-500" />,
+   172→   172→  INFO: <Info className="h-5 w-5 text-sky-500" />,
+   173→   173→};
+   174→   174→
+   175→   175→// Sticky top header
+   176→   176→function TopBar({ onOpenMore, onOpenPalette, onOpenShortcuts }: { onOpenMore: () => void; onOpenPalette: () => void; onOpenShortcuts: () => void }) {
+   177→   177→  const { owner, logout } = useAuth();
+   178→   178→  const { navigate } = useNav();
+   179→   179→  const { lang, setLang } = useLang();
+   180→   180→  const [notifCount, setNotifCount] = useState(0);
+   181→   181→  const [pulse, setPulse] = useState(false);
+   182→   182→  const [undoOpen, setUndoOpen] = useState(false);
+   183→   183→  const [notifRefresh, setNotifRefresh] = useState(0);
+   184→   184→  const { canInstall, install } = usePwaInstall();
+   185→   185→  const prevKeysRef = useRef<Set<string> | null>(null);
+   186→   186→  const firstLoadRef = useRef(true);
+   187→   187→  const pulseTimerRef = useRef<number | null>(null);
+   188→   188→
+   189→   189→  useEffect(() => {
+   190→   190→    let alive = true;
+   191→   191→    const load = async () => {
+   192→   192→      try {
+   193→   193→        const items = await import("@/lib/api-client").then(({ api }) =>
+   194→   194→          api.get<AppNotification[]>("/api/notifications")
+   195→   195→        );
+   196→   196→        if (!alive || !Array.isArray(items)) return;
+   197→   197→        // Respect muted categories (localStorage) — the bell only counts alerts
+   198→   198→        // the owner hasn't muted from the notifications view.
+   199→   199→        const muted = readMutedGroups();
+   200→   200→        const visible = muted.length > 0 ? items.filter((n) => !muted.includes(n.severity)) : items;
+   201→   201→        setNotifCount(visible.length);
+   202→   202→        const prevKeys = prevKeysRef.current;
+   203→   203→        prevKeysRef.current = new Set(items.map((n) => n.key));
+   204→   204→        // Announce only genuine arrivals (skip initial load), when the tab is
+   205→   205→        // visible and the alert isn't muted.
+   206→   206→        if (!firstLoadRef.current && prevKeys && document.visibilityState === "visible") {
+   207→   207→          const fresh = visible.filter((n) => !prevKeys.has(n.key));
+   208→   208→          if (fresh.length > 0) {
+   209→   209→            const rank = { CRITICAL: 0, WARNING: 1, INFO: 2 } as const;
+   210→   210→            const headline =
+   211→   211→              [...fresh].sort((a, b) => rank[a.severity] - rank[b.severity])[0] ?? fresh[0];
+   212→   212→            toast(headline.title, {
+   213→   213→              description:
+   214→   214→                fresh.length > 1
+   215→   215→                  ? `${headline.message} — and ${fresh.length - 1} more new alert${fresh.length === 2 ? "" : "s"}.`
+   216→   216→                  : headline.message,
+   217→   217→              icon: SEVERITY_ICON[headline.severity] ?? SEVERITY_ICON.INFO,
+   218→   218→              action: { label: "View", onClick: () => navigate("notifications") },
+   219→   219→            });
+   220→   220→            // Bell ripple — brief ping so the eye is drawn to the new alert.
+   221→   221→            setPulse(true);
+   222→   222→            if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
+   223→   223→            pulseTimerRef.current = window.setTimeout(() => setPulse(false), 2400);
+   224→   224→          }
+   225→   225→        }
+   226→   226→        firstLoadRef.current = false;
+   227→   227→      } catch { /* ignore */ }
+   228→   228→    };
+   229→   229→    load();
+   230→   230→    const t = setInterval(load, 60_000);
+   231→   231→    // Re-check immediately when the user returns to the tab.
+   232→   232→    const onVis = () => { if (document.visibilityState === "visible") void load(); };
+   233→   233→    // Mute toggles + dismissals (this tab via custom event, other tabs via
+   234→   234→    // storage) re-count instantly.
+   235→   235→    const onMuteChange = () => { void load(); };
+   236→   236→    document.addEventListener("visibilitychange", onVis);
+   237→   237→    window.addEventListener(NOTIF_MUTED_EVENT, onMuteChange);
+   238→   238→    window.addEventListener(NOTIF_CHANGED_EVENT, onMuteChange);
+   239→   239→    window.addEventListener("storage", onMuteChange);
+   240→   240→    return () => {
+   241→   241→      alive = false; clearInterval(t);
+   242→   242→      document.removeEventListener("visibilitychange", onVis);
+   243→   243→      window.removeEventListener(NOTIF_MUTED_EVENT, onMuteChange);
+   244→   244→      window.removeEventListener(NOTIF_CHANGED_EVENT, onMuteChange);
+   245→   245→      window.removeEventListener("storage", onMuteChange);
+   246→   246→      if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
+   247→   247→    };
+   248→   248→  }, [navigate, notifRefresh]);
+   249→   249→
+   250→   250→  const initials = (owner?.name ?? "?").slice(0, 2).toUpperCase();
+   251→   251→
+   252→   252→  return (
+   253→   253→    <>
+   254→   254→    <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+   255→   255→      <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-2 px-3 sm:px-5">
+   256→   256→        <button className="flex items-center gap-2 md:hidden" onClick={() => navigate("dashboard")} aria-label="BizHub home">
+   257→   257→          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600 text-white font-bold">
+   258→   258→            <span className="text-xs">B</span>
+   259→   259→          </div>
+   260→   260→          <span className="text-sm font-bold">BizHub</span>
+   261→   261→        </button>
+   262→   262→
+   263→   263→        <Button variant="ghost" size="icon" className="hidden lg:inline-flex h-9 w-9 lg:hidden" aria-hidden tabIndex={-1} />
+   264→   264→
+   265→   265→        {/* Global search trigger — opens the command palette (Ctrl K) */}
+   266→   266→        <button
+   267→   267→          onClick={onOpenPalette}
+   268→   268→          className="ml-0 hidden sm:flex h-9 min-w-0 flex-1 max-w-md items-center gap-2 rounded-xl border bg-muted/40 px-3 text-sm text-muted-foreground hover:bg-muted hover:border-primary/40 transition-colors"
+   269→   269→          aria-label="Open command palette"
+   270→   270→        >
+   271→   271→          <Search className="h-4 w-4 shrink-0" />
+   272→   272→          <span className="min-w-0 truncate whitespace-nowrap hidden md:inline">{t(lang, "topbar.search")}</span>
+   273→   273→          <span className="md:hidden whitespace-nowrap">{t(lang, "topbar.searchShort")}</span>
+   274→   274→          <kbd className="ml-auto hidden md:inline-flex shrink-0 rounded border bg-background px-1.5 font-mono text-[10px]">Ctrl K</kbd>
+   275→   275→        </button>
+   276→   276→
+   277→   277→        <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
+   278→   278→          <Button variant="ghost" size="icon" className="sm:hidden h-10 w-10" onClick={onOpenPalette} aria-label="Open command palette">
+   279→   279→            <Search className="h-5 w-5" />
+   280→   280→          </Button>
+   281→   281→          <Button
+   282→   282→            variant="ghost"
+   283→   283→            size="icon"
+   284→   284→            className="h-10 w-10"
+   285→   285→            onClick={() => setUndoOpen(true)}
+   286→   286→            aria-label="Undo center"
+   287→   287→            title="Undo center"
+   288→   288→          >
+   289→   289→            <History className="h-5 w-5" />
+   290→   290→          </Button>
+   291→   291→          <Button variant="ghost" size="icon" className="h-10 w-10 relative" onClick={() => navigate("notifications")} aria-label={`Notifications${notifCount ? `, ${notifCount} active` : ""}`}>
+   292→   292→            {pulse && <span className="absolute inset-0 rounded-full bg-red-500/30 animate-ping" aria-hidden />}
+   293→   293→            <Bell className={cn("h-5 w-5 transition-transform", pulse && "scale-110")} />
+   294→   294→            {notifCount > 0 && (
+   295→   295→              <span
+   296→   296→                className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold tabular-nums text-white ring-2 ring-background"
+   297→   297→                aria-hidden
+   298→   298→              >
+   299→   299→                {notifCount > 9 ? "9+" : notifCount}
+   300→   300→              </span>
+   301→   301→            )}
+   302→   302→          </Button>
+   303→   303→          <ThemeToggle />
+   304→   304→          <DropdownMenu>
+   305→   305→            <DropdownMenuTrigger asChild>
+   306→   306→              <Button variant="ghost" size="icon" className="h-10 w-10" aria-label={t(lang, "topbar.language")} title={t(lang, "topbar.language")}>
+   307→   307→                <Languages className="h-5 w-5" />
+   308→   308→              </Button>
+   309→   309→            </DropdownMenuTrigger>
+   310→   310→            <DropdownMenuContent align="end" className="w-40">
+   311→   311→              <DropdownMenuLabel>{t(lang, "topbar.language")}</DropdownMenuLabel>
+   312→   312→              <DropdownMenuSeparator />
+   313→   313→              <DropdownMenuItem onClick={() => setLang("en")} aria-checked={lang === "en"} role="menuitemradio">
+   314→   314→                {lang === "en" ? <Check className="mr-2 h-4 w-4 text-primary" /> : <span className="mr-2 inline-block h-4 w-4" aria-hidden />}
+   315→   315→                {t(lang, "lang.en")}
+   316→   316→              </DropdownMenuItem>
+   317→   317→              <DropdownMenuItem onClick={() => setLang("hi")} aria-checked={lang === "hi"} role="menuitemradio">
+   318→   318→                {lang === "hi" ? <Check className="mr-2 h-4 w-4 text-primary" /> : <span className="mr-2 inline-block h-4 w-4" aria-hidden />}
+   319→   319→                {t(lang, "lang.hi")}
+   320→   320→              </DropdownMenuItem>
+   321→   321→            </DropdownMenuContent>
+   322→   322→          </DropdownMenu>
+   323→   323→          <DropdownMenu>
+   324→   324→            <DropdownMenuTrigger asChild>
+   325→   325→              <button className="ml-0.5 flex items-center gap-2 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Owner menu">
+   326→   326→                <Avatar className="h-9 w-9 border">
+   327→   327→                  <AvatarFallback className="bg-emerald-100 text-emerald-800 text-xs font-bold dark:bg-emerald-900 dark:text-emerald-200">{initials}</AvatarFallback>
+   328→   328→                </Avatar>
+   329→   329→              </button>
+   330→   330→            </DropdownMenuTrigger>
+   331→   331→            <DropdownMenuContent align="end" className="w-52">
+   332→   332→              <DropdownMenuLabel>
+   333→   333→                <p className="text-sm font-semibold">{owner?.name}</p>
+   334→   334→                <p className="text-xs text-muted-foreground">@{owner?.username}</p>
+   335→   335→              </DropdownMenuLabel>
+   336→   336→              <DropdownMenuSeparator />
+   337→   337→              <DropdownMenuItem onClick={() => navigate("owners")}>
+   338→   338→                <ShieldCheck className="mr-2 h-4 w-4" /> {t(lang, "menu.owners")}
+   339→   339→              </DropdownMenuItem>
+   340→   340→              <DropdownMenuItem onClick={() => navigate("settings")}>
+   341→   341→                <Building2 className="mr-2 h-4 w-4" /> {t(lang, "menu.settings")}
+   342→   342→              </DropdownMenuItem>
+   343→   343→              {canInstall && (
+   344→   344→                <DropdownMenuItem
+   345→   345→                  onClick={() =>
+   346→   346→                    install().then((r) => {
+   347→   347→                      if (r === "accepted") toast.success("BizHub installed — find it on your home screen");
+   348→   348→                    })
+   349→   349→                  }
+   350→   350→                >
+   351→   351→                  <Smartphone className="mr-2 h-4 w-4" /> {t(lang, "menu.install")}
+   352→   352→                </DropdownMenuItem>
+   353→   353→              )}
+   354→   354→              <DropdownMenuSeparator />
+   355→   355→              <DropdownMenuItem onClick={onOpenShortcuts}>
+   356→   356→                <Keyboard className="mr-2 h-4 w-4" /> Press ? for shortcuts
+   357→   357→              </DropdownMenuItem>
+   358→   358→              <DropdownMenuSeparator />
+   359→   359→              <DropdownMenuItem onClick={() => logout()} className="text-red-600 dark:text-red-400">
+   360→   360→                <LogOut className="mr-2 h-4 w-4" /> {t(lang, "menu.logout")}
+   361→   361→              </DropdownMenuItem>
+   362→   362→            </DropdownMenuContent>
+   363→   363→          </DropdownMenu>
+   364→   364→        </div>
+   365→   365→      </div>
+   366→   366→    </header>
+   367→   367→
+   368→   368→    <UndoCenter
+   369→   369→      open={undoOpen}
+   370→   370→      onOpenChange={setUndoOpen}
+   371→   371→      onChanged={() => setNotifRefresh((n) => n + 1)}
+   372→   372→    />
+   373→   373→    </>
+   374→   374→  );
+   375→   375→}
+   376→   376→
+   377→   377→function BusinessBanner() {
+   378→   378→  const { scope, setScope } = useBusiness();
+   379→   379→  const { navigate } = useNav();
+   380→   380→  const { lang } = useLang();
+   381→   381→  const scopeInfo = {
+   382→   382→    ALL: { label: t(lang, "scope.badge.ALL"), cls: "bg-muted text-muted-foreground border" },
+   383→   383→    MANPOWER: { label: t(lang, "scope.badge.MANPOWER"), cls: "bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300" },
+   384→   384→    TRANSPORT: { label: t(lang, "scope.badge.TRANSPORT"), cls: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-300" },
+   385→   385→  }[scope];
+   386→   386→  const options: { key: BusinessScope; label: string }[] = [
+   387→   387→    { key: "ALL", label: t(lang, "scope.ALL") },
+   388→   388→    { key: "MANPOWER", label: t(lang, "scope.MANPOWER") },
+   389→   389→    { key: "TRANSPORT", label: t(lang, "scope.TRANSPORT") },
+   390→   390→  ];
+   391→   391→  return (
+   392→   392→    <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-2 px-3 pt-2.5 sm:px-5">
+   393→   393→      <div className="flex items-center gap-2 overflow-hidden">
+   394→   394→        <Badge variant="outline" className={cn("shrink-0 font-semibold", scopeInfo.cls)}>{scopeInfo.label}</Badge>
+   395→   395→        <span className="hidden text-xs text-muted-foreground truncate sm:inline">{t(lang, `scope.hint.${scope}`)}</span>
+   396→   396→      </div>
+   397→   397→      <div className="flex shrink-0 items-center rounded-full border bg-card p-0.5" role="group" aria-label="Business scope">
+   398→   398→        {options.map((o) => (
+   399→   399→          <button
+   400→   400→            key={o.key}
+   401→   401→            onClick={() => { setScope(o.key); navigate(o.key === "MANPOWER" ? "manpower" : o.key === "TRANSPORT" ? "transport" : "dashboard"); }}
+   402→   402→            className={cn(
+   403→   403→              "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors min-h-[26px]",
+   404→   404→              scope === o.key ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
+   405→   405→            )}
+   406→   406→            aria-pressed={scope === o.key}
+   407→   407→          >
+   408→   408→            {o.key !== "ALL" && (
+   409→   409→              <span
+   410→   410→                className={cn("h-1.5 w-1.5 shrink-0 rounded-full", o.key === "MANPOWER" ? "bg-emerald-500" : "bg-amber-500")}
+   411→   411→                aria-hidden
+   412→   412→              />
+   413→   413→            )}
+   414→   414→            {o.label}
+   415→   415→          </button>
+   416→   416→        ))}
+   417→   417→      </div>
+   418→   418→    </div>
+   419→   419→  );
+   420→   420→}
+   421→   421→
+   422→   422→function BottomNav({ onOpenMore }: { onOpenMore: () => void }) {
+   423→   423→  const { view, navigate } = useNav();
+   424→   424→  const { setScope } = useBusiness();
+   425→   425→  const { lang } = useLang();
+   426→   426→  const items = [
+   427→   427→    { key: "dashboard", label: t(lang, "nav.home"), icon: Home, action: () => { setScope("ALL"); navigate("dashboard"); } },
+   428→   428→    { key: "manpower", label: viewLabel(lang, "manpower", "Manpower"), icon: Users, action: () => { setScope("MANPOWER"); navigate("manpower"); } },
+   429→   429→    { key: "transport", label: viewLabel(lang, "transport", "Transport"), icon: Truck, action: () => { setScope("TRANSPORT"); navigate("transport"); } },
+   430→   430→    { key: "payments", label: viewLabel(lang, "payments", "Collections"), icon: Wallet, action: () => navigate("payments") },
+   431→   431→  ];
+   432→   432→  return (
+   433→   433→    <nav aria-label="Bottom navigation" className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85 md:hidden pb-[env(safe-area-inset-bottom)]">
+   434→   434→      <div className="mx-auto grid max-w-lg grid-cols-5">
+   435→   435→        {items.map((item) => {
+   436→   436→          const active = view === item.key;
+   437→   437→          return (
+   438→   438→            <button
+   439→   439→              key={item.key}
+   440→   440→              onClick={item.action}
+   441→   441→              aria-current={active ? "page" : undefined}
+   442→   442→              className={cn(
+   443→   443→                "flex min-h-[56px] flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-[10px] font-medium transition-colors active:scale-95",
+   444→   444→                active ? "text-primary" : "text-muted-foreground hover:text-foreground"
+   445→   445→              )}
+   446→   446→            >
+   447→   447→              <item.icon
+   448→   448→                className={cn(
+   449→   449→                  "h-5 w-5 transition-all duration-300 ease-out",
+   450→   450→                  active ? "-translate-y-px scale-110 drop-shadow-sm" : "scale-100"
+   451→   451→                )}
+   452→   452→                aria-hidden
+   453→   453→              />
+   454→   454→              {item.label}
+   455→   455→              {/* animated active indicator — grows from center */}
+   456→   456→              <span
+   457→   457→                className={cn(
+   458→   458→                  "h-0.5 rounded-full bg-primary transition-all duration-300 ease-out",
+   459→   459→                  active ? "w-7 opacity-100" : "w-0 opacity-0"
+   460→   460→                )}
+   461→   461→                aria-hidden
+   462→   462→              />
+   463→   463→            </button>
+   464→   464→          );
+   465→   465→        })}
+   466→   466→        <button
+   467→   467→          onClick={onOpenMore}
+   468→   468→          className="flex min-h-[56px] flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-[10px] font-medium text-muted-foreground hover:text-foreground"
+   469→   469→          aria-label="More menu"
+   470→   470→        >
+   471→   471→          <LayoutGrid className="h-5 w-5" aria-hidden />
+   472→   472→          {t(lang, "nav.more")}
+   473→   473→          <span className="h-0.5 w-6 rounded-full bg-transparent" aria-hidden />
+   474→   474→        </button>
+   475→   475→      </div>
+   476→   476→    </nav>
+   477→   477→  );
+   478→   478→}
+   479→   479→
+   480→   480→export function AppShell({ children }: { children: React.ReactNode }) {
+   481→   481→  const { navigate, view } = useNav();
+   482→   482→  const [collapsed, setCollapsed] = useState(false);
+   483→   483→  // md–lg widths force the icons-only rail (no toggle there); lg+ keeps the
+   484→   484→  // full sidebar with the manual collapse button.
+   485→   485→  const railMode = useIsRailWidth();
+   486→   486→  const railActive = railMode || collapsed;
+   487→   487→  const [moreOpen, setMoreOpen] = useState(false);
+   488→   488→  const [paletteOpen, setPaletteOpen] = useState(false);
+   489→   489→  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+   490→   490→
+   491→   491→  useEffect(() => {
+   492→   492→    // "G then key" chord: pendingG holds the timeout id while waiting for the
+   493→   493→    // second key (1s window). Cleared by typing anywhere else.
+   494→   494→    let pendingG: number | null = null;
+   495→   495→    const clearPendingG = () => {
+   496→   496→      if (pendingG !== null) window.clearTimeout(pendingG);
+   497→   497→      pendingG = null;
+   498→   498→    };
+   499→   499→    const GO_CHORDS: Record<string, string> = {
+   500→   500→      d: "dashboard", e: "employees", p: "properties", t: "trips",
+   501→   501→    };
+   502→   502→    const isTypingTarget = (el: EventTarget | null): boolean => {
+   503→   503→      const t = el as HTMLElement | null;
+   504→   504→      return Boolean(
+   505→   505→        t &&
+   506→   506→        (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)
+   507→   507→      );
+   508→   508→    };
+   509→   509→    const onKey = (e: KeyboardEvent) => {
+   510→   510→      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+   511→   511→        e.preventDefault();
+   512→   512→        clearPendingG();
+   513→   513→        setPaletteOpen((o) => !o);
+   514→   514→        return;
+   515→   515→      }
+   516→   516→      // Palette is open → its input owns the keyboard; ignore global chords.
+   517→   517→      if (paletteOpen) return;
+   518→   518→      if (e.altKey || e.ctrlKey || e.metaKey) return;
+   519→   519→      // Typing in a field always cancels any pending chord.
+   520→   520→      if (isTypingTarget(e.target)) {
+   521→   521→        clearPendingG();
+   522→   522→        return;
+   523→   523→      }
+   524→   524→      if (pendingG !== null) {
+   525→   525→        const target = GO_CHORDS[e.key.toLowerCase()];
+   526→   526→        clearPendingG();
+   527→   527→        if (target) {
+   528→   528→          e.preventDefault();
+   529→   529→          navigate(target);
+   530→   530→        }
+   531→   531→        return;
+   532→   532→      }
+   533→   533→      if (e.key === "g" || e.key === "G") {
+   534→   534→        pendingG = window.setTimeout(clearPendingG, 1000);
+   535→   535→        return;
+   536→   536→      }
+   537→   537→      if (e.key === "?") {
+   538→   538→        e.preventDefault();
+   539→   539→        setShortcutsOpen(true);
+   540→   540→      }
+   541→   541→    };
+   542→   542→    window.addEventListener("keydown", onKey);
+   543→   543→    return () => {
+   544→   544→      window.removeEventListener("keydown", onKey);
+   545→   545→      clearPendingG();
+   546→   546→    };
+   547→   547→  }, [navigate, paletteOpen]);
+   548→   548→
+   549→   549→  const currentView = getView(view);
+   550→   550→  const isWide = ["dashboard", "manpower", "transport"].includes(view);
+   551→   551→
+   552→   552→  return (
+   553→   553→    <div className="flex min-h-screen bg-muted/30">
+   554→   554→      {/* Desktop sidebar — icons-only rail at md–lg, full (collapsible) at lg+ */}
+   555→   555→      <aside className={cn("sticky top-0 hidden h-screen shrink-0 border-r bg-background transition-all md:block", railActive ? "w-[68px]" : "w-60")}>
+   556→   556→        <SideNav collapsed={railActive} onToggle={railMode ? undefined : () => setCollapsed((c) => !c)} />
+   557→   557→      </aside>
+   558→   558→
+   559→   559→      <div className="flex min-w-0 flex-1 flex-col">
+   560→   560→        <TopBar onOpenMore={() => setMoreOpen(true)} onOpenPalette={() => setPaletteOpen(true)} onOpenShortcuts={() => setShortcutsOpen(true)} />
+   561→   561→        <BusinessBanner />
+   562→   562→        <main
+   563→   563→          id="main-scroll"
+   564→   564→          className={cn("mx-auto w-full max-w-[1600px] flex-1 px-3 pb-24 pt-3 sm:px-5 sm:pt-4 md:pb-10", !isWide && "max-w-[1400px]")}
+   565→   565→          aria-label={currentView?.label ?? "Content"}
+   566→   566→        >
+   567→   567→          {/* Keyed by view → remounts on navigation and plays the enter animation */}
+   568→   568→          <div key={view} className="view-enter">
+   569→   569→            {children}
+   570→   570→          </div>
+   571→   571→        </main>
+   572→   572→        <footer className="mt-auto hidden border-t bg-background py-3 md:block">
+   573→   573→          <div className="mx-auto flex max-w-[1600px] items-center justify-between px-5 text-[11px] text-muted-foreground">
+   574→   574→            <p>BizHub — one control center for Manpower & Transport businesses.</p>
+   575→   575→            <p className="tabular-nums">{new Date().getFullYear()} · All financial actions are audited.</p>
+   576→   576→          </div>
+   577→   577→        </footer>
+   578→   578→      </div>
+   579→   579→
+   580→   580→      {/* Mobile bottom nav */}
+   581→   581→      <BottomNav onOpenMore={() => setMoreOpen(true)} />
+   582→   582→
+   583→   583→      {/* Global command palette (Ctrl/Cmd+K, search buttons) */}
+   584→   584→      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+   585→   585→
+   586→   586→      {/* Keyboard shortcuts overlay (? key or owner menu) */}
+   587→   587→      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+   588→   588→
+   589→   589→      {/* Mobile "More" sheet with full nav */}
+   590→   590→      <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
+   591→   591→        <SheetTrigger className="hidden" aria-hidden />
+   592→   592→        <SheetContent side="left" className="w-[280px] p-0">
+   593→   593→          <SheetHeader className="sr-only">
+   594→   594→            <SheetTitle>All navigation</SheetTitle>
+   595→   595→          </SheetHeader>
+   596→   596→          <SideNav onNavigate={() => setMoreOpen(false)} />
+   597→   597→        </SheetContent>
+   598→   598→      </Sheet>
+   599→   599→    </div>
+   600→   600→  );
+   601→   601→}
+   602→   602→

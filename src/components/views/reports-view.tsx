@@ -1,14 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, downloadCSV, qs, toCSV } from "@/lib/api-client";
 import { formatINR } from "@/lib/money";
+import { buildPayslipHtml } from "@/lib/payslip";
 import type { ViewProps } from "@/components/view-types";
 import { PageHeader } from "@/components/shared/page-header";
 import { DataTable, type Column } from "@/components/shared/data-table";
 import { RangeSelector, type RangeKey } from "@/components/shared/filters";
 import { MonthPicker, toMonth } from "@/components/shared/month-picker";
 import { EmptyState } from "@/components/shared/empty-state";
+import { PrintLetterhead } from "@/components/shared/print-letterhead";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -205,6 +207,16 @@ export default function ReportsView(_props: ViewProps) {
   const [employeeId, setEmployeeId] = useState("");
   const [propertyId, setPropertyId] = useState("");
 
+  // Business name for the print letterhead / payslip header (silent — cosmetic).
+  const [businessName, setBusinessName] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api.get<{ business: { name?: string | null } }>("/api/settings")
+      .then((s) => { if (!cancelled) setBusinessName(s.business?.name ?? null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   const def = REPORTS.find((r) => r.type === type) ?? null;
 
   // Picker options — loaded only for the report that needs them
@@ -295,6 +307,42 @@ export default function ReportsView(_props: ViewProps) {
     const { from, to } = computeRange(custom ? "custom" : range, customFrom, customTo);
     return from === to ? from : `${from} → ${to}`;
   }, [def, date, month, custom, range, customFrom, customTo]);
+
+  // Standalone A4 payslip — opens a new window with the day-by-day sheet and
+  // prints it (Chromium: document.write + window.print on load).
+  const downloadPayslip = () => {
+    if (!data?.employee || !data.days) return;
+    const empRow = data.rows.find((r) => String(r.employeeId) === employeeId) as
+      | { advances?: number; netPayable?: number }
+      | undefined;
+    const earnings = data.dayTotals?.earnings
+      ?? data.days.reduce((s, d) => s + Number(d.earnings ?? 0), 0);
+    const html = buildPayslipHtml({
+      businessName,
+      employee: {
+        fullName: data.employee.fullName,
+        code: data.employee.code,
+        designation: data.employee.designation,
+      },
+      periodLabel,
+      days: data.days,
+      dayTotals: data.dayTotals ?? {
+        daysWorked: new Set(data.days.map((d) => d.date)).size,
+        shifts: data.days.length,
+        earnings,
+      },
+      advances: Number(empRow?.advances ?? 0),
+      netPayable: Number(empRow?.netPayable ?? earnings),
+    });
+    const w = window.open("", "_blank", "width=920,height=780");
+    if (!w) {
+      toast.error("Popup blocked — allow popups for this site to download the payslip.");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
 
   return (
     <div className="space-y-4">
@@ -480,13 +528,13 @@ export default function ReportsView(_props: ViewProps) {
 
           {/* Results — printed via the .print-area block (header + table only) */}
           <div className="print-area min-w-0 flex-1 space-y-3">
-            {/* Print-only report header (hidden on screen) */}
-            <div className="hidden print:block">
-              <h1 className="text-lg font-bold">{def.title} — BizHub</h1>
-              <p className="text-xs">Period: {periodLabel}</p>
-              <p className="text-xs">Generated {new Date().toLocaleString("en-IN")}</p>
-              <hr className="my-2" />
-            </div>
+            {/* Print-only letterhead + report header (hidden on screen) */}
+            <PrintLetterhead
+              businessName={businessName}
+              title={`${def.title} — BizHub`}
+              meta={`Period: ${periodLabel}`}
+              className="mb-2"
+            />
             {error ? (
               <ErrorState message={error} onRetry={reload} />
             ) : (
@@ -510,16 +558,28 @@ export default function ReportsView(_props: ViewProps) {
                   <Card className="overflow-hidden print:break-inside-avoid">
                     <div className="h-0.5 w-full bg-gradient-to-r from-emerald-500/70 via-amber-500/70 to-emerald-500/70" aria-hidden />
                     <CardHeader className="pb-0">
-                      <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-                        <Users className="h-4 w-4 text-primary" aria-hidden />
-                        <span>{data.employee.fullName}</span>
-                        {data.employee.code && (
-                          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] tracking-tight text-muted-foreground">{data.employee.code}</span>
-                        )}
-                        {data.employee.designation && (
-                          <span className="text-xs font-normal text-muted-foreground">· {data.employee.designation}</span>
-                        )}
-                      </CardTitle>
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                          <Users className="h-4 w-4 text-primary" aria-hidden />
+                          <span>{data.employee.fullName}</span>
+                          {data.employee.code && (
+                            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] tracking-tight text-muted-foreground">{data.employee.code}</span>
+                          )}
+                          {data.employee.designation && (
+                            <span className="text-xs font-normal text-muted-foreground">· {data.employee.designation}</span>
+                          )}
+                        </CardTitle>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="no-print h-8 shrink-0 gap-1.5"
+                          onClick={downloadPayslip}
+                          aria-label="Download payslip (printable A4)"
+                        >
+                          <Printer className="h-3.5 w-3.5" aria-hidden />
+                          Download payslip
+                        </Button>
+                      </div>
                       <CardDescription className="text-xs">
                         Day-by-day movement — where the employee worked, which shift, what they earned
                       </CardDescription>

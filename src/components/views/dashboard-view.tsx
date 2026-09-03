@@ -7,6 +7,7 @@ import type { ViewProps } from "@/components/view-types";
 import { useAuth } from "@/components/providers";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
+import { OnboardingChecklist } from "@/components/shared/onboarding-checklist";
 import { RangeSelector, type RangeKey } from "@/components/shared/filters";
 import { MonthPicker, toMonth } from "@/components/shared/month-picker";
 import { t as tr, useLang } from "@/lib/i18n";
@@ -246,6 +247,9 @@ export default function DashboardView({ navigate }: ViewProps) {
             <StatCard label="Net Result" value={formatINR(net, { compact: true })} icon={Landmark} tone={net >= 0 ? "positive" : "negative"} onClick={() => navigate("reports")} hint="Revenue − all expenses" />
           </div>
 
+          {/* First-run setup checklist — self-hides once the business is set up */}
+          <OnboardingChecklist navigate={navigate} />
+
           {/* Row 2 — 14-day performance trend + expense split */}
           <section className="grid gap-3 lg:grid-cols-3" aria-label="Trends">
             <Card className="lg:col-span-2">
@@ -261,12 +265,12 @@ export default function DashboardView({ navigate }: ViewProps) {
               </CardHeader>
               <CardContent>
                 {trendLoading ? (
-                  <Skeleton className="h-[220px] w-full rounded-lg" />
+                  <Skeleton className="h-44 w-full rounded-lg sm:h-52 lg:h-60" />
                 ) : (
                   <AreaTrend
                     data={(trend?.trend ?? []) as unknown as Record<string, unknown>[]}
                     xKey="date"
-                    height={220}
+                    className="h-44 sm:h-52 lg:h-60"
                     series={[
                       { key: "billing", label: "Manpower billing", color: CHART_COLORS.emerald },
                       { key: "collections", label: "Collections", color: CHART_COLORS.teal },
@@ -287,11 +291,11 @@ export default function DashboardView({ navigate }: ViewProps) {
               </CardHeader>
               <CardContent>
                 {expenseTotal === 0 ? (
-                  <p className="flex h-[220px] items-center justify-center text-center text-xs text-muted-foreground">
+                  <p className="flex h-44 items-center justify-center text-center text-xs text-muted-foreground sm:h-52 lg:h-60">
                     No expenses recorded in this range
                   </p>
                 ) : (
-                  <div className="relative h-[220px]">
+                  <div className="relative h-44 sm:h-52 lg:h-60">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie

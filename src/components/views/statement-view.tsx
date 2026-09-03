@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import {
   type SettlementRec, type SettlementLineRec, type EmployeeRec, ErrorState, fmtDay, useAsync, initials,
 } from "./_shared";
+import { PrintLetterhead } from "@/components/shared/print-letterhead";
 
 interface StatementResp {
   settlement: SettlementRec;
@@ -89,6 +90,9 @@ export default function StatementView({ params, navigate }: ViewProps) {
         className="print-area mx-auto w-full max-w-3xl rounded-xl border border-neutral-300 bg-white p-4 text-neutral-900 shadow-sm sm:p-8 print:rounded-none print:border-0 print:p-0 print:shadow-none"
         style={{ printColorAdjust: "exact", WebkitPrintColorAdjust: "exact" } as React.CSSProperties}
       >
+        {/* Print-only brand strip (hidden on screen) */}
+        <PrintLetterhead businessName={business.name} className="mb-4" />
+
         {/* Letterhead */}
         <div className="flex flex-col gap-3 border-b-2 border-neutral-900 pb-4 sm:flex-row sm:items-start sm:justify-between print:text-black">
           <div className="flex items-start gap-3">
@@ -130,7 +134,7 @@ export default function StatementView({ params, navigate }: ViewProps) {
         </div>
 
         {/* Work lines */}
-        <div className="mt-4 overflow-x-auto">
+        <div className="mt-4 overflow-x-auto scroll-shadows">
           <table className="w-full min-w-[480px] border-collapse text-xs sm:text-sm">
             <thead>
               <tr className="bg-neutral-100 print:[background:none]">

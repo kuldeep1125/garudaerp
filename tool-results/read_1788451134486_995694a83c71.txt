@@ -1,0 +1,1630 @@
+     1→"use client";
+     2→
+     3→// Shared view-level building blocks used by multiple views in components/views/.
+     4→// Owns: data hooks, form fields, charts, pickers, and the three cross-view dialogs
+     5→// (DeployWizard, RecordPaymentDialog, GiveAdvanceDialog). Do not import outside views/.
+     6→
+     7→import { useCallback, useEffect, useMemo, useState } from "react";
+     8→import { api, ApiError, qs } from "@/lib/api-client";
+     9→import { formatINR, parseAmount } from "@/lib/money";
+    10→import { toast } from "sonner";
+    11→import { cn } from "@/lib/utils";
+    12→import { Input } from "@/components/ui/input";
+    13→import { Label } from "@/components/ui/label";
+    14→import { Textarea } from "@/components/ui/textarea";
+    15→import { Button } from "@/components/ui/button";
+    16→import { Skeleton } from "@/components/ui/skeleton";
+    17→import { Checkbox } from "@/components/ui/checkbox";
+    18→import {
+    19→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    20→} from "@/components/ui/dialog";
+    21→import {
+    22→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    23→} from "@/components/ui/select";
+    24→import {
+    25→  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+    26→  BarChart, Bar,
+    27→} from "recharts";
+    28→import {
+    29→  AlertTriangle, AlertCircle, ArrowRight, Banknote, Check, ChevronLeft, RefreshCw, Search, Users,
+    30→} from "lucide-react";
+    31→
+    32→// ---------------------------------------------------------------------------
+    33→// API record shapes (subset of contract fields used by views)
+    34→// ---------------------------------------------------------------------------
+    35→
+    36→export interface EmployeeRec {
+    37→  id: string;
+    38→  code: string;
+    39→  fullName: string;
+    40→  photoUrl?: string | null;
+    41→  gender?: string | null;
+    42→  mobile?: string | null;
+    43→  whatsapp?: string | null;
+    44→  address?: string | null;
+    45→  city?: string | null;
+    46→  joiningDate?: string | null;
+    47→  designation?: string | null;
+    48→  skills?: string | null;
+    49→  standardRate?: number | null;
+    50→  rateType?: string | null;
+    51→  status: string;
+    52→  bankDetails?: string | null;
+    53→  upiId?: string | null;
+    54→  preferredPaymentMethod?: string | null;
+    55→  notes?: string | null;
+    56→  advanceBalance?: number;
+    57→}
+    58→
+    59→export interface DeploymentRec {
+    60→  id: string;
+    61→  date: string;
+    62→  employeeId: string;
+    63→  employeeName: string;
+    64→  employeeCode?: string;
+    65→  propertyId: string;
+    66→  propertyName: string;
+    67→  shift: string;
+    68→  billingRate?: number;
+    69→  payoutRate?: number;
+    70→  billingAmount?: number;
+    71→  payoutAmount?: number;
+    72→  adjustmentAmount?: number | null;
+    73→  adjustmentNote?: string | null;
+    74→  paidStatus?: string;
+    75→  paidAmount?: number | null;
+    76→  notes?: string | null;
+    77→  createdByName?: string;
+    78→  createdAt?: string;
+    79→}
+    80→
+    81→export interface PropertyRec {
+    82→  id: string;
+    83→  name: string;
+    84→  brandName?: string | null;
+    85→  type?: string | null;
+    86→  address?: string | null;
+    87→  contactPerson?: string | null;
+    88→  contactNumber?: string | null;
+    89→  whatsapp?: string | null;
+    90→  email?: string | null;
+    91→  startDate?: string | null;
+    92→  billingRate?: number | null;
+    93→  status: string;
+    94→  notes?: string | null;
+    95→  totalBilled?: number;
+    96→  totalReceived?: number;
+    97→  totalOutstanding?: number;
+    98→}
+    99→
+   100→export interface PaymentRec {
+   101→  id: string;
+   102→  propertyId: string;
+   103→  propertyName?: string;
+   104→  date: string;
+   105→  amount: number;
+   106→  method?: string | null;
+   107→  reference?: string | null;
+   108→  notes?: string | null;
+   109→  receivedByName?: string | null;
+   110→}
+   111→
+   112→export interface AdvanceRec {
+   113→  id: string;
+   114→  employeeId: string;
+   115→  employeeName?: string;
+   116→  employeeCode?: string;
+   117→  date: string;
+   118→  amount: number;
+   119→  reason?: string | null;
+   120→  method?: string | null;
+   121→  givenByName?: string | null;
+   122→}
+   123→
+   124→export interface SettlementLineRec {
+   125→  date: string;
+   126→  propertyName: string;
+   127→  shift: string;
+   128→  rate: number;
+   129→  amount: number;
+   130→}
+   131→
+   132→export interface SettlementRec {
+   133→  id: string;
+   134→  employeeId: string;
+   135→  employeeName: string;
+   136→  employeeCode?: string;
+   137→  month: string;
+   138→  totalDays?: number;
+   139→  dayShifts?: number;
+   140→  nightShifts?: number;
+   141→  grossEarnings?: number;
+   142→  additions?: number;
+   143→  advanceDeducted?: number;
+   144→  otherDeductions?: number;
+   145→  netPayable?: number;
+   146→  advanceCarryForward?: number | null;
+   147→  status: string;
+   148→  notes?: string | null;
+   149→  lines?: SettlementLineRec[];
+   150→}
+   151→
+   152→export interface ExpenseRec {
+   153→  id: string;
+   154→  date: string;
+   155→  business: string;
+   156→  categoryId?: string | null;
+   157→  categoryName?: string | null;
+   158→  amount: number;
+   159→  method?: string | null;
+   160→  description?: string | null;
+   161→  notes?: string | null;
+   162→  vehicleId?: string | null;
+   163→  vehicleName?: string | null;
+   164→  spentByName?: string | null;
+   165→}
+   166→
+   167→export interface VehicleRec {
+   168→  id: string;
+   169→  code: string;
+   170→  registrationNumber: string;
+   171→  name: string;
+   172→  make?: string | null;
+   173→  model?: string | null;
+   174→  variant?: string | null;
+   175→  year?: number | null;
+   176→  purchaseDate?: string | null;
+   177→  purchasePrice?: number | null;
+   178→  status: string;
+   179→  insuranceCompany?: string | null;
+   180→  insuranceNumber?: string | null;
+   181→  insuranceExpiry?: string | null;
+   182→  permitInfo?: string | null;
+   183→  fitnessExpiry?: string | null;
+   184→  notes?: string | null;
+   185→  loanAmount?: number | null;
+   186→  monthlyEmi?: number | null;
+   187→  emiStartDate?: string | null;
+   188→  emiEndDate?: string | null;
+   189→  stats?: {
+   190→    monthRevenue: number;
+   191→    monthExpense: number;
+   192→    monthEmi: number;
+   193→    monthNet: number;
+   194→    revenue: number;
+   195→    expense: number;
+   196→    net: number;
+   197→  };
+   198→}
+   199→
+   200→export interface ClientRec {
+   201→  id: string;
+   202→  name: string;
+   203→  company?: string | null;
+   204→  phone?: string | null;
+   205→  whatsapp?: string | null;
+   206→  email?: string | null;
+   207→  address?: string | null;
+   208→  billingDetails?: string | null;
+   209→  notes?: string | null;
+   210→  tripCount?: number;
+   211→  totalBusiness?: number;
+   212→}
+   213→
+   214→export interface TripRec {
+   215→  id: string;
+   216→  vehicleId: string;
+   217→  vehicleName?: string;
+   218→  vehicleReg?: string;
+   219→  clientId: string;
+   220→  clientName?: string;
+   221→  startAt: string;
+   222→  endAt?: string | null;
+   223→  tripType: string;
+   224→  rentalType?: string | null;
+   225→  pickup?: string | null;
+   226→  destination?: string | null;
+   227→  driver?: string | null;
+   228→  agreedAmount: number;
+   229→  advanceReceived?: number;
+   230→  extraCharges?: number;
+   231→  finalAmount?: number | null;
+   232→  paymentStatus: string;
+   233→  status: string;
+   234→  fuelResponsibility?: string | null;
+   235→  notes?: string | null;
+   236→  paidAmount?: number;
+   237→  createdByName?: string;
+   238→}
+   239→
+   240→export interface ListResp<T> { items: T[]; total: number; page?: number; pageSize?: number }
+   241→
+   242→// ---------------------------------------------------------------------------
+   243→// Hooks & small utils
+   244→// ---------------------------------------------------------------------------
+   245→
+   246→export function errMessage(e: unknown): string {
+   247→  if (e instanceof ApiError) return e.message;
+   248→  if (e instanceof Error) return e.message;
+   249→  return "Something went wrong";
+   250→}
+   251→
+   252→/** Fetch-on-mount hook with loading/error/reload. Toasts load failures. */
+   253→export function useAsync<T>(loader: () => Promise<T>, deps: React.DependencyList) {
+   254→  const [data, setData] = useState<T | null>(null);
+   255→  const [loading, setLoading] = useState(true);
+   256→  const [error, setError] = useState<string | null>(null);
+   257→  const load = useCallback(async () => {
+   258→    setLoading(true);
+   259→    try {
+   260→      const d = await loader();
+   261→      setData(d);
+   262→      setError(null);
+   263→    } catch (e) {
+   264→      const msg = errMessage(e);
+   265→      setError(msg);
+   266→      toast.error(msg);
+   267→    } finally {
+   268→      setLoading(false);
+   269→    }
+   270→  }, deps);
+   271→  useEffect(() => { void load(); }, [load]);
+   272→  return { data, loading, error, reload: load, setData };
+   273→}
+   274→
+   275→/** Mutation wrapper: consistent error toasts, optional success toast.
+   276→ *  Pass an `undo` resolver to attach an "Undo" action to the success toast —
+   277→ *  it reverses the entry server-side (zero mismatch) and calls onUndo. */
+   278→export interface UndoSpec {
+   279→  module: string; // PAYMENT / ADVANCE / EXPENSE / DEPLOYMENT / TRIP / EMI / MAINTENANCE / ADJUSTMENT
+   280→  recordId?: string;
+   281→  onUndo?: () => void;
+   282→}
+   283→
+   284→export async function undoRequest(spec: {
+   285→  auditLogId?: string;
+   286→  module?: string;
+   287→  recordId?: string;
+   288→  onUndo?: () => void;
+   289→}): Promise<boolean> {
+   290→  try {
+   291→    await api.post("/api/undo", {
+   292→      ...(spec.auditLogId ? { auditLogId: spec.auditLogId } : { module: spec.module, recordId: spec.recordId }),
+   293→    });
+   294→    toast.success("Entry reversed — everything is back to how it was", { icon: "↩️" });
+   295→    spec.onUndo?.();
+   296→    return true;
+   297→  } catch (e) {
+   298→    toast.error(errMessage(e));
+   299→    return false;
+   300→  }
+   301→}
+   302→
+   303→export function useMutation() {
+   304→  const [saving, setSaving] = useState(false);
+   305→  const mutate = useCallback(async (
+   306→    fn: () => Promise<unknown>,
+   307→    success?: string,
+   308→    undo?: (data: unknown) => UndoSpec | null | undefined
+   309→  ) => {
+   310→    setSaving(true);
+   311→    try {
+   312→      const data = await fn();
+   313→      if (success) {
+   314→        const spec = undo?.(data);
+   315→        if (spec?.module && spec.recordId) {
+   316→          toast.success(success, {
+   317→            duration: 8000,
+   318→            action: { label: "Undo", onClick: () => void undoRequest(spec) },
+   319→          });
+   320→        } else {
+   321→          toast.success(success);
+   322→        }
+   323→      }
+   324→      return { ok: true as const, data };
+   325→    } catch (e) {
+   326→      toast.error(errMessage(e));
+   327→      return { ok: false as const, error: e };
+   328→    } finally {
+   329→      setSaving(false);
+   330→    }
+   331→  }, []);
+   332→  return { mutate, saving };
+   333→}
+   334→
+   335→export function useDebounced<T>(value: T, delay = 300): T {
+   336→  const [v, setV] = useState(value);
+   337→  useEffect(() => {
+   338→    const t = setTimeout(() => setV(value), delay);
+   339→    return () => clearTimeout(t);
+   340→  }, [value, delay]);
+   341→  return v;
+   342→}
+   343→
+   344→export function todayStr(offsetDays = 0): string {
+   345→  const d = new Date();
+   346→  d.setDate(d.getDate() + offsetDays);
+   347→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+   348→}
+   349→
+   350→export function fmtDay(s?: string | null): string {
+   351→  if (!s) return "—";
+   352→  const d = new Date(s.length === 10 ? `${s}T00:00:00` : s);
+   353→  if (Number.isNaN(d.getTime())) return s;
+   354→  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+   355→}
+   356→
+   357→export function fmtDateTime(s?: string | null): string {
+   358→  if (!s) return "—";
+   359→  const d = new Date(s);
+   360→  if (Number.isNaN(d.getTime())) return s;
+   361→  return d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+   362→}
+   363→
+   364→export function initials(name?: string | null): string {
+   365→  if (!name) return "?";
+   366→  const parts = name.trim().split(/\s+/).slice(0, 2);
+   367→  return parts.map((p) => p[0]?.toUpperCase() ?? "").join("") || "?";
+   368→}
+   369→
+   370→export function moneyCls(v: number | null | undefined): string {
+   371→  return (v ?? 0) < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400";
+   372→}
+   373→
+   374→// ---------------------------------------------------------------------------
+   375→// Form fields
+   376→// ---------------------------------------------------------------------------
+   377→
+   378→export function Field({ label, required, hint, className, children }: {
+   379→  label: string; required?: boolean; hint?: string; className?: string; children: React.ReactNode;
+   380→}) {
+   381→  return (
+   382→    <div className={cn("space-y-1.5 min-w-0", className)}>
+   383→      <Label className="text-xs font-medium text-foreground">
+   384→        {label}
+   385→        {required && <span className="ml-0.5 text-red-500" aria-hidden>*</span>}
+   386→      </Label>
+   387→      {children}
+   388→      {hint && <p className="text-[11px] leading-snug text-muted-foreground">{hint}</p>}
+   389→    </div>
+   390→  );
+   391→}
+   392→
+   393→// Money amount input with an inline ₹ symbol prefix — makes currency unmistakable
+   394→// without relying on the field label alone. Passes value/onChange like a plain Input.
+   395→export function MoneyInput({ value, onChange, placeholder, className, min, max, step, disabled, id, "aria-label": ariaLabel }: {
+   396→  value: string | number;
+   397→  onChange: (v: string) => void;
+   398→  placeholder?: string;
+   399→  className?: string;
+   400→  min?: number;
+   401→  max?: number;
+   402→  step?: number;
+   403→  disabled?: boolean;
+   404→  id?: string;
+   405→  "aria-label"?: string;
+   406→}) {
+   407→  return (
+   408→    <div className="relative">
+   409→      <span
+   410→        aria-hidden
+   411→        className="pointer-events-none absolute inset-y-0 left-3 flex select-none items-center text-sm font-semibold text-muted-foreground"
+   412→      >
+   413→        ₹
+   414→      </span>
+   415→      <Input
+   416→        type="number"
+   417→        inputMode="numeric"
+   418→        min={min}
+   419→        max={max}
+   420→        step={step}
+   421→        value={value}
+   422→        onChange={(e) => onChange(e.target.value)}
+   423→        placeholder={placeholder ?? "0"}
+   424→        disabled={disabled}
+   425→        id={id}
+   426→        aria-label={ariaLabel}
+   427→        className={cn("pl-8", className)}
+   428→      />
+   429→    </div>
+   430→  );
+   431→}
+   432→
+   433→export interface Option { label: string; value: string }
+   434→
+   435→// ---------------------------------------------------------------------------
+   436→// Large-amount confirmation echo
+   437→// ---------------------------------------------------------------------------
+   438→
+   439→/** Payments at or above this amount ask for an explicit confirmation strip before saving. */
+   440→export const LARGE_AMOUNT_THRESHOLD = 50_000;
+   441→
+   442→/**
+   443→ * Guard rail for large money entries: render-props the dialog footer. When the
+   444→ * parsed amount is ≥ LARGE_AMOUNT_THRESHOLD, the first press of the primary
+   445→ * button shows an amber confirmation strip instead of submitting; the payment
+   446→ * proceeds only via the strip's Confirm button. Under the threshold the
+   447→ * confirm handler fires immediately (existing behaviour, unchanged).
+   448→ */
+   449→export function ConfirmAmount({ amount, subject, onSubmit, children }: {
+   450→  amount: number;
+   451→  subject: string;
+   452→  /** the real save routine — runs only after explicit confirmation for large amounts */
+   453→  onSubmit: () => void;
+   454→  /** Render-prop footer: `confirm` wires into the primary save button, `edit`
+   455→   *  collapses the echo strip, `armed` is true while the strip is showing. */
+   456→  children: (h: { confirm: () => void; edit: () => void; armed: boolean }) => React.ReactNode;
+   457→}) {
+   458→  const [armed, setArmed] = useState(false);
+   459→  const show = amount >= LARGE_AMOUNT_THRESHOLD && armed;
+   460→
+   461→  const confirm = () => {
+   462→    if (amount >= LARGE_AMOUNT_THRESHOLD && !armed) {
+   463→      setArmed(true);
+   464→      return;
+   465→    }
+   466→    setArmed(false);
+   467→    onSubmit();
+   468→  };
+   469→
+   470→  return (
+   471→    <>
+   472→      {show && (
+   473→        <div
+   474→          role="alert"
+   475→          className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5 dark:border-amber-900 dark:bg-amber-950/40"
+   476→        >
+   477→          <Banknote className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+   478→          <p className="min-w-0 flex-1 text-xs font-medium leading-snug text-amber-800 dark:text-amber-300">
+   479→            You are about to record <span className="font-bold tabular-nums">{formatINR(amount)}</span> for{" "}
+   480→            <span className="font-semibold">{subject}</span>.
+   481→          </p>
+   482→          <span className="flex shrink-0 items-center gap-1.5">
+   483→            <Button
+   484→              size="sm"
+   485→              className="h-8 bg-amber-600 text-white hover:bg-amber-700 focus-visible:ring-amber-600/40"
+   486→              onClick={confirm}
+   487→            >
+   488→              Confirm
+   489→            </Button>
+   490→            <Button
+   491→              size="sm"
+   492→              variant="outline"
+   493→              className="h-8 border-amber-300 text-amber-800 hover:bg-amber-100 dark:border-amber-900 dark:text-amber-300 dark:hover:bg-amber-950"
+   494→              onClick={() => setArmed(false)}
+   495→            >
+   496→              Edit amount
+   497→            </Button>
+   498→          </span>
+   499→        </div>
+   500→      )}
+   501→      {children({ confirm, edit: () => setArmed(false), armed: show })}
+   502→    </>
+   503→  );
+   504→}
+   505→
+   506→// Sentinel for "no selection" options (Radix Select forbids empty-string values).
+   507→export const EMPTY_SENTINEL = "__all__";
+   508→
+   509→export function SelectInput({ value, onChange, options, placeholder = "Select…", className, disabled }: {
+   510→  value: string;
+   511→  onChange: (v: string) => void;
+   512→  options: Option[];
+   513→  placeholder?: string;
+   514→  className?: string;
+   515→  disabled?: boolean;
+   516→}) {
+   517→  return (
+   518→    <Select
+   519→      // Always controlled: `value || sentinel` keeps Radix from flipping
+   520→      // between uncontrolled (undefined) and controlled when value is "".
+   521→      // A non-matching sentinel still renders the placeholder visually.
+   522→      value={value || EMPTY_SENTINEL}
+   523→      onValueChange={(v) => onChange(v === EMPTY_SENTINEL ? "" : v)}
+   524→      disabled={disabled}
+   525→    >
+   526→      <SelectTrigger className={cn("h-10 w-full", className)} aria-label={placeholder}>
+   527→        <SelectValue placeholder={placeholder} />
+   528→      </SelectTrigger>
+   529→      <SelectContent position="popper" className="max-h-72">
+   530→        {/* Radix forbids empty-string item values — map them to a sentinel. */}
+   531→        {options.map((o) => (
+   532→          <SelectItem key={o.value || EMPTY_SENTINEL} value={o.value || EMPTY_SENTINEL} className="text-sm">{o.label}</SelectItem>
+   533→        ))}
+   534→      </SelectContent>
+   535→    </Select>
+   536→  );
+   537→}
+   538→
+   539→// ---------------------------------------------------------------------------
+   540→// States & misc UI
+   541→// ---------------------------------------------------------------------------
+   542→
+   543→export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
+   544→  return (
+   545→    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-red-200 bg-red-50/50 py-10 px-6 text-center dark:border-red-900 dark:bg-red-950/20">
+   546→      <div className="rounded-full bg-red-100 p-3 dark:bg-red-950">
+   547→        <AlertCircle className="h-6 w-6 text-red-600 dark:text-red-400" aria-hidden />
+   548→      </div>
+   549→      <p className="mt-3 text-sm font-semibold">Couldn&apos;t load data</p>
+   550→      <p className="mt-1 max-w-sm text-xs text-muted-foreground">{message}</p>
+   551→      {onRetry && (
+   552→        <Button size="sm" variant="outline" className="mt-4 h-9 gap-1.5" onClick={onRetry}>
+   553→          <RefreshCw className="h-3.5 w-3.5" aria-hidden />Retry
+   554→        </Button>
+   555→      )}
+   556→    </div>
+   557→  );
+   558→}
+   559→
+   560→export function ListSkeleton({ rows = 5 }: { rows?: number }) {
+   561→  return (
+   562→    <div className="space-y-2">
+   563→      {Array.from({ length: rows }).map((_, i) => (
+   564→        <Skeleton key={i} className="h-14 w-full rounded-xl" />
+   565→      ))}
+   566→    </div>
+   567→  );
+   568→}
+   569→
+   570→/** Label/value row used inside summary cards. */
+   571→export function KV({ label, value, className }: { label: string; value: React.ReactNode; className?: string }) {
+   572→  return (
+   573→    <div className="flex items-center justify-between gap-3 py-1.5">
+   574→      <span className="text-xs text-muted-foreground">{label}</span>
+   575→      <span className={cn("text-sm font-semibold tabular-nums", className)}>{value}</span>
+   576→    </div>
+   577→  );
+   578→}
+   579→
+   580→/** Rounded initials avatar block. */
+   581→export function InitialAvatar({ name, className, tone = "emerald" }: { name?: string | null; className?: string; tone?: "emerald" | "amber" | "zinc" }) {
+   582→  const tones = {
+   583→    emerald: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+   584→    amber: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+   585→    zinc: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
+   586→  } as const;
+   587→  return (
+   588→    <div className={cn("flex shrink-0 items-center justify-center rounded-full font-bold", tones[tone], className ?? "h-10 w-10 text-sm")} aria-hidden>
+   589→      {initials(name)}
+   590→    </div>
+   591→  );
+   592→}
+   593→
+   594→// ---------------------------------------------------------------------------
+   595→// Charts (recharts wrappers — responsive, theme-aware)
+   596→// ---------------------------------------------------------------------------
+   597→
+   598→// Chart palette — CSS variables so every series re-tunes itself per theme
+   599→// (light: deep ledger tones on white; dark: luminous on deep cards).
+   600→export const CHART_COLORS = {
+   601→  emerald: "var(--chart-1)",
+   602→  amber: "var(--chart-2)",
+   603→  teal: "var(--chart-3)",
+   604→  red: "var(--chart-4)",
+   605→  plum: "var(--chart-5)",
+   606→} as const;
+   607→
+   608→export interface SeriesDef { key: string; label: string; color: string }
+   609→
+   610→const AXIS_TICK = { fontSize: 11, fill: "var(--muted-foreground)" };
+   611→const TOOLTIP_STYLE = {
+   612→  borderRadius: 10,
+   613→  border: "1px solid var(--border)",
+   614→  background: "var(--card)",
+   615→  color: "var(--foreground)",
+   616→  fontSize: 12,
+   617→  boxShadow: "0 8px 24px -12px rgb(0 0 0 / 0.35)",
+   618→} as const;
+   619→
+   620→export function AreaTrend({ data, xKey, series, height = 220 }: {
+   621→  data: Record<string, unknown>[]; xKey: string; series: SeriesDef[]; height?: number;
+   622→}) {
+   623→  return (
+   624→    <div className="w-full overflow-hidden" style={{ height }}>
+   625→      <ResponsiveContainer width="100%" height="100%">
+   626→        <AreaChart data={data} margin={{ top: 8, right: 8, left: -14, bottom: 0 }}>
+   627→          <defs>
+   628→            {series.map((s) => (
+   629→              <linearGradient key={s.key} id={`grad-${s.key.replace(/[^a-z0-9]/gi, "")}`} x1="0" y1="0" x2="0" y2="1">
+   630→                <stop offset="5%" stopColor={s.color} stopOpacity={0.28} />
+   631→                <stop offset="95%" stopColor={s.color} stopOpacity={0.02} />
+   632→              </linearGradient>
+   633→            ))}
+   634→          </defs>
+   635→          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+   636→          <XAxis dataKey={xKey} tick={AXIS_TICK} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={24} />
+   637→          <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={56} tickFormatter={(v) => formatINR(Number(v), { compact: true })} />
+   638→          <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} cursor={{ stroke: "var(--border)" }} />
+   639→          {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />}
+   640→          {series.map((s) => (
+   641→            <Area
+   642→              key={s.key}
+   643→              type="monotone"
+   644→              dataKey={s.key}
+   645→              name={s.label}
+   646→              stroke={s.color}
+   647→              fill={`url(#grad-${s.key.replace(/[^a-z0-9]/gi, "")})`}
+   648→              strokeWidth={2}
+   649→              dot={false}
+   650→              activeDot={{ r: 3 }}
+   651→            />
+   652→          ))}
+   653→        </AreaChart>
+   654→      </ResponsiveContainer>
+   655→    </div>
+   656→  );
+   657→}
+   658→
+   659→export function BarsCompare({ data, xKey, series, height = 220 }: {
+   660→  data: Record<string, unknown>[]; xKey: string; series: SeriesDef[]; height?: number;
+   661→}) {
+   662→  return (
+   663→    <div className="w-full overflow-hidden" style={{ height }}>
+   664→      <ResponsiveContainer width="100%" height="100%">
+   665→        <BarChart data={data} margin={{ top: 8, right: 8, left: -14, bottom: 0 }} barCategoryGap="24%">
+   666→          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+   667→          <XAxis dataKey={xKey} tick={AXIS_TICK} tickLine={false} axisLine={false} minTickGap={16} />
+   668→          <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={56} tickFormatter={(v) => formatINR(Number(v), { compact: true })} />
+   669→          <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} cursor={{ fill: "var(--muted)", opacity: 0.5 }} />
+   670→          {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />}
+   671→          {series.map((s) => (
+   672→            <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} radius={[4, 4, 4, 4]} maxBarSize={30} />
+   673→          ))}
+   674→        </BarChart>
+   675→      </ResponsiveContainer>
+   676→    </div>
+   677→  );
+   678→}
+   679→
+   680→/** Div-based horizontal bar list (category breakdown etc). */
+   681→export function MiniBars({ rows }: { rows: { label: string; value: number; color?: string }[] }) {
+   682→  const max = Math.max(1, ...rows.map((r) => r.value));
+   683→  if (rows.length === 0) return <p className="py-4 text-center text-xs text-muted-foreground">No data</p>;
+   684→  return (
+   685→    <div className="space-y-2.5">
+   686→      {rows.map((r) => (
+   687→        <div key={r.label}>
+   688→          <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+   689→            <span className="min-w-0 truncate font-medium">{r.label}</span>
+   690→            <span className="shrink-0 tabular-nums text-muted-foreground">{formatINR(r.value)}</span>
+   691→          </div>
+   692→          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+   693→            <div
+   694→              className="h-full rounded-full transition-all"
+   695→              style={{ width: `${Math.max(3, (r.value / max) * 100)}%`, background: r.color ?? CHART_COLORS.emerald }}
+   696→            />
+   697→          </div>
+   698→        </div>
+   699→      ))}
+   700→    </div>
+   701→  );
+   702→}
+   703→
+   704→// ---------------------------------------------------------------------------
+   705→// Employee picker (searchable checkbox list)
+   706→// ---------------------------------------------------------------------------
+   707→
+   708→export interface PickerEmployee {
+   709→  id: string;
+   710→  fullName: string;
+   711→  code?: string | null;
+   712→  standardRate?: number | null;
+   713→  advanceBalance?: number | null;
+   714→}
+   715→
+   716→export function EmployeePicker({ employees, value, onChange, multi = true, height = "max-h-60", unavailable }: {
+   717→  employees: PickerEmployee[];
+   718→  value: string[];
+   719→  onChange: (ids: string[]) => void;
+   720→  multi?: boolean;
+   721→  height?: string;
+   722→  /** Return a short reason string to mark an employee as unselectable (e.g. already booked all day), or null when selectable. */
+   723→  unavailable?: (e: PickerEmployee) => string | null;
+   724→}) {
+   725→  const [search, setSearch] = useState("");
+   726→  const filtered = useMemo(() => {
+   727→    const q = search.trim().toLowerCase();
+   728→    if (!q) return employees;
+   729→    return employees.filter((e) => `${e.fullName} ${e.code ?? ""}`.toLowerCase().includes(q));
+   730→  }, [employees, search]);
+   731→
+   732→  const toggle = (id: string) => {
+   733→    if (unavailable) {
+   734→      const emp = employees.find((e) => e.id === id);
+   735→      if (emp && unavailable(emp)) return; // blocked — ignore toggle
+   736→    }
+   737→    if (!multi) { onChange([id]); return; }
+   738→    onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
+   739→  };
+   740→
+   741→  return (
+   742→    <div className="space-y-2">
+   743→      <div className="relative">
+   744→        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+   745→        <Input
+   746→          value={search}
+   747→          onChange={(e) => setSearch(e.target.value)}
+   748→          placeholder="Search employees…"
+   749→          className="h-9 rounded-xl bg-card pl-9"
+   750→          aria-label="Search employees"
+   751→        />
+   752→      </div>
+   753→      {multi && value.length > 0 && (
+   754→        <div className="flex items-center justify-between text-xs text-muted-foreground">
+   755→          <span>{value.length} selected</span>
+   756→          <button type="button" className="font-medium text-primary hover:underline" onClick={() => onChange([])}>
+   757→            Clear all
+   758→          </button>
+   759→        </div>
+   760→      )}
+   761→      <div className={cn("overflow-y-auto rounded-xl border", height)} role="listbox" aria-multiselectable={multi}>
+   762→        {filtered.length === 0 && (
+   763→          <p className="p-6 text-center text-xs text-muted-foreground">No employees found</p>
+   764→        )}
+   765→        {filtered.map((e) => {
+   766→          const on = value.includes(e.id);
+   767→          const blockedReason = unavailable?.(e) ?? null;
+   768→          const blocked = Boolean(blockedReason);
+   769→          return (
+   770→            <div
+   771→              key={e.id}
+   772→              role="option"
+   773→              aria-selected={on}
+   774→              aria-disabled={blocked || undefined}
+   775→              tabIndex={blocked ? -1 : 0}
+   776→              onClick={() => { if (!blocked) toggle(e.id); }}
+   777→              onKeyDown={(ev) => { if (!blocked && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); toggle(e.id); } }}
+   778→              className={cn(
+   779→                "flex items-center gap-2.5 border-b px-3 py-2.5 transition-colors last:border-b-0",
+   780→                blocked ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-muted/60",
+   781→                on && "bg-primary/5"
+   782→              )}
+   783→            >
+   784→              {multi ? (
+   785→                <span className={cn(
+   786→                  "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+   787→                  on ? "border-primary bg-primary text-primary-foreground" : "border-input bg-background"
+   788→                )} aria-hidden>
+   789→                  {on && <Check className="h-3 w-3" />}
+   790→                </span>
+   791→              ) : (
+   792→                <span className={cn(
+   793→                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors",
+   794→                  on ? "border-primary" : "border-input"
+   795→                )} aria-hidden>
+   796→                  {on && <span className="h-2 w-2 rounded-full bg-primary" />}
+   797→                </span>
+   798→              )}
+   799→              <div className="min-w-0 flex-1">
+   800→                <p className="truncate text-sm font-medium">{e.fullName}</p>
+   801→                <p className="text-[11px] text-muted-foreground">
+   802→                  {e.code ?? ""}{e.standardRate ? ` · ${formatINR(e.standardRate)}/shift` : ""}
+   803→                </p>
+   804→              </div>
+   805→              {blocked && blockedReason ? (
+   806→                <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+   807→                  {blockedReason}
+   808→                </span>
+   809→              ) : (e.advanceBalance ?? 0) > 0 && (
+   810→                <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium tabular-nums text-red-600 dark:bg-red-950 dark:text-red-400">
+   811→                  Adv {formatINR(e.advanceBalance ?? 0, { compact: true })}
+   812→                </span>
+   813→              )}
+   814→            </div>
+   815→          );
+   816→        })}
+   817→      </div>
+   818→    </div>
+   819→  );
+   820→}
+   821→
+   822→/** Fetch ACTIVE employees for pickers. */
+   823→export function useActiveEmployees(enabled: boolean) {
+   824→  const [employees, setEmployees] = useState<PickerEmployee[]>([]);
+   825→  const [loaded, setLoaded] = useState(false);
+   826→  useEffect(() => {
+   827→    if (!enabled || loaded) return;
+   828→    let cancelled = false;
+   829→    api.get<ListResp<EmployeeRec>>("/api/employees" + qs({ status: "ACTIVE", pageSize: 200 }))
+   830→      .then((d) => { if (!cancelled) { setEmployees(d.items); setLoaded(true); } })
+   831→      .catch((e) => { if (!cancelled) { setLoaded(true); toast.error(errMessage(e)); } });
+   832→    return () => { cancelled = true; };
+   833→  }, [enabled, loaded]);
+   834→  return { employees, loading: enabled && !loaded };
+   835→}
+   836→
+   837→// ---------------------------------------------------------------------------
+   838→// Give Advance dialog (advances-view + employee-detail-view)
+   839→// ---------------------------------------------------------------------------
+   840→
+   841→export function GiveAdvanceDialog({ open, onOpenChange, defaultEmployeeId, employees: employeesProp, onDone }: {
+   842→  open: boolean;
+   843→  onOpenChange: (v: boolean) => void;
+   844→  defaultEmployeeId?: string;
+   845→  employees?: PickerEmployee[];
+   846→  onDone: () => void;
+   847→}) {
+   848→  const { employees: fetched, loading: loadingEmps } = useActiveEmployees(open && !employeesProp);
+   849→  const employees = employeesProp ?? fetched;
+   850→  const [employeeId, setEmployeeId] = useState("");
+   851→  const [date, setDate] = useState(todayStr());
+   852→  const [amount, setAmount] = useState("");
+   853→  const [reason, setReason] = useState("");
+   854→  const [method, setMethod] = useState("UPI");
+   855→  const { mutate, saving } = useMutation();
+   856→
+   857→  // Reset form each time the dialog opens (render-time state adjustment).
+   858→  const [prevOpen, setPrevOpen] = useState(open);
+   859→  if (open !== prevOpen) {
+   860→    setPrevOpen(open);
+   861→    if (open) {
+   862→      setEmployeeId(defaultEmployeeId ?? "");
+   863→      setDate(todayStr());
+   864→      setAmount("");
+   865→      setReason("");
+   866→      setMethod("UPI");
+   867→    }
+   868→  }
+   869→
+   870→  const selected = employees.find((e) => e.id === employeeId);
+   871→
+   872→  const submit = async () => {
+   873→    if (!employeeId) { toast.error("Select an employee"); return; }
+   874→    const amt = parseAmount(amount);
+   875→    if (amt <= 0) { toast.error("Enter a valid amount"); return; }
+   876→    const res = await mutate(
+   877→      () => api.post("/api/advances", { employeeId, date, amount: amt, reason: reason || undefined, method: method || undefined }),
+   878→      "Advance recorded",
+   879→      (data) => ({ module: "ADVANCE", recordId: (data as { id: string }).id, onUndo: onDone })
+   880→    );
+   881→    if (res.ok) { onOpenChange(false); onDone(); }
+   882→  };
+   883→
+   884→  return (
+   885→    <Dialog open={open} onOpenChange={onOpenChange}>
+   886→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+   887→        <DialogHeader>
+   888→          <DialogTitle>Give Advance</DialogTitle>
+   889→          <DialogDescription>Record a cash/UPI advance given to an employee. Auto-deducted at settlement.</DialogDescription>
+   890→        </DialogHeader>
+   891→        <div className="space-y-3">
+   892→          {!defaultEmployeeId && (
+   893→            loadingEmps ? <Skeleton className="h-40 w-full rounded-xl" /> : (
+   894→              <Field label="Employee" required>
+   895→                <EmployeePicker
+   896→                  employees={employees}
+   897→                  value={employeeId ? [employeeId] : []}
+   898→                  onChange={(ids) => setEmployeeId(ids[0] ?? "")}
+   899→                  multi={false}
+   900→                  height="max-h-44"
+   901→                />
+   902→              </Field>
+   903→            )
+   904→          )}
+   905→          {defaultEmployeeId && selected && (
+   906→            <div className="rounded-xl border bg-muted/40 px-3 py-2 text-sm">
+   907→              <span className="font-medium">{selected.fullName}</span>
+   908→              <span className="ml-2 text-xs text-muted-foreground">{selected.code}</span>
+   909→            </div>
+   910→          )}
+   911→          <div className="grid gap-3 sm:grid-cols-2">
+   912→            <Field label="Amount (₹)" required>
+   913→              <MoneyInput value={amount} onChange={setAmount} min={1} className="h-10" />
+   914→            </Field>
+   915→            <Field label="Date" required>
+   916→              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
+   917→            </Field>
+   918→          </div>
+   919→          <div className="grid gap-3 sm:grid-cols-2">
+   920→            <Field label="Method">
+   921→              <SelectInput
+   922→                value={method}
+   923→                onChange={setMethod}
+   924→                options={["UPI", "Bank", "Cash", "Cheque", "Other"].map((m) => ({ label: m, value: m }))}
+   925→              />
+   926→            </Field>
+   927→            <Field label="Reason">
+   928→              <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Festival, family emergency…" className="h-10" />
+   929→            </Field>
+   930→          </div>
+   931→        </div>
+   932→        <ConfirmAmount
+   933→          amount={parseAmount(amount)}
+   934→          subject={selected?.fullName || "the selected employee"}
+   935→          onSubmit={() => void submit()}
+   936→        >
+   937→          {({ confirm, armed }) => (
+   938→            <DialogFooter className="gap-2">
+   939→              <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   940→              <Button className="min-h-10 flex-1 sm:flex-none" onClick={confirm} disabled={saving || armed}>
+   941→                {saving ? "Saving…" : armed ? "Confirm below" : "Give Advance"}
+   942→              </Button>
+   943→            </DialogFooter>
+   944→          )}
+   945→        </ConfirmAmount>
+   946→      </DialogContent>
+   947→    </Dialog>
+   948→  );
+   949→}
+   950→
+   951→// ---------------------------------------------------------------------------
+   952→// Record Payment dialog (payments-view; also property ledger)
+   953→// ---------------------------------------------------------------------------
+   954→
+   955→interface LedgerDay { date: string; billed: number; paid: number; outstanding: number; status: string }
+   956→interface PropertyLedger { ledger: { billed: number; received: number; outstanding: number }; days: LedgerDay[] }
+   957→
+   958→export function RecordPaymentDialog({ open, onOpenChange, propertyId, properties: propertiesProp, onDone }: {
+   959→  open: boolean;
+   960→  onOpenChange: (v: boolean) => void;
+   961→  propertyId?: string;
+   962→  properties?: { id: string; name: string; outstanding?: number }[];
+   963→  onDone: () => void;
+   964→}) {
+   965→  const [properties, setProperties] = useState(propertiesProp ?? []);
+   966→  const [selected, setSelected] = useState(propertyId ?? "");
+   967→  const [data, setData] = useState<PropertyLedger | null>(null);
+   968→  const [amount, setAmount] = useState("");
+   969→  const [date, setDate] = useState(todayStr());
+   970→  const [method, setMethod] = useState("UPI");
+   971→  const [reference, setReference] = useState("");
+   972→  const [notes, setNotes] = useState("");
+   973→  const { mutate, saving } = useMutation();
+   974→
+   975→  // Load property options if caller didn't pass any.
+   976→  useEffect(() => {
+   977→    if (!open || propertiesProp || propertyId) return;
+   978→    let cancelled = false;
+   979→    api.get<{ items: { propertyId: string; propertyName: string; outstanding: number }[] }>("/api/payments/pending")
+   980→      .then((d) => { if (!cancelled) setProperties(d.items.map((i) => ({ id: i.propertyId, name: i.propertyName, outstanding: i.outstanding }))); })
+   981→      .catch(() => {});
+   982→    return () => { cancelled = true; };
+   983→  }, [open, propertiesProp, propertyId]);
+   984→
+   985→  // Reset form each time the dialog opens (render-time state adjustment).
+   986→  const [prevOpen, setPrevOpen] = useState(open);
+   987→  if (open !== prevOpen) {
+   988→    setPrevOpen(open);
+   989→    if (open) {
+   990→      setSelected(propertyId ?? "");
+   991→      setAmount("");
+   992→      setDate(todayStr());
+   993→      setMethod("UPI");
+   994→      setReference("");
+   995→      setNotes("");
+   996→    }
+   997→  }
+   998→
+   999→  const [loadedFor, setLoadedFor] = useState("");
+  1000→  const loading = Boolean(open && selected && loadedFor !== selected);
+  1001→  useEffect(() => {
+  1002→    if (!open || !selected) return;
+  1003→    let cancelled = false;
+  1004→    api.get<PropertyLedger>(`/api/payments/property/${selected}`)
+  1005→      .then((d) => {
+  1006→        if (cancelled) return;
+  1007→        setData(d);
+  1008→        setLoadedFor(selected);
+  1009→        setAmount((prev) => (prev ? prev : String(d.ledger.outstanding ?? 0)));
+  1010→      })
+  1011→      .catch((e) => { if (!cancelled) toast.error(errMessage(e)); });
+  1012→    return () => { cancelled = true; };
+  1013→  }, [open, selected]);
+  1014→
+  1015→  const submit = async () => {
+  1016→    if (!selected) { toast.error("Select a property"); return; }
+  1017→    const amt = parseAmount(amount);
+  1018→    if (amt <= 0) { toast.error("Enter a valid amount"); return; }
+  1019→    const res = await mutate(
+  1020→      () => api.post("/api/payments", { propertyId: selected, date, amount: amt, method: method || undefined, reference: reference || undefined, notes: notes || undefined }),
+  1021→      `Payment of ${formatINR(amt)} recorded`,
+  1022→      (data) => ({ module: "PAYMENT", recordId: (data as { id: string }).id, onUndo: onDone })
+  1023→    );
+  1024→    if (res.ok) { onOpenChange(false); onDone(); }
+  1025→  };
+  1026→
+  1027→  return (
+  1028→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1029→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+  1030→        <DialogHeader>
+  1031→          <DialogTitle>Record Payment</DialogTitle>
+  1032→          <DialogDescription>Received amount is allocated FIFO against oldest unpaid deployments.</DialogDescription>
+  1033→        </DialogHeader>
+  1034→        <div className="space-y-3">
+  1035→          {!propertyId && (
+  1036→            <Field label="Property" required>
+  1037→              <SelectInput
+  1038→                value={selected}
+  1039→                onChange={setSelected}
+  1040→                placeholder="Select property…"
+  1041→                options={properties.map((p) => ({ label: p.outstanding !== undefined ? `${p.name} · ${formatINR(p.outstanding, { compact: true })} due` : p.name, value: p.id }))}
+  1042→              />
+  1043→            </Field>
+  1044→          )}
+  1045→
+  1046→          {loading && <Skeleton className="h-24 w-full rounded-xl" />}
+  1047→
+  1048→          {!loading && data && (
+  1049→            <div className="rounded-xl border">
+  1050→              <div className="grid grid-cols-3 divide-x border-b text-center">
+  1051→                <div className="px-2 py-2.5">
+  1052→                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Billed</p>
+  1053→                  <p className="text-sm font-bold tabular-nums">{formatINR(data.ledger.billed, { compact: true })}</p>
+  1054→                </div>
+  1055→                <div className="px-2 py-2.5">
+  1056→                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Received</p>
+  1057→                  <p className="text-sm font-bold tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(data.ledger.received, { compact: true })}</p>
+  1058→                </div>
+  1059→                <div className="px-2 py-2.5">
+  1060→                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Outstanding</p>
+  1061→                  <p className="text-sm font-bold tabular-nums text-red-600 dark:text-red-400">{formatINR(data.ledger.outstanding, { compact: true })}</p>
+  1062→                </div>
+  1063→              </div>
+  1064→              <div className="max-h-40 overflow-y-auto">
+  1065→                {data.days.length === 0 && <p className="p-4 text-center text-xs text-muted-foreground">No billing days yet</p>}
+  1066→                {data.days.map((d) => (
+  1067→                  <div key={d.date} className="flex items-center justify-between gap-2 border-b px-3 py-2 text-xs last:border-b-0">
+  1068→                    <span className="tabular-nums text-muted-foreground">{fmtDay(d.date)}</span>
+  1069→                    <span className="tabular-nums">{formatINR(d.billed)}</span>
+  1070→                    <span className={cn("tabular-nums", d.paid >= d.billed ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+  1071→                      {formatINR(d.paid)} paid
+  1072→                    </span>
+  1073→                  </div>
+  1074→                ))}
+  1075→              </div>
+  1076→            </div>
+  1077→          )}
+  1078→
+  1079→          <div className="grid gap-3 sm:grid-cols-2">
+  1080→            <Field label="Amount (₹)" required>
+  1081→              <MoneyInput value={amount} onChange={setAmount} min={1} className="h-10" />
+  1082→            </Field>
+  1083→            <Field label="Date" required>
+  1084→              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
+  1085→            </Field>
+  1086→          </div>
+  1087→          <div className="grid gap-3 sm:grid-cols-2">
+  1088→            <Field label="Method">
+  1089→              <SelectInput value={method} onChange={setMethod} options={["UPI", "Bank", "Cash", "Cheque", "Other"].map((m) => ({ label: m, value: m }))} />
+  1090→            </Field>
+  1091→            <Field label="Reference">
+  1092→              <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="UTR / cheque no." className="h-10" />
+  1093→            </Field>
+  1094→          </div>
+  1095→          <Field label="Notes">
+  1096→            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Optional" />
+  1097→          </Field>
+  1098→        </div>
+  1099→        <ConfirmAmount
+  1100→          amount={parseAmount(amount)}
+  1101→          subject={properties.find((p) => p.id === selected)?.name || "the selected property"}
+  1102→          onSubmit={() => void submit()}
+  1103→        >
+  1104→          {({ confirm, armed }) => (
+  1105→            <DialogFooter className="gap-2">
+  1106→              <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+  1107→              <Button className="min-h-10 flex-1 sm:flex-none" onClick={confirm} disabled={saving || armed}>
+  1108→                {saving ? "Saving…" : armed ? "Confirm below" : "Record Payment"}
+  1109→              </Button>
+  1110→            </DialogFooter>
+  1111→          )}
+  1112→        </ConfirmAmount>
+  1113→      </DialogContent>
+  1114→    </Dialog>
+  1115→  );
+  1116→}
+  1117→
+  1118→// ---------------------------------------------------------------------------
+  1119→// ---------------------------------------------------------------------------
+  1120→// Shifts — simple fixed set: DAY / NIGHT / FULL (FULL = day + night = 2 units)
+  1121→// ---------------------------------------------------------------------------
+  1122→
+  1123→export const SHIFT_OPTIONS: Option[] = [
+  1124→  { label: "Day", value: "DAY" },
+  1125→  { label: "Night", value: "NIGHT" },
+  1126→  { label: "Full (Day + Night)", value: "FULL" },
+  1127→];
+  1128→
+  1129→export const SHIFT_UNITS: Record<string, number> = { DAY: 1, NIGHT: 1, FULL: 2 };
+  1130→
+  1131→// ---------------------------------------------------------------------------
+  1132→// Deploy Wizard (multi-step: details → employees → per-person shift & rates)
+  1133→// Rates resolve automatically: billing from the property, payout from the
+  1134→// employee. Anything editable per row is an override for that person only.
+  1135→// ---------------------------------------------------------------------------
+  1136→
+  1137→interface ShiftOverrides {
+  1138→  shift?: string;
+  1139→  billingRate?: string;
+  1140→  payoutRate?: string;
+  1141→}
+  1142→
+  1143→export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyId, onDone }: {
+  1144→  open: boolean;
+  1145→  onOpenChange: (v: boolean) => void;
+  1146→  defaultDate?: string;
+  1147→  defaultPropertyId?: string;
+  1148→  onDone: () => void;
+  1149→}) {
+  1150→  const [step, setStep] = useState(1);
+  1151→  const [properties, setProperties] = useState<PropertyRec[]>([]);
+  1152→  const { employees, loading: loadingEmps } = useActiveEmployees(open);
+  1153→  const [propertyId, setPropertyId] = useState(defaultPropertyId ?? "");
+  1154→  const [date, setDate] = useState(defaultDate ?? todayStr());
+  1155→  const [notes, setNotes] = useState("");
+  1156→  const [selected, setSelected] = useState<string[]>([]);
+  1157→  const [rowState, setRowState] = useState<Record<string, ShiftOverrides>>({});
+  1158→  const [duplicates, setDuplicates] = useState<string[] | null>(null);
+  1159→  const [creating, setCreating] = useState(false);
+  1160→  // Same-day bookings for the picked date — across ALL properties. Drives the
+  1161→  // "already booked" badges in the picker and the overlap guard in step 3.
+  1162→  const [booked, setBooked] = useState<Record<string, { shift: string; propertyName: string }[]>>({});
+  1163→  const [bookedLoadedFor, setBookedLoadedFor] = useState("");
+  1164→
+  1165→  // Load properties + reset on open (render-time state adjustment).
+  1166→  const [prevOpen, setPrevOpen] = useState(open);
+  1167→  if (open !== prevOpen) {
+  1168→    setPrevOpen(open);
+  1169→    if (open) {
+  1170→      setStep(1);
+  1171→      setPropertyId(defaultPropertyId ?? "");
+  1172→      setDate(defaultDate ?? todayStr());
+  1173→      setNotes("");
+  1174→      setSelected([]);
+  1175→      setRowState({});
+  1176→      setDuplicates(null);
+  1177→      setBooked({});
+  1178→      setBookedLoadedFor("");
+  1179→    }
+  1180→  }
+  1181→
+  1182→  useEffect(() => {
+  1183→    if (!open) return;
+  1184→    let cancelled = false;
+  1185→    api.get<ListResp<PropertyRec>>("/api/properties" + qs({ status: "ACTIVE", pageSize: 200 }))
+  1186→      .then((d) => { if (!cancelled) setProperties(d.items); })
+  1187→      .catch(() => {});
+  1188→    return () => { cancelled = true; };
+  1189→  }, [open]);
+  1190→
+  1191→  // Load the day's deployments (any property) whenever the wizard reaches the
+  1192→  // employee step — the picker greys out fully-booked people, and step 3 uses
+  1193→  // the same data to block overlapping shift choices.
+  1194→  useEffect(() => {
+  1195→    if (!open || step < 2) return;
+  1196→    const key = `${date}|${selected.join(",")}`;
+  1197→    if (bookedLoadedFor === key) return;
+  1198→    let cancelled = false;
+  1199→    api.get<ListResp<DeploymentRec>>("/api/deployments" + qs({ from: date, to: date, pageSize: 500 }))
+  1200→      .then((d) => {
+  1201→        if (cancelled) return;
+  1202→        const map: Record<string, { shift: string; propertyName: string }[]> = {};
+  1203→        for (const row of d.items) {
+  1204→          const list = map[row.employeeId] ?? [];
+  1205→          list.push({ shift: row.shift, propertyName: row.propertyName });
+  1206→          map[row.employeeId] = list;
+  1207→        }
+  1208→        setBooked(map);
+  1209→        setBookedLoadedFor(key);
+  1210→      })
+  1211→      .catch(() => { if (!cancelled) setBookedLoadedFor(key); });
+  1212→    return () => { cancelled = true; };
+  1213→  }, [open, step, date, selected]);
+  1214→
+  1215→  const property = useMemo(() => properties.find((p) => p.id === propertyId) ?? null, [properties, propertyId]);
+  1216→
+  1217→  const selectedEmployees = useMemo(
+  1218→    () => employees.filter((e) => selected.includes(e.id)),
+  1219→    [employees, selected]
+  1220→  );
+  1221→
+  1222→  const rowShift = (id: string) => (rowState[id]?.shift ?? "DAY");
+  1223→
+  1224→  const bookedList = (id: string) => booked[id] ?? [];
+  1225→  /** Employee has no free half-day left (FULL booked, or both DAY and NIGHT taken). */
+  1226→  const fullyBooked = (id: string) => {
+  1227→    const list = bookedList(id);
+  1228→    return list.some((w) => w.shift === "FULL") ||
+  1229→      (list.some((w) => w.shift === "DAY") && list.some((w) => w.shift === "NIGHT"));
+  1230→  };
+  1231→  /** Same-day rows (any property) that overlap the given shift — FULL overlaps everything. */
+  1232→  const clashesFor = (id: string, shift: string) =>
+  1233→    bookedList(id).filter((w) => shift === "FULL" || w.shift === "FULL" || w.shift === shift);
+  1234→  /** Suggest the still-free half when the default DAY choice would clash. */
+  1235→  const smartShift = (id: string) => {
+  1236→    const list = bookedList(id);
+  1237→    const has = (s: string) => list.some((w) => w.shift === s);
+  1238→    if (has("DAY") && !has("NIGHT")) return "NIGHT";
+  1239→    if (has("NIGHT") && !has("DAY")) return "DAY";
+  1240→    return "DAY"; // fully booked or free — caller shows blocked state anyway
+  1241→  };
+  1242→
+  1243→  // Selected people whose currently-chosen shift overlaps an existing same-day
+  1244→  // booking (any property). Blocks the Deploy button until resolved.
+  1245→  const conflictingSelected = useMemo(
+  1246→    () => selectedEmployees.filter((e) => clashesFor(e.id, rowShift(e.id)).length > 0),
+  1247→    [selectedEmployees, rowState, booked]
+  1248→  );
+  1249→  const rowBillingRate = (e: PickerEmployee) => {
+  1250→    const o = rowState[e.id];
+  1251→    if (o?.billingRate !== undefined && o?.billingRate !== "") return parseAmount(o.billingRate);
+  1252→    return property?.billingRate ?? 0;
+  1253→  };
+  1254→  const rowPayoutRate = (e: PickerEmployee) => {
+  1255→    const o = rowState[e.id];
+  1256→    if (o?.payoutRate !== undefined && o?.payoutRate !== "") return parseAmount(o.payoutRate);
+  1257→    return e.standardRate ?? 0;
+  1258→  };
+  1259→
+  1260→  const totals = useMemo(() => {
+  1261→    let billing = 0, payout = 0;
+  1262→    for (const e of selectedEmployees) {
+  1263→      const units = SHIFT_UNITS[rowShift(e.id)] ?? 1;
+  1264→      billing += rowBillingRate(e) * units;
+  1265→      payout += rowPayoutRate(e) * units;
+  1266→    }
+  1267→    return { billing, payout, margin: billing - payout };
+  1268→  }, [selectedEmployees, rowState, property]);
+  1269→
+  1270→  const buildBody = (ids: string[]) => ({
+  1271→    propertyId,
+  1272→    date,
+  1273→    notes: notes || undefined,
+  1274→    entries: ids.map((id) => {
+  1275→      const o = rowState[id];
+  1276→      return {
+  1277→        employeeId: id,
+  1278→        shift: o?.shift ?? "DAY",
+  1279→        ...(o?.billingRate !== undefined && o?.billingRate !== "" ? { billingRate: parseAmount(o.billingRate) } : {}),
+  1280→        ...(o?.payoutRate !== undefined && o?.payoutRate !== "" ? { payoutRate: parseAmount(o.payoutRate) } : {}),
+  1281→      };
+  1282→    }),
+  1283→  });
+  1284→
+  1285→  const finish = (result: { created?: { id: string }[]; skipped?: { employeeName?: string }[] }) => {
+  1286→    const created = result.created?.length ?? 0;
+  1287→    const skipped = result.skipped?.length ?? 0;
+  1288→    const ids = (result.created ?? []).map((c) => c.id).join(",");
+  1289→    toast.success(
+  1290→      created > 0
+  1291→        ? `Deployed ${created} employee${created === 1 ? "" : "s"}${skipped > 0 ? ` · ${skipped} skipped` : ""}`
+  1292→        : "No new deployments created",
+  1293→      created > 0
+  1294→        ? { duration: 8000, action: { label: "Undo", onClick: () => void undoRequest({ module: "DEPLOYMENT", recordId: ids, onUndo: onDone }) } }
+  1295→        : undefined
+  1296→    );
+  1297→    onOpenChange(false);
+  1298→    onDone();
+  1299→  };
+  1300→
+  1301→  const submit = async (skipIds?: string[]) => {
+  1302→    const ids = skipIds ?? selected;
+  1303→    if (ids.length === 0) { toast.error("Select at least one employee"); return; }
+  1304→    setCreating(true);
+  1305→    try {
+  1306→      const result = await api.post<{ created: { id: string }[]; skipped: { employeeName?: string }[] }>("/api/deployments", buildBody(ids));
+  1307→      finish(result);
+  1308→    } catch (e) {
+  1309→      if (e instanceof ApiError && e.status === 409) {
+  1310→        const dups = Array.isArray(e.extra?.duplicates) ? (e.extra.duplicates as string[]) : [];
+  1311→        const conflicts = Array.isArray(e.extra?.conflicts) ? (e.extra.conflicts as string[]) : [];
+  1312→        setDuplicates(conflicts.length > 0 ? conflicts : dups);
+  1313→        toast.error(e.message || "Some employees are already booked for overlapping shifts on this date");
+  1314→      } else {
+  1315→        toast.error(errMessage(e));
+  1316→      }
+  1317→    } finally {
+  1318→      setCreating(false);
+  1319→    }
+  1320→  };
+  1321→
+  1322→  const remainingAfterSkip = useMemo(() => {
+  1323→    if (!duplicates) return [];
+  1324→    return selected.filter((id) => {
+  1325→      const emp = employees.find((x) => x.id === id);
+  1326→      if (!emp) return false;
+  1327→      return !duplicates.some((d) => d.includes(emp.fullName) || (!!emp.code && d.includes(emp.code)));
+  1328→    });
+  1329→  }, [duplicates, selected, employees]);
+  1330→
+  1331→  const canNext = propertyId && date;
+  1332→
+  1333→  return (
+  1334→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1335→      <DialogContent className="flex h-[86vh] flex-col gap-0 overflow-hidden p-0 sm:h-[82vh] sm:max-w-xl">
+  1336→        <DialogHeader className="border-b px-5 pb-4 pt-5 text-left">
+  1337→          <DialogTitle>Deploy Employees</DialogTitle>
+  1338→          <DialogDescription>
+  1339→            Step {step} of 3 · {step === 1 ? "Where & when" : step === 2 ? "Pick employees" : "Shift & rates per person"}
+  1340→          </DialogDescription>
+  1341→          <div className="mt-3 flex items-center gap-1.5" aria-hidden>
+  1342→            {[1, 2, 3].map((s) => (
+  1343→              <div key={s} className={cn("h-1.5 flex-1 rounded-full transition-colors", s <= step ? "bg-primary" : "bg-muted")} />
+  1344→            ))}
+  1345→          </div>
+  1346→        </DialogHeader>
+  1347→
+  1348→        <div className="flex-1 space-y-3.5 overflow-y-auto px-5 py-4">
+  1349→          {duplicates && duplicates.length > 0 && (
+  1350→            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs dark:border-amber-900 dark:bg-amber-950/40">
+  1351→              <p className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300">
+  1352→                <AlertTriangle className="h-3.5 w-3.5" aria-hidden /> Already booked for this date
+  1353→              </p>
+  1354→              <ul className="mt-1.5 max-h-24 space-y-0.5 overflow-y-auto text-amber-800/90 dark:text-amber-300/90">
+  1355→                {duplicates.slice(0, 10).map((d, i) => <li key={i} className="truncate">• {d}</li>)}
+  1356→              </ul>
+  1357→              {remainingAfterSkip.length > 0 && (
+  1358→                <Button
+  1359→                  size="sm"
+  1360→                  variant="outline"
+  1361→                  className="mt-2 h-8 border-amber-300 text-amber-800 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-950"
+  1362→                  onClick={() => submit(remainingAfterSkip)}
+  1363→                  disabled={creating}
+  1364→                >
+  1365→                  Skip duplicates & save {remainingAfterSkip.length} rest
+  1366→                </Button>
+  1367→              )}
+  1368→            </div>
+  1369→          )}
+  1370→
+  1371→          {step === 1 && (
+  1372→            <>
+  1373→              <Field label="Property" required hint="Its billing rate is applied automatically to every selected employee.">
+  1374→                <SelectInput
+  1375→                  value={propertyId}
+  1376→                  onChange={setPropertyId}
+  1377→                  placeholder="Select property…"
+  1378→                  options={properties.map((p) => ({
+  1379→                    label: `${p.brandName ? `${p.name} (${p.brandName})` : p.name}${p.billingRate ? ` — ${formatINR(p.billingRate)}/shift` : ""}`,
+  1380→                    value: p.id,
+  1381→                  }))}
+  1382→                />
+  1383→              </Field>
+  1384→              <Field label="Date" required>
+  1385→                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
+  1386→              </Field>
+  1387→              <Field label="Notes">
+  1388→                <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Optional instructions" />
+  1389→              </Field>
+  1390→              <div className={cn(
+  1391→                "rounded-xl border px-3.5 py-3 text-xs",
+  1392→                (property?.billingRate ?? 0) > 0
+  1393→                  ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300"
+  1394→                  : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+  1395→              )}>
+  1396→                {(property?.billingRate ?? 0) > 0 ? (
+  1397→                  <p className="font-medium">
+  1398→                    {property?.name}: billing {formatINR(property?.billingRate ?? 0)} per shift · each employee is paid at their own fixed rate. Full shift = 2 units.
+  1399→                  </p>
+  1400→                ) : (
+  1401→                  <p className="font-medium">
+  1402→                    This property has no billing rate yet — set it from the Properties page before deploying.
+  1403→                  </p>
+  1404→                )}
+  1405→              </div>
+  1406→            </>
+  1407→          )}
+  1408→
+  1409→          {step === 2 && (
+  1410→            loadingEmps ? (
+  1411→              <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 w-full rounded-xl" />)}</div>
+  1412→            ) : (
+  1413→              <>
+  1414→                <div className="flex items-center justify-between">
+  1415→                  <p className="text-sm font-medium">Select employees <span className="text-muted-foreground">({selected.length} chosen)</span></p>
+  1416→                  <Button
+  1417→                    type="button"
+  1418→                    variant="ghost"
+  1419→                    size="sm"
+  1420→                    className="h-8 text-xs"
+  1421→                    onClick={() => {
+  1422→                      const selectable = employees.filter((e) => !fullyBooked(e.id)).map((e) => e.id);
+  1423→                      setSelected(selected.length === selectable.length ? [] : selectable);
+  1424→                    }}
+  1425→                  >
+  1426→                    {selected.length === employees.filter((e) => !fullyBooked(e.id)).length ? "Deselect all" : "Select all"}
+  1427→                  </Button>
+  1428→                </div>
+  1429→                {employees.some((e) => fullyBooked(e.id)) && (
+  1430→                  <p className="rounded-lg bg-amber-50 px-3 py-1.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+  1431→                    Some employees are already fully booked for {fmtDay(date)} — they are marked and locked below.
+  1432→                  </p>
+  1433→                )}
+  1434→                <EmployeePicker
+  1435→                  employees={employees}
+  1436→                  value={selected}
+  1437→                  onChange={setSelected}
+  1438→                  height="max-h-[46vh]"
+  1439→                  unavailable={(e) => {
+  1440→                    if (!fullyBooked(e.id)) return null;
+  1441→                    const list = bookedList(e.id);
+  1442→                    const short = (n: string) => (n.length > 16 ? `${n.slice(0, 15)}…` : n);
+  1443→                    return list.some((w) => w.shift === "FULL")
+  1444→                      ? `Full day · ${short(list[0].propertyName)}`
+  1445→                      : `Day + Night · ${short(list[0].propertyName)}`;
+  1446→                  }}
+  1447→                />
+  1448→              </>
+  1449→            )
+  1450→          )}
+  1451→
+  1452→          {step === 3 && (
+  1453→            <>
+  1454→              <div className="rounded-xl border bg-muted/40 px-3.5 py-2.5 text-xs">
+  1455→                <p className="font-medium">{property?.name ?? "Property"}</p>
+  1456→                <p className="mt-0.5 text-muted-foreground">
+  1457→                  {fmtDay(date)} · {selected.length} employee{selected.length === 1 ? "" : "s"} · rates auto-filled — change shift or any rate below
+  1458→                </p>
+  1459→              </div>
+  1460→              <div className="space-y-2">
+  1461→                {selectedEmployees.map((e) => {
+  1462→                  const st = rowState[e.id] ?? {};
+  1463→                  const shift = rowShift(e.id);
+  1464→                  const clashes = clashesFor(e.id, shift);
+  1465→                  const units = SHIFT_UNITS[shift] ?? 1;
+  1466→                  const bRate = rowBillingRate(e);
+  1467→                  const pRate = rowPayoutRate(e);
+  1468→                  return (
+  1469→                    <div key={e.id} className={cn(
+  1470→                      "rounded-xl border p-2.5 transition-colors",
+  1471→                      clashes.length > 0 && "border-red-300 bg-red-50/70 dark:border-red-900 dark:bg-red-950/30"
+  1472→                    )}>
+  1473→                      <div className="flex items-center justify-between gap-2">
+  1474→                        <div className="min-w-0">
+  1475→                          <p className="truncate text-xs font-medium">{e.fullName} <span className="text-muted-foreground">({e.code})</span></p>
+  1476→                          <p className="text-[10px] text-muted-foreground">Auto: bill {formatINR(property?.billingRate ?? 0)} · pay {formatINR(e.standardRate ?? 0)}/shift</p>
+  1477→                        </div>
+  1478→                        {/* Per-person shift segmented control */}
+  1479→                        <div className="flex shrink-0 rounded-lg border bg-muted/50 p-0.5" role="group" aria-label={`Shift for ${e.fullName}`}>
+  1480→                          {SHIFT_OPTIONS.map((s) => {
+  1481→                            const optionClashes = clashesFor(e.id, s.value).length > 0;
+  1482→                            return (
+  1483→                              <button
+  1484→                                key={s.value}
+  1485→                                type="button"
+  1486→                                className={cn(
+  1487→                                  "min-h-7 rounded-md px-2 text-[11px] font-medium transition-colors",
+  1488→                                  shift === s.value
+  1489→                                    ? optionClashes
+  1490→                                      ? "bg-red-600 text-white shadow-sm"
+  1491→                                      : "bg-primary text-primary-foreground shadow-sm"
+  1492→                                    : "text-muted-foreground hover:text-foreground"
+  1493→                                )}
+  1494→                                aria-pressed={shift === s.value}
+  1495→                                title={optionClashes ? `Already booked for ${s.value.toLowerCase()} today` : undefined}
+  1496→                                onClick={() => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], shift: s.value } }))}
+  1497→                              >
+  1498→                                {s.value === "FULL" ? "Full" : s.label}
+  1499→                              </button>
+  1500→                            );
+  1501→                          })}
+  1502→                        </div>
+  1503→                      </div>
+  1504→                      <div className="mt-2 grid grid-cols-2 gap-2">
+  1505→                        <div>
+  1506→                          <Label className="mb-1 block text-[10px] uppercase tracking-wide text-muted-foreground">Billing ₹/shift</Label>
+  1507→                          <MoneyInput
+  1508→                            className="h-8 text-right text-xs tabular-nums"
+  1509→                            value={st.billingRate ?? String(property?.billingRate ?? 0)}
+  1510→                            onChange={(v) => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], billingRate: v } }))}
+  1511→                            aria-label={`Billing rate for ${e.fullName}`}
+  1512→                          />
+  1513→                        </div>
+  1514→                        <div>
+  1515→                          <Label className="mb-1 block text-[10px] uppercase tracking-wide text-muted-foreground">Payout ₹/shift</Label>
+  1516→                          <MoneyInput
+  1517→                            className="h-8 text-right text-xs tabular-nums"
+  1518→                            value={st.payoutRate ?? String(e.standardRate ?? 0)}
+  1519→                            onChange={(v) => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], payoutRate: v } }))}
+  1520→                            aria-label={`Payout rate for ${e.fullName}`}
+  1521→                          />
+  1522→                        </div>
+  1523→                      </div>
+  1524→                      {clashes.length > 0 ? (
+  1525→                        <p className="mt-1.5 flex items-start gap-1 text-[10px] font-semibold text-red-600 dark:text-red-400">
+  1526→                          <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />
+  1527→                          Already booked: {clashes.map((w) => `${w.shift} @ ${w.propertyName}`).join(", ")} — pick the free shift or go back
+  1528→                        </p>
+  1529→                      ) : (
+  1530→                        <p className="mt-1.5 text-right text-[10px] tabular-nums text-muted-foreground">
+  1531→                          {units} unit{units > 1 ? "s" : ""} → bills <span className="font-semibold text-foreground">{formatINR(bRate * units)}</span> · pays <span className="font-semibold text-foreground">{formatINR(pRate * units)}</span>
+  1532→                        </p>
+  1533→                      )}
+  1534→                    </div>
+  1535→                  );
+  1536→                })}
+  1537→              </div>
+  1538→              <p className="text-[11px] text-muted-foreground">Full shift = Day + Night = 2 shift units. Edited rates apply to this deployment only — the fixed master rates never change.</p>
+  1539→            </>
+  1540→          )}
+  1541→        </div>
+  1542→
+  1543→        <div className="border-t bg-card px-5 py-3">
+  1544→          {step === 3 && conflictingSelected.length > 0 && (
+  1545→            <p className="mb-2 rounded-lg bg-red-50 px-3 py-1.5 text-[11px] font-semibold text-red-600 dark:bg-red-950/40 dark:text-red-400">
+  1546→              {conflictingSelected.length} employee{conflictingSelected.length === 1 ? " is" : "s are"} already booked for the selected shift — change the red shift or go back.
+  1547→            </p>
+  1548→          )}
+  1549→          {step === 3 && (
+  1550→            <div className="mb-2.5 flex items-center justify-between rounded-lg bg-muted/60 px-3 py-2 text-xs font-medium tabular-nums">
+  1551→              <span>Billing <span className="font-bold">{formatINR(totals.billing)}</span></span>
+  1552→              <span>Payout <span className="font-bold">{formatINR(totals.payout)}</span></span>
+  1553→              <span className={totals.margin >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>
+  1554→                Margin <span className="font-bold">{formatINR(totals.margin)}</span>
+  1555→              </span>
+  1556→            </div>
+  1557→          )}
+  1558→          <div className="flex items-center justify-between gap-2">
+  1559→            {step === 1 ? (
+  1560→              <Button variant="outline" className="min-h-10" onClick={() => onOpenChange(false)}>Cancel</Button>
+  1561→            ) : (
+  1562→              <Button variant="outline" className="min-h-10 gap-1" onClick={() => setStep(step - 1)}>
+  1563→                <ChevronLeft className="h-4 w-4" aria-hidden />Back
+  1564→              </Button>
+  1565→            )}
+  1566→            {step < 3 ? (
+  1567→              <Button
+  1568→                className="min-h-10 gap-1.5"
+  1569→                disabled={!canNext}
+  1570→                onClick={() => {
+  1571→                  if (step === 2) {
+  1572→                    // Pre-pick the still-free half for people already booked today.
+  1573→                    setRowState((r) => {
+  1574→                      const next = { ...r };
+  1575→                      for (const id of selected) {
+  1576→                        const current = next[id]?.shift ?? "DAY";
+  1577→                        if (clashesFor(id, current).length > 0 && !fullyBooked(id)) {
+  1578→                          next[id] = { ...next[id], shift: smartShift(id) };
+  1579→                        }
+  1580→                      }
+  1581→                      return next;
+  1582→                    });
+  1583→                  }
+  1584→                  setStep(step + 1);
+  1585→                }}
+  1586→              >
+  1587→                Next<ArrowRight className="h-4 w-4" aria-hidden />
+  1588→              </Button>
+  1589→            ) : (
+  1590→              <Button
+  1591→                className="min-h-10 gap-1.5"
+  1592→                onClick={() => submit()}
+  1593→                disabled={creating || selected.length === 0 || conflictingSelected.length > 0}
+  1594→                title={conflictingSelected.length > 0 ? "Resolve shift conflicts first" : undefined}
+  1595→              >
+  1596→                <Users className="h-4 w-4" aria-hidden />
+  1597→                {creating ? "Deploying…" : `Deploy ${selected.length} employee${selected.length === 1 ? "" : "s"}`}
+  1598→              </Button>
+  1599→            )}
+  1600→          </div>
+  1601→        </div>
+  1602→      </DialogContent>
+  1603→    </Dialog>
+  1604→  );
+  1605→}
+  1606→
+  1607→// ---------------------------------------------------------------------------
+  1608→// Misc shared bits
+  1609→// ---------------------------------------------------------------------------
+  1610→
+  1611→export function ShiftBadgeInline({ shift }: { shift: string }) {
+  1612→  const s = String(shift).toUpperCase();
+  1613→  return (
+  1614→    <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+  1615→      {s === "FULL" ? (
+  1616→        <>
+  1617→          <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
+  1618→          <span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-500" aria-hidden />
+  1619→          Full
+  1620→        </>
+  1621→      ) : (
+  1622→        <>
+  1623→          <span className={cn("inline-block h-1.5 w-1.5 rounded-full", s === "NIGHT" ? "bg-slate-500" : "bg-amber-500")} aria-hidden />
+  1624→          {s === "NIGHT" ? "Night" : "Day"}
+  1625→        </>
+  1626→      )}
+  1627→    </span>
+  1628→  );
+  1629→}
+  1630→

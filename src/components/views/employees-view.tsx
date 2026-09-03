@@ -5,6 +5,7 @@ import { ApiError, api, qs } from "@/lib/api-client";
 import { formatINR, parseAmount } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
 import { PageHeader } from "@/components/shared/page-header";
+import { ViewFab } from "@/components/shared/view-fab";
 import { DataTable, type Column } from "@/components/shared/data-table";
 import { SearchInput } from "@/components/shared/filters";
 import { Button } from "@/components/ui/button";
@@ -212,7 +213,7 @@ export default function EmployeesView({ navigate }: ViewProps) {
         <div className="flex items-center justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`Actions for ${r.fullName}`}>
+              <Button variant="ghost" size="icon" className="h-9 w-9 sm:h-8 sm:w-8" aria-label={`Actions for ${r.fullName}`}>
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -296,6 +297,9 @@ export default function EmployeesView({ navigate }: ViewProps) {
         employees={advanceTarget ? [{ id: advanceTarget.id, fullName: advanceTarget.fullName, code: advanceTarget.code, standardRate: advanceTarget.standardRate, advanceBalance: advanceTarget.advanceBalance }] : undefined}
         onDone={load}
       />
+
+      {/* Mobile FAB — alternate trigger for Add Employee */}
+      <ViewFab icon={UserPlus} label="Add employee" onClick={() => setAddOpen(true)} />
     </div>
   );
 }

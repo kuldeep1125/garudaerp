@@ -33,12 +33,23 @@ const STYLES: Record<string, string> = {
   NIGHT: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border-slate-300",
 };
 
+// Live statuses get a gently pulsing dot; terminal states get a static one.
+const PULSE_DOTS = new Set(["ACTIVE", "AVAILABLE", "PENDING", "PARTIAL", "SCHEDULED", "TRIP", "DRAFT", "RENTED"]);
+
 export function StatusBadge({ status, className }: { status: string; className?: string }) {
   const key = String(status ?? "").toUpperCase();
   const style = STYLES[key] ?? "bg-muted text-muted-foreground border-border";
   const label = key.replace(/_/g, " ");
   return (
     <Badge variant="outline" className={cn("font-semibold text-[11px] px-2 py-0.5 whitespace-nowrap", style, className)}>
+      {/* dot inherits the badge text colour — zero-mapping semantic accent */}
+      <span
+        aria-hidden
+        className={cn(
+          "mr-1 inline-block h-1.5 w-1.5 rounded-full bg-current opacity-80",
+          PULSE_DOTS.has(key) && "animate-pulse"
+        )}
+      />
       {label}
     </Badge>
   );

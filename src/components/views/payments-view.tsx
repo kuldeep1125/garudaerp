@@ -5,6 +5,7 @@ import { api, qs } from "@/lib/api-client";
 import { formatINR } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
 import { PageHeader } from "@/components/shared/page-header";
+import { ViewFab } from "@/components/shared/view-fab";
 import { DataTable, type Column } from "@/components/shared/data-table";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -161,7 +162,7 @@ export default function PaymentsView({ params, navigate }: ViewProps) {
                   <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Outstanding</p>
                   <p className="text-lg font-bold tabular-nums text-red-600 dark:text-red-400">{formatINR(row.outstanding)}</p>
                 </div>
-                <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" aria-label="Open">
+                <Button size="icon" variant="ghost" className="h-9 w-9 sm:h-8 sm:w-8 shrink-0" aria-label="Open">
                   <ArrowRight className="h-4 w-4" />
                 </Button>
               </CardContent>
@@ -218,6 +219,9 @@ export default function PaymentsView({ params, navigate }: ViewProps) {
         onOpenChange={setQuickOpen}
         onDone={refreshAll}
       />
+
+      {/* Mobile FAB — alternate trigger for Record Payment */}
+      <ViewFab icon={Plus} label="Record payment" onClick={() => setQuickOpen(true)} />
     </div>
   );
 }

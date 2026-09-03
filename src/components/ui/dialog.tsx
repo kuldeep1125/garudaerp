@@ -61,10 +61,20 @@ function DialogContent({
         data-slot="dialog-content"
         className={cn(
           "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg",
+          // Mobile: bottom-sheet presentation — docked to the bottom edge, rounded top,
+          // scrollable, with a grab handle. Desktop keeps the centered modal.
+          "max-sm:top-auto max-sm:bottom-0 max-sm:left-0 max-sm:right-0 max-sm:translate-x-0 max-sm:translate-y-0",
+          "max-sm:max-w-full max-sm:rounded-t-2xl max-sm:rounded-b-none max-sm:border-x-0 max-sm:border-b-0",
+          "max-sm:max-h-[92dvh] max-sm:overflow-y-auto max-sm:p-5 max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))]",
           className
         )}
         {...props}
       >
+        {/* grab handle (mobile sheets only) */}
+        <div
+          aria-hidden
+          className="mx-auto -mb-1 h-1 w-10 shrink-0 rounded-full bg-foreground/20 sm:hidden"
+        />
         {children}
         {showCloseButton && (
           <DialogPrimitive.Close

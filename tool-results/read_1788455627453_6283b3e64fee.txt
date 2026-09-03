@@ -1,0 +1,748 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import { api, qs } from "@/lib/api-client";
+     5→import { formatINR, parseAmount } from "@/lib/money";
+     6→import type { ViewProps } from "@/components/view-types";
+     7→import { PageHeader } from "@/components/shared/page-header";
+     8→import { DataTable, downloadCsv, type Column } from "@/components/shared/data-table";
+     9→import { RangeSelector, type RangeKey } from "@/components/shared/filters";
+    10→import { Button } from "@/components/ui/button";
+    11→import { Card, CardContent } from "@/components/ui/card";
+    12→import {
+    13→  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+    14→} from "@/components/ui/dialog";
+    15→import {
+    16→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+    17→  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+    18→} from "@/components/ui/alert-dialog";
+    19→import { Input } from "@/components/ui/input";
+    20→import { Label } from "@/components/ui/label";
+    21→import { Separator } from "@/components/ui/separator";
+    22→import { Skeleton } from "@/components/ui/skeleton";
+    23→import { StatusBadge } from "@/components/shared/status-badge";
+    24→import { toast } from "sonner";
+    25→import { cn } from "@/lib/utils";
+    26→import { useLang, t } from "@/lib/i18n";
+    27→import { CalendarCheck, Pencil, Trash2, CalendarDays, ChevronDown, Download } from "lucide-react";
+    28→import {
+    29→  DeploymentRec, DeployWizard, ListResp, MoneyInput, Option, PropertyRec, SelectInput, ShiftBadgeInline,
+    30→  SHIFT_OPTIONS, SHIFT_UNITS, errMessage, fmtDateTime, fmtDay, todayStr, useAsync, useMutation,
+    31→  undoRequest, UNDO_APPLIED_EVENT,
+    32→} from "./_shared";
+    33→
+    34→const SHIFT_FILTER_OPTIONS: Option[] = [
+    35→  { label: "All shifts", value: "" },
+    36→  { label: "Day", value: "DAY" },
+    37→  { label: "Night", value: "NIGHT" },
+    38→  { label: "Full", value: "FULL" },
+    39→];
+    40→
+    41→interface Totals { billing: number; payout: number; margin: number; count: number }
+    42→
+    43→// --- Attendance month grid (per-employee × per-day shift units) ---
+    44→interface AttendanceCell { date: string; shifts: number }
+    45→interface AttendanceRow {
+    46→  employeeId: string; name: string; code: string; role?: string | null;
+    47→  total: number; workedDays: number; cells: AttendanceCell[];
+    48→}
+    49→interface AttendanceResp { month: string; dates: string[]; rows: AttendanceRow[]; totalShifts: number }
+    50→
+    51→const ATT_HEAT = [
+    52→  "bg-muted/50",
+    53→  "bg-emerald-200/70 dark:bg-emerald-900/60",
+    54→  "bg-emerald-400/80 dark:bg-emerald-800/80",
+    55→  "bg-emerald-600 dark:bg-emerald-600",
+    56→];
+    57→
+    58→function attClass(n: number): string {
+    59→  if (n <= 0) return ATT_HEAT[0];
+    60→  if (n === 1) return ATT_HEAT[1];
+    61→  if (n === 2) return ATT_HEAT[2];
+    62→  return ATT_HEAT[3];
+    63→}
+    64→
+    65→const WD_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
+    66→
+    67→function monthLabel(month: string): string {
+    68→  const [y, m] = month.split("-").map(Number);
+    69→  return new Date(y, (m ?? 1) - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+    70→}
+    71→
+    72→function shiftMonth(month: string, delta: number): string {
+    73→  const [y, m] = month.split("-").map(Number);
+    74→  const d = new Date(y, (m ?? 1) - 1 + delta, 1);
+    75→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    76→}
+    77→
+    78→function isWeekend(dateStr: string): boolean {
+    79→  const [y, m, d] = dateStr.split("-").map(Number);
+    80→  const wd = new Date(y, (m ?? 1) - 1, d ?? 1).getDay();
+    81→  return wd === 0 || wd === 6;
+    82→}
+    83→
+    84→function monthBounds(offset = 0): { from: string; to: string } {
+    85→  const now = new Date();
+    86→  const first = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    87→  const last = new Date(now.getFullYear(), now.getMonth() + offset + 1, 0);
+    88→  const f = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    89→  return { from: f(first), to: f(last) };
+    90→}
+    91→
+    92→export default function DeploymentsView({ params }: ViewProps) {
+    93→  const { lang } = useLang();
+    94→  const [date, setDate] = useState(params?.date ?? todayStr());
+    95→  const [fromTo, setFromTo] = useState<{ from?: string; to?: string }>({});
+    96→  const [rangeKey, setRangeKey] = useState<RangeKey | null>(params?.date ? null : "today");
+    97→  const [propertyId, setPropertyId] = useState(params?.propertyId ?? "");
+    98→  const [employeeId, setEmployeeId] = useState(params?.employeeId ?? "");
+    99→  const [shift, setShift] = useState("");
+   100→  const [wizardOpen, setWizardOpen] = useState(false);
+   101→  const [detail, setDetail] = useState<DeploymentRec | null>(null);
+   102→  const [editRates, setEditRates] = useState(false);
+   103→  const [rateForm, setRateForm] = useState({ shift: "DAY", billingRate: "", payoutRate: "", adjustmentAmount: "", adjustmentNote: "", notes: "" });
+   104→  const [confirmDelete, setConfirmDelete] = useState(false);
+   105→  // Bulk selection + delete
+   106→  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+   107→  const [bulkConfirm, setBulkConfirm] = useState(false);
+   108→  const { mutate, saving } = useMutation();
+   109→
+   110→  // Attendance month grid — fetched lazily, only while expanded.
+   111→  const [attOpen, setAttOpen] = useState(false);
+   112→  const [attMonth, setAttMonth] = useState(() => {
+   113→    const n = new Date();
+   114→    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+   115→  });
+   116→  const { data: att, loading: attLoading } = useAsync<AttendanceResp | null>(
+   117→    () => (attOpen ? api.get<AttendanceResp>(`/api/deployments/attendance?month=${attMonth}`) : Promise.resolve(null)),
+   118→    [attOpen, attMonth]
+   119→  );
+   120→
+   121→  // Property options for filter.
+   122→  const [properties, setProperties] = useState<PropertyRec[]>([]);
+   123→  useEffect(() => {
+   124→    let cancelled = false;
+   125→    api.get<ListResp<PropertyRec>>("/api/properties" + qs({ pageSize: 200 }))
+   126→      .then((d) => { if (!cancelled) setProperties(d.items); })
+   127→      .catch(() => {});
+   128→    return () => { cancelled = true; };
+   129→  }, []);
+   130→
+   131→  // Employee options for filter (active only).
+   132→  const [employees, setEmployees] = useState<{ id: string; fullName: string; code: string }[]>([]);
+   133→  useEffect(() => {
+   134→    let cancelled = false;
+   135→    api.get<ListResp<{ id: string; fullName: string; code: string }>>("/api/employees" + qs({ status: "ACTIVE", pageSize: 200 }))
+   136→      .then((d) => { if (!cancelled) setEmployees(d.items); })
+   137→      .catch(() => {});
+   138→    return () => { cancelled = true; };
+   139→  }, []);
+   140→
+   141→  const onRange = (r: RangeKey) => {
+   142→    setRangeKey(r);
+   143→    if (r === "today") { setDate(todayStr()); setFromTo({}); }
+   144→    else if (r === "yesterday") { setDate(todayStr(-1)); setFromTo({}); }
+   145→    else if (r === "week") { setDate(""); setFromTo({ from: todayStr(-6), to: todayStr() }); }
+   146→    else if (r === "lastweek") { setDate(""); setFromTo({ from: todayStr(-13), to: todayStr(-7) }); }
+   147→    else if (r === "month") { setDate(""); setFromTo({ ...monthBounds(0), to: todayStr() }); }
+   148→    else { setDate(""); setFromTo(monthBounds(-1)); }
+   149→  };
+   150→
+   151→  const onDateChange = (d: string) => {
+   152→    setDate(d);
+   153→    setRangeKey(null);
+   154→    setFromTo({});
+   155→  };
+   156→
+   157→  const [data, setData] = useState<ListResp<DeploymentRec> & { totals?: Totals } | null>(null);
+   158→  const [loading, setLoading] = useState(true);
+   159→  const [error, setError] = useState<string | null>(null);
+   160→
+   161→  const load = useCallback(async () => {
+   162→    setLoading(true);
+   163→    try {
+   164→      const query = qs({
+   165→        date: date || undefined,
+   166→        from: fromTo.from,
+   167→        to: fromTo.to,
+   168→        propertyId: propertyId || undefined,
+   169→        employeeId: employeeId || undefined,
+   170→        shift: shift || undefined,
+   171→        pageSize: 200,
+   172→      });
+   173→      const d = await api.get<ListResp<DeploymentRec> & { totals?: Totals }>("/api/deployments" + query);
+   174→      setData(d);
+   175→      setError(null);
+   176→    } catch (e) {
+   177→      setError(errMessage(e));
+   178→      toast.error(errMessage(e));
+   179→    } finally {
+   180→      setLoading(false);
+   181→    }
+   182→  }, [date, fromTo, propertyId, employeeId, shift]);
+   183→
+   184→  useEffect(() => { void load(); }, [load]);
+   185→
+   186→  // An undo applied from the global Undo Center may have restored rows — refresh.
+   187→  useEffect(() => {
+   188→    const onUndoApplied = () => void load();
+   189→    window.addEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
+   190→    return () => window.removeEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
+   191→  }, [load]);
+   192→
+   193→  const rows = useMemo(() => data?.items ?? [], [data]);
+   194→  const totals = data?.totals;
+   195→
+   196→  const openDetail = (d: DeploymentRec) => {
+   197→    setDetail(d);
+   198→    setEditRates(false);
+   199→    setRateForm({
+   200→      shift: d.shift,
+   201→      billingRate: String(d.billingRate ?? 0),
+   202→      payoutRate: String(d.payoutRate ?? 0),
+   203→      adjustmentAmount: d.adjustmentAmount ? String(d.adjustmentAmount) : "",
+   204→      adjustmentNote: d.adjustmentNote ?? "",
+   205→      notes: d.notes ?? "",
+   206→    });
+   207→  };
+   208→
+   209→  const saveRates = async () => {
+   210→    if (!detail) return;
+   211→    const res = await mutate(
+   212→      () => api.put(`/api/deployments/${detail.id}`, {
+   213→        shift: rateForm.shift,
+   214→        billingRate: parseAmount(rateForm.billingRate),
+   215→        payoutRate: parseAmount(rateForm.payoutRate),
+   216→        adjustmentAmount: rateForm.adjustmentAmount ? parseAmount(rateForm.adjustmentAmount) : 0,
+   217→        adjustmentNote: rateForm.adjustmentNote || undefined,
+   218→        notes: rateForm.notes || undefined,
+   219→      }),
+   220→      "Deployment updated",
+   221→      () => ({ module: "DEPLOYMENT", recordId: detail.id, onUndo: () => void load() })
+   222→    );
+   223→    if (res.ok) { setDetail(null); void load(); }
+   224→  };
+   225→
+   226→  const deleteDeployment = async () => {
+   227→    if (!detail) return;
+   228→    const res = await mutate(
+   229→      () => api.del(`/api/deployments/${detail.id}`),
+   230→      "Deployment removed",
+   231→      () => ({ module: "DEPLOYMENT", recordId: detail.id, onUndo: () => void load() })
+   232→    );
+   233→    setConfirmDelete(false);
+   234→    if (res.ok) { setDetail(null); void load(); }
+   235→  };
+   236→
+   237→  // Bulk remove: one DELETE at a time (allSettled semantics) — sequential so
+   238→  // concurrent FIFO recomputes can't race; every row is snapshotted by the
+   239→  // DELETE endpoint, so one Undo action restores the whole batch zero-mismatch.
+   240→  const bulkDelete = async () => {
+   241→    const ids = rows.filter((r) => selectedIds.has(r.id)).map((r) => r.id);
+   242→    if (ids.length === 0) { setBulkConfirm(false); return; }
+   243→    setBulkConfirm(false);
+   244→    const results: PromiseSettledResult<unknown>[] = [];
+   245→    for (const id of ids) {
+   246→      try {
+   247→        results.push({ status: "fulfilled", value: await api.del(`/api/deployments/${id}`) });
+   248→      } catch (e) {
+   249→        results.push({ status: "rejected", reason: e });
+   250→      }
+   251→    }
+   252→    const okIds = ids.filter((_, i) => results[i].status === "fulfilled");
+   253→    if (okIds.length > 0) {
+   254→      toast.success(`Removed ${okIds.length} of ${ids.length} deployment${ids.length === 1 ? "" : "s"}`, {
+   255→        duration: 8000,
+   256→        action: {
+   257→          label: "Undo",
+   258→          onClick: () => {
+   259→            void (async () => {
+   260→              for (const id of okIds) {
+   261→                await undoRequest({ module: "DEPLOYMENT", recordId: id, onUndo: () => void load() });
+   262→              }
+   263→            })();
+   264→          },
+   265→        },
+   266→      });
+   267→    } else {
+   268→      toast.error("Could not remove the selected deployments");
+   269→    }
+   270→    setSelectedIds(new Set());
+   271→    void load();
+   272→  };
+   273→
+   274→  const columns: Column<DeploymentRec>[] = [
+   275→    { key: "date", label: t(lang, "col.date"), value: (r) => fmtDay(r.date), hideOnMobile: true },
+   276→    {
+   277→      key: "employee", label: t(lang, "col.employee"), primary: true,
+   278→      render: (r) => (
+   279→        <div className="min-w-0">
+   280→          <p className="truncate font-medium">{r.employeeName}</p>
+   281→          <p className="truncate text-[11px] text-muted-foreground">{r.employeeCode} · {r.propertyName}</p>
+   282→        </div>
+   283→      ),
+   284→      value: (r) => r.employeeName,
+   285→    },
+   286→    { key: "property", label: t(lang, "col.property"), value: (r) => r.propertyName, hideOnMobile: true },
+   287→    { key: "shift", label: t(lang, "col.shift"), render: (r) => <ShiftBadgeInline shift={r.shift} />, value: (r) => r.shift },
+   288→    {
+   289→      key: "billingAmount", label: t(lang, "col.billing"), className: "text-right",
+   290→      render: (r) => <span className="tabular-nums">{formatINR(r.billingAmount ?? 0)}</span>,
+   291→      value: (r) => formatINR(r.billingAmount ?? 0),
+   292→    },
+   293→    {
+   294→      key: "payoutAmount", label: t(lang, "col.payout"), className: "text-right",
+   295→      render: (r) => <span className="tabular-nums">{formatINR(r.payoutAmount ?? 0)}</span>,
+   296→      value: (r) => formatINR(r.payoutAmount ?? 0),
+   297→      hideOnMobile: true,
+   298→    },
+   299→    {
+   300→      key: "paidStatus", label: t(lang, "col.paid"), render: (r) => <StatusBadge status={r.paidStatus ?? "UNPAID"} />, value: (r) => r.paidStatus ?? "UNPAID",
+   301→      hideOnMobile: true,
+   302→    },
+   303→  ];
+   304→
+   305→  const detailUnits = detail ? SHIFT_UNITS[detail.shift] ?? 1 : 1;
+   306→
+   307→  return (
+   308→    <div className="space-y-4">
+   309→      <PageHeader
+   310→        title={t(lang, "page.deployments")}
+   311→        subtitle={t(lang, "page.deployments.sub")}
+   312→        actions={
+   313→          <Button size="sm" className="h-9 gap-1.5" onClick={() => setWizardOpen(true)}>
+   314→            <CalendarCheck className="h-4 w-4" aria-hidden />Deploy Employees
+   315→          </Button>
+   316→        }
+   317→      />
+   318→
+   319→      {/* Attendance month grid (collapsible) */}
+   320→      <Card>
+   321→        <button
+   322→          type="button"
+   323→          className="flex w-full items-center gap-2.5 p-4 text-left"
+   324→          aria-expanded={attOpen}
+   325→          onClick={() => setAttOpen((v) => !v)}
+   326→        >
+   327→          <span className="rounded-lg bg-emerald-100 p-1.5 dark:bg-emerald-950" aria-hidden>
+   328→            <CalendarDays className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+   329→          </span>
+   330→          <span className="min-w-0 flex-1">
+   331→            <span className="block text-sm font-semibold">Attendance — {monthLabel(attMonth)}</span>
+   332→            <span className="block text-xs text-muted-foreground">
+   333→              {att ? `${att.totalShifts.toLocaleString("en-IN")} shift units across ${att.rows.length} employees · click a cell to inspect` : "Per-employee daily shift grid (Full = 2 units)"}
+   334→            </span>
+   335→          </span>
+   336→          <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", attOpen && "rotate-180")} aria-hidden />
+   337→        </button>
+   338→        {attOpen && (
+   339→          <CardContent className="border-t pt-3">
+   340→            <div className="mb-3 flex items-center justify-between gap-2">
+   341→              <div className="flex items-center gap-1">
+   342→                <Button variant="outline" size="sm" className="h-7 w-7 p-0" aria-label="Previous month" onClick={() => setAttMonth((m) => shiftMonth(m, -1))}>
+   343→                  ‹
+   344→                </Button>
+   345→                <Button
+   346→                  variant="outline"
+   347→                  size="sm"
+   348→                  className="h-7 px-2.5 text-xs"
+   349→                  onClick={() => {
+   350→                    const n = new Date();
+   351→                    setAttMonth(`${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`);
+   352→                  }}
+   353→                >
+   354→                  This month
+   355→                </Button>
+   356→                <Button variant="outline" size="sm" className="h-7 w-7 p-0" aria-label="Next month" onClick={() => setAttMonth((m) => shiftMonth(m, 1))}>
+   357→                  ›
+   358→                </Button>
+   359→              </div>
+   360→              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground" aria-hidden>
+   361→                <span>Less</span>
+   362→                {ATT_HEAT.map((c) => <span key={c} className={cn("h-3 w-3 rounded-[3px]", c)} />)}
+   363→                <span>More</span>
+   364→              </div>
+   365→            </div>
+   366→
+   367→            {attLoading && !att ? (
+   368→              <div className="space-y-2">
+   369→                {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-6 w-full" />)}
+   370→              </div>
+   371→            ) : att && att.rows.length > 0 ? (
+   372→              <div className="overflow-x-auto pb-1">
+   373→                <div className="min-w-[640px]">
+   374→                  {/* Header: name + day numbers + totals */}
+   375→                  <div
+   376→                    className="sticky top-0 z-20 grid items-end gap-px border-b bg-card pb-1"
+   377→                    style={{ gridTemplateColumns: `minmax(8.5rem, 11rem) repeat(${att.dates.length}, minmax(14px, 1fr)) 2.6rem 2.6rem` }}
+   378→                  >
+   379→                    <div className="sticky left-0 z-30 bg-card pr-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Employee</div>
+   380→                    {att.dates.map((d, i) => {
+   381→                      const day = Number(d.slice(8));
+   382→                      const wd = WD_LETTERS[new Date(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, day).getDay()];
+   383→                      const isToday = d === todayStr();
+   384→                      return (
+   385→                        <div key={d} className={cn("text-center text-[9px] leading-tight", isWeekend(d) ? "text-muted-foreground/60" : "text-muted-foreground", isToday && "font-bold text-primary")}>
+   386→                          <div className={cn(isToday && "rounded-sm bg-primary/10")}>{day}</div>
+   387→                          <div className="opacity-70">{wd}</div>
+   388→                        </div>
+   389→                      );
+   390→                    })}
+   391→                    <div className="text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Units</div>
+   392→                    <div className="text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Days</div>
+   393→                  </div>
+   394→
+   395→                  <div className="max-h-[46vh] overflow-y-auto">
+   396→                    {att.rows.map((r) => (
+   397→                      <div
+   398→                        key={r.employeeId}
+   399→                        className="grid items-center gap-px border-b border-border/40 py-1"
+   400→                        style={{ gridTemplateColumns: `minmax(8.5rem, 11rem) repeat(${att.dates.length}, minmax(14px, 1fr)) 2.6rem 2.6rem` }}
+   401→                      >
+   402→                        <div className="sticky left-0 z-10 bg-card pr-2">
+   403→                          <p className="truncate text-xs font-medium" title={`${r.name} (${r.code})`}>{r.name}</p>
+   404→                          <p className="truncate text-[10px] text-muted-foreground">{r.code}</p>
+   405→                        </div>
+   406→                        {r.cells.map((c) => {
+   407→                          const active = c.shifts > 0;
+   408→                          return (
+   409→                            <button
+   410→                              key={c.date}
+   411→                              type="button"
+   412→                              disabled={!active}
+   413→                              className={cn(
+   414→                                "mx-auto flex h-4 w-4 items-center justify-center rounded-[3px] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+   415→                                active && "cursor-pointer hover:scale-125 hover:ring-1 hover:ring-primary/40",
+   416→                                !active && "cursor-default",
+   417→                                attClass(c.shifts),
+   418→                                isWeekend(c.date) && c.shifts === 0 && "opacity-50",
+   419→                                c.date === todayStr() && "ring-1 ring-primary ring-offset-1 ring-offset-background"
+   420→                              )}
+   421→                              role="img"
+   422→                              aria-label={
+   423→                                active
+   424→                                  ? `${r.name}: ${c.shifts} shift unit(s) on ${c.date} — filter deployments`
+   425→                                  : `${r.name}: no shifts on ${c.date}`
+   426→                              }
+   427→                              title={
+   428→                                active
+   429→                                  ? `${fmtDay(c.date)} · ${r.name} · ${c.shifts} unit${c.shifts === 1 ? "" : "s"} — click to inspect`
+   430→                                  : `${fmtDay(c.date)} · ${r.name} · no shifts`
+   431→                              }
+   432→                              onClick={
+   433→                                active
+   434→                                  ? () => {
+   435→                                      // Drill down: filter the table below to this employee + day.
+   436→                                      setEmployeeId(r.employeeId);
+   437→                                      setPropertyId("");
+   438→                                      onDateChange(c.date);
+   439→                                      setAttOpen(false);
+   440→                                      toast.info(`Showing ${r.name} — ${fmtDay(c.date)}`);
+   441→                                    }
+   442→                                  : undefined
+   443→                              }
+   444→                            />
+   445→                          );
+   446→                        })}
+   447→                        <div className="text-right text-xs font-bold tabular-nums">{r.total}</div>
+   448→                        <div className="text-right text-xs tabular-nums text-muted-foreground">{r.workedDays}</div>
+   449→                      </div>
+   450→                    ))}
+   451→                  </div>
+   452→                </div>
+   453→              </div>
+   454→            ) : (
+   455→              <p className="py-6 text-center text-xs text-muted-foreground">No active employees found.</p>
+   456→            )}
+   457→          </CardContent>
+   458→        )}
+   459→      </Card>
+   460→
+   461→      {/* Filters */}
+   462→      <Card>
+   463→        <CardContent className="space-y-3 p-3 sm:p-4">
+   464→          <RangeSelector
+   465→            value={(rangeKey ?? "today") as RangeKey}
+   466→            onChange={onRange}
+   467→          />
+   468→          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+   469→            <div>
+   470→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Date</Label>
+   471→              <Input type="date" value={date} onChange={(e) => onDateChange(e.target.value)} className="h-10" aria-label="Filter by date" />
+   472→            </div>
+   473→            <div>
+   474→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Property</Label>
+   475→              <SelectInput
+   476→                value={propertyId}
+   477→                onChange={setPropertyId}
+   478→                options={[{ label: "All properties", value: "" }, ...properties.map((p) => ({ label: p.name, value: p.id }))]}
+   479→                placeholder="All properties"
+   480→              />
+   481→            </div>
+   482→            <div>
+   483→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Employee</Label>
+   484→              <SelectInput
+   485→                value={employeeId}
+   486→                onChange={setEmployeeId}
+   487→                options={[{ label: "All employees", value: "" }, ...employees.map((e) => ({ label: `${e.fullName} (${e.code})`, value: e.id }))]}
+   488→                placeholder="All employees"
+   489→              />
+   490→            </div>
+   491→            <div>
+   492→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Shift</Label>
+   493→              <SelectInput value={shift} onChange={setShift} options={SHIFT_FILTER_OPTIONS} placeholder="All shifts" />
+   494→            </div>
+   495→          </div>
+   496→        </CardContent>
+   497→      </Card>
+   498→
+   499→      {/* Totals */}
+   500→      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+   501→        {loading ? (
+   502→          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)
+   503→        ) : (
+   504→          <>
+   505→            <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+   506→              <p className="text-[11px] sm:text-xs text-muted-foreground">Deployments</p>
+   507→              <p className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{totals?.count ?? rows.length}</p>
+   508→            </CardContent></Card>
+   509→            <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+   510→              <p className="text-[11px] sm:text-xs text-muted-foreground">Billing</p>
+   511→              <p className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{formatINR(totals?.billing ?? 0, { compact: true })}</p>
+   512→            </CardContent></Card>
+   513→            <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+   514→              <p className="text-[11px] sm:text-xs text-muted-foreground">Payout</p>
+   515→              <p className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{formatINR(totals?.payout ?? 0, { compact: true })}</p>
+   516→            </CardContent></Card>
+   517→            <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+   518→              <p className="text-[11px] sm:text-xs text-muted-foreground">Margin</p>
+   519→              <p className={cn("mt-1 text-lg sm:text-xl font-bold tabular-nums", (totals?.margin ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+   520→                {formatINR(totals?.margin ?? 0, { compact: true })}
+   521→              </p>
+   522→            </CardContent></Card>
+   523→          </>
+   524→        )}
+   525→      </div>
+   526→
+   527→      {error && (
+   528→        <div className="rounded-xl border border-red-200 bg-red-50/60 p-4 text-center dark:border-red-900 dark:bg-red-950/30">
+   529→          <p className="text-xs text-red-700 dark:text-red-300">{error}</p>
+   530→          <Button variant="outline" size="sm" className="mt-2 h-8" onClick={() => void load()}>Retry</Button>
+   531→        </div>
+   532→      )}
+   533→
+   534→      {!error && (
+   535→        <Card>
+   536→          <CardContent className="p-3 sm:p-4">
+   537→            <DataTable
+   538→              columns={columns}
+   539→              rows={rows}
+   540→              rowKey={(r) => r.id}
+   541→              onRowClick={openDetail}
+   542→              exportName="deployments"
+   543→              stickyFirstCol
+   544→              loading={loading}
+   545→              emptyIcon={CalendarCheck}
+   546→              emptyTitle="No deployments for this filter"
+   547→              emptyDescription="Use the Deploy Employees button to create today's roster."
+   548→              selectKey={(r) => r.id}
+   549→              selectedIds={selectedIds}
+   550→              onSelectedChange={setSelectedIds}
+   551→              bulkBar={(ids) => (
+   552→                <>
+   553→                  <span className="px-1.5 text-xs font-semibold tabular-nums whitespace-nowrap">
+   554→                    {ids.length} selected
+   555→                  </span>
+   556→                  <Button
+   557→                    variant="outline"
+   558→                    size="sm"
+   559→                    className="h-8 gap-1.5 text-xs"
+   560→                    onClick={() =>
+   561→                      downloadCsv(
+   562→                        "deployments-selected",
+   563→                        columns,
+   564→                        rows.filter((r) => ids.includes(r.id))
+   565→                      )
+   566→                    }
+   567→                    aria-label={`Export ${ids.length} selected deployments as CSV`}
+   568→                  >
+   569→                    <Download className="h-3.5 w-3.5" aria-hidden />Export CSV
+   570→                  </Button>
+   571→                  <Button
+   572→                    variant="destructive"
+   573→                    size="sm"
+   574→                    className="h-8 gap-1.5 text-xs"
+   575→                    onClick={() => setBulkConfirm(true)}
+   576→                    aria-label={`Remove ${ids.length} selected deployments`}
+   577→                  >
+   578→                    <Trash2 className="h-3.5 w-3.5" aria-hidden />Remove
+   579→                  </Button>
+   580→                </>
+   581→              )}
+   582→            />
+   583→          </CardContent>
+   584→        </Card>
+   585→      )}
+   586→
+   587→      <DeployWizard open={wizardOpen} onOpenChange={setWizardOpen} defaultDate={date || undefined} defaultPropertyId={propertyId || undefined} onDone={load} />
+   588→
+   589→      {/* Detail dialog */}
+   590→      <Dialog open={Boolean(detail)} onOpenChange={(v) => !v && setDetail(null)}>
+   591→        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+   592→          {detail && (
+   593→            <>
+   594→              <DialogHeader>
+   595→                <DialogTitle className="flex flex-wrap items-center gap-2">
+   596→                  {detail.employeeName}
+   597→                  <StatusBadge status={detail.paidStatus ?? "UNPAID"} />
+   598→                </DialogTitle>
+   599→                <DialogDescription>
+   600→                  {fmtDay(detail.date)} · {detail.propertyName} · {detail.shift === "FULL" ? "Full (day + night)" : detail.shift} shift
+   601→                </DialogDescription>
+   602→              </DialogHeader>
+   603→
+   604→              <div className="grid grid-cols-3 gap-2 text-center">
+   605→                <div className="rounded-xl bg-muted/60 p-2.5">
+   606→                  <p className="text-[10px] uppercase text-muted-foreground">Billing</p>
+   607→                  <p className="text-sm font-bold tabular-nums">{formatINR(detail.billingAmount ?? 0)}</p>
+   608→                  <p className="text-[10px] text-muted-foreground tabular-nums">{formatINR(detail.billingRate ?? 0)} × {detailUnits}</p>
+   609→                </div>
+   610→                <div className="rounded-xl bg-muted/60 p-2.5">
+   611→                  <p className="text-[10px] uppercase text-muted-foreground">Payout</p>
+   612→                  <p className="text-sm font-bold tabular-nums">{formatINR(detail.payoutAmount ?? 0)}</p>
+   613→                  <p className="text-[10px] text-muted-foreground tabular-nums">{formatINR(detail.payoutRate ?? 0)} × {detailUnits}</p>
+   614→                </div>
+   615→                <div className="rounded-xl bg-muted/60 p-2.5">
+   616→                  <p className="text-[10px] uppercase text-muted-foreground">Margin</p>
+   617→                  <p className={cn("text-sm font-bold tabular-nums", (detail.billingAmount ?? 0) - (detail.payoutAmount ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+   618→                    {formatINR((detail.billingAmount ?? 0) - (detail.payoutAmount ?? 0))}
+   619→                  </p>
+   620→                  <p className="text-[10px] text-muted-foreground">this record</p>
+   621→                </div>
+   622→              </div>
+   623→
+   624→              {(detail.adjustmentAmount ?? 0) !== 0 && (
+   625→                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+   626→                  Adjustment {formatINR(detail.adjustmentAmount ?? 0)}{detail.adjustmentNote ? ` — ${detail.adjustmentNote}` : ""}
+   627→                </p>
+   628→              )}
+   629→              {detail.notes && <p className="text-xs text-muted-foreground">Notes: {detail.notes}</p>}
+   630→
+   631→              <Separator />
+   632→
+   633→              {editRates ? (
+   634→                <div className="space-y-3">
+   635→                  <div className="space-y-1.5">
+   636→                    <Label className="text-xs">Shift</Label>
+   637→                    <div className="flex rounded-lg border bg-muted/50 p-1" role="group" aria-label="Shift">
+   638→                      {SHIFT_OPTIONS.map((s) => (
+   639→                        <button
+   640→                          key={s.value}
+   641→                          type="button"
+   642→                          className={cn(
+   643→                            "min-h-9 flex-1 rounded-md text-xs font-medium transition-colors",
+   644→                            rateForm.shift === s.value ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+   645→                          )}
+   646→                          aria-pressed={rateForm.shift === s.value}
+   647→                          onClick={() => setRateForm((f) => ({ ...f, shift: s.value }))}
+   648→                        >
+   649→                          {s.label}
+   650→                        </button>
+   651→                      ))}
+   652→                    </div>
+   653→                  </div>
+   654→                  <div className="grid gap-3 sm:grid-cols-2">
+   655→                    <div className="space-y-1.5">
+   656→                      <Label className="text-xs">Billing rate (₹/shift)</Label>
+   657→                      <MoneyInput className="h-9" value={rateForm.billingRate} onChange={(v) => setRateForm((f) => ({ ...f, billingRate: v }))} />
+   658→                    </div>
+   659→                    <div className="space-y-1.5">
+   660→                      <Label className="text-xs">Payout rate (₹/shift)</Label>
+   661→                      <MoneyInput className="h-9" value={rateForm.payoutRate} onChange={(v) => setRateForm((f) => ({ ...f, payoutRate: v }))} />
+   662→                    </div>
+   663→                    <div className="space-y-1.5">
+   664→                      <Label className="text-xs">Adjustment amount (± ₹)</Label>
+   665→                      <MoneyInput className="h-9" value={rateForm.adjustmentAmount} onChange={(v) => setRateForm((f) => ({ ...f, adjustmentAmount: v }))} placeholder="e.g. -100 or 250" />
+   666→                    </div>
+   667→                    <div className="space-y-1.5">
+   668→                      <Label className="text-xs">Adjustment note</Label>
+   669→                      <Input className="h-9" value={rateForm.adjustmentNote} onChange={(e) => setRateForm((f) => ({ ...f, adjustmentNote: e.target.value }))} />
+   670→                    </div>
+   671→                    <div className="space-y-1.5 sm:col-span-2">
+   672→                      <Label className="text-xs">Notes</Label>
+   673→                      <Input className="h-9" value={rateForm.notes} onChange={(e) => setRateForm((f) => ({ ...f, notes: e.target.value }))} />
+   674→                    </div>
+   675→                  </div>
+   676→                  <p className="text-[11px] text-muted-foreground">Amounts recompute as rate × shift units (Full = 2) + adjustment.</p>
+   677→                  <div className="flex gap-2">
+   678→                    <Button variant="outline" className="min-h-10 flex-1" onClick={() => setEditRates(false)}>Cancel</Button>
+   679→                    <Button className="min-h-10 flex-1" onClick={saveRates} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+   680→                  </div>
+   681→                </div>
+   682→              ) : (
+   683→                <div className="space-y-2.5">
+   684→                  <div className="flex items-center justify-between gap-2">
+   685→                    <p className="text-[11px] text-muted-foreground">
+   686→                      By {detail.createdByName ?? "—"} · {fmtDateTime(detail.createdAt)}
+   687→                    </p>
+   688→                    <div className="flex gap-1.5">
+   689→                      <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setEditRates(true)}>
+   690→                        <Pencil className="h-3 w-3" aria-hidden />Edit
+   691→                      </Button>
+   692→                      <Button variant="outline" size="sm" className="h-8 gap-1.5 border-red-200 text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950" onClick={() => setConfirmDelete(true)}>
+   693→                        <Trash2 className="h-3 w-3" aria-hidden />Remove
+   694→                      </Button>
+   695→                    </div>
+   696→                  </div>
+   697→                  <p className="rounded-lg bg-muted/60 px-3 py-2 text-[11px] text-muted-foreground">
+   698→                    Removed by mistake? The toast Undo (or Audit Log) restores it exactly — amounts, allocation and totals included.
+   699→                  </p>
+   700→                </div>
+   701→              )}
+   702→            </>
+   703→          )}
+   704→        </DialogContent>
+   705→      </Dialog>
+   706→
+   707→      {/* Delete confirmation */}
+   708→      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+   709→        <AlertDialogContent>
+   710→          <AlertDialogHeader>
+   711→            <AlertDialogTitle>Remove this deployment?</AlertDialogTitle>
+   712→            <AlertDialogDescription>
+   713→              {detail && `${detail.employeeName} — ${fmtDay(detail.date)} · ${detail.propertyName} · ${detail.shift} shift (${formatINR(detail.billingAmount ?? 0)} billing).`} The entry is snapshotted, so Undo restores it with zero mismatch.
+   714→            </AlertDialogDescription>
+   715→          </AlertDialogHeader>
+   716→          <AlertDialogFooter>
+   717→            <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
+   718→            <AlertDialogAction className="min-h-10 bg-red-600 text-white hover:bg-red-700" onClick={() => void deleteDeployment()}>
+   719→              {saving ? "Removing…" : "Remove entry"}
+   720→            </AlertDialogAction>
+   721→          </AlertDialogFooter>
+   722→        </AlertDialogContent>
+   723→      </AlertDialog>
+   724→
+   725→      {/* Bulk remove confirmation */}
+   726→      <AlertDialog open={bulkConfirm} onOpenChange={setBulkConfirm}>
+   727→        <AlertDialogContent>
+   728→          <AlertDialogHeader>
+   729→            <AlertDialogTitle>Remove {selectedIds.size} selected deployment{selectedIds.size === 1 ? "" : "s"}?</AlertDialogTitle>
+   730→            <AlertDialogDescription>
+   731→              Every removed row is fully snapshotted — a single Undo action after removal restores the whole batch, including FIFO payment allocation.
+   732→            </AlertDialogDescription>
+   733→          </AlertDialogHeader>
+   734→          <AlertDialogFooter>
+   735→            <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
+   736→            <AlertDialogAction
+   737→              className="min-h-10 bg-red-600 text-white hover:bg-red-700"
+   738→              onClick={(e) => { e.preventDefault(); void bulkDelete(); }}
+   739→            >
+   740→              Remove {selectedIds.size}
+   741→            </AlertDialogAction>
+   742→          </AlertDialogFooter>
+   743→        </AlertDialogContent>
+   744→      </AlertDialog>
+   745→    </div>
+   746→  );
+   747→}
+   748→

@@ -3,6 +3,7 @@
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/empty-state";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Download } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -34,6 +35,15 @@ interface DataTableProps<T> {
   className?: string;
   /** file base name (without .csv) — when set, an Export CSV toolbar appears */
   exportName?: string;
+  /** pin the leading column while the table scrolls horizontally (wide tables) */
+  stickyFirstCol?: boolean;
+  /** when set, a selection checkbox column is shown (desktop) and each mobile
+   *  card gets a checkbox; pair with selectedIds + onSelectedChange */
+  selectKey?: (row: T) => string;
+  selectedIds?: Set<string>;
+  onSelectedChange?: (ids: Set<string>) => void;
+  /** sticky bottom action bar, rendered while the selection is non-empty */
+  bulkBar?: (ids: string[]) => React.ReactNode;
 }
 
 function csvEscape(v: string): string {
@@ -42,7 +52,8 @@ function csvEscape(v: string): string {
   return v;
 }
 
-function downloadCsv<T>(name: string, columns: Column<T>[], rows: T[]) {
+/** Shared with views so bulk bars can export exactly the selected rows. */
+export function downloadCsv<T>(name: string, columns: Column<T>[], rows: T[]) {
   const cols = columns.filter((c) => c.label && !c.excludeFromExport);
   const header = cols.map((c) => csvEscape(c.label)).join(",");
   const lines = rows.map((row) =>
@@ -78,6 +89,11 @@ export function DataTable<T>({
   footer,
   className,
   exportName,
+  stickyFirstCol,
+  selectKey,
+  selectedIds,
+  onSelectedChange,
+  bulkBar,
 }: DataTableProps<T>) {
   if (loading) {
     return (
@@ -91,6 +107,53 @@ export function DataTable<T>({
   if (rows.length === 0) {
     return <EmptyState icon={emptyIcon} title={emptyTitle} description={emptyDescription} />;
   }
+
+  // Selection (opt-in via selectKey) — checkbox-only, never row-click.
+  const selectionEnabled = Boolean(selectKey && selectedIds && onSelectedChange);
+  const allKeys = selectKey ? rows.map((row) => selectKey(row)).filter(Boolean) : [];
+  const toggleRow = (key: string) => {
+    if (!selectedIds || !onSelectedChange) return;
+    const next = new Set(selectedIds);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    onSelectedChange(next);
+  };
+  const toggleAll = () => {
+    if (!onSelectedChange) return;
+    if (allKeys.length > 0 && allKeys.every((k) => selectedIds?.has(k))) {
+      onSelectedChange(new Set());
+    } else {
+      onSelectedChange(new Set(allKeys));
+    }
+  };
+  const allSelected = selectionEnabled && allKeys.length > 0 && allKeys.every((k) => selectedIds?.has(k));
+  const someSelected = !allSelected && selectionEnabled && allKeys.some((k) => selectedIds?.has(k));
+  const selectedRowIds = selectionEnabled ? allKeys.filter((k) => selectedIds?.has(k)) : [];
+
+  const selectHeader = selectKey ? (
+    <TableHead className="w-10 whitespace-nowrap pr-0">
+      {selectionEnabled ? (
+        <Checkbox
+          checked={allSelected || (someSelected && "indeterminate")}
+          onCheckedChange={toggleAll}
+          aria-label={allSelected ? "Deselect all rows" : "Select all rows"}
+        />
+      ) : null}
+    </TableHead>
+  ) : null;
+
+  const bulkBarNode =
+    selectionEnabled && selectedRowIds.length > 0 && bulkBar ? (
+      <div
+        role="toolbar"
+        aria-label="Bulk actions"
+        className="pointer-events-none fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-40 flex justify-center px-3 md:bottom-5"
+      >
+        <div className="pointer-events-auto flex items-center gap-1.5 rounded-2xl border bg-card/95 p-2 shadow-lg backdrop-blur sm:gap-2">
+          {bulkBar(selectedRowIds)}
+        </div>
+      </div>
+    ) : null;
 
   const exportBtn = exportName ? (
     <div className="mb-2 flex justify-end">
@@ -110,35 +173,73 @@ export function DataTable<T>({
   return (
     <>
       {exportBtn}
+      {bulkBarNode}
       {/* Desktop table */}
-      <div className={cn("hidden md:block overflow-x-auto rounded-xl border", className)}>
+      <div className={cn("hidden md:block overflow-x-auto rounded-xl border scroll-shadows", className)}>
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/60 hover:bg-muted/60 border-b">
-              {columns.map((c) => (
-                <TableHead key={c.key} className={cn("whitespace-nowrap text-[11px] font-semibold uppercase tracking-wide text-muted-foreground", c.className)}>{c.label}</TableHead>
+              {selectHeader}
+              {columns.map((c, i) => (
+                <TableHead
+                  key={c.key}
+                  className={cn(
+                    "whitespace-nowrap text-[11px] font-semibold uppercase tracking-wide text-muted-foreground",
+                    stickyFirstCol && i === 0 && !selectKey && "sticky left-0 z-10 bg-muted/95 shadow-[1px_0_0_0_var(--border)]",
+                    stickyFirstCol && selectKey && i === 0 && "sticky left-10 z-10 bg-muted/95 shadow-[1px_0_0_0_var(--border)]",
+                    c.className
+                  )}
+                >{c.label}</TableHead>
               ))}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((row) => (
+            {rows.map((row) => {
+              const rowId = selectKey?.(row);
+              const checked = selectionEnabled && rowId !== undefined && selectedIds?.has(rowId);
+              return (
               <TableRow
                 key={rowKey(row)}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
+                data-selected={checked || undefined}
                 className={cn(
                   onRowClick && "cursor-pointer",
+                  stickyFirstCol && "group/row",
+                  checked && "bg-primary/5",
                   // hover accent: 2px primary bar on the leading cell
                   "[&>td:first-child]:border-l-2 [&>td:first-child]:border-l-transparent [&>td:first-child]:transition-colors",
                   onRowClick && "hover:[&>td:first-child]:border-l-primary/50"
                 )}
               >
-                {columns.map((c) => (
-                  <TableCell key={c.key} className={cn("py-2.5", c.className)}>
+                {selectKey && (
+                  <TableCell
+                    className="w-10 py-2.5 pr-0"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {selectionEnabled && rowId !== undefined ? (
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={() => toggleRow(rowId)}
+                        aria-label={`Select row ${allKeys.indexOf(rowId) + 1}`}
+                      />
+                    ) : null}
+                  </TableCell>
+                )}
+                {columns.map((c, i) => (
+                  <TableCell
+                    key={c.key}
+                    className={cn(
+                      "py-2.5 tabular-nums",
+                      stickyFirstCol && i === 0 && (selectKey ? "sticky left-10" : "sticky left-0") && "z-10 bg-card group-hover/row:bg-muted/50 shadow-[1px_0_0_0_var(--border)]",
+                      c.className
+                    )}
+                  >
                     {c.render ? c.render(row) : (c.value?.(row) ?? String((row as Record<string, unknown>)[c.key] ?? ""))}
                   </TableCell>
                 ))}
               </TableRow>
-            ))}
+              );
+            })}
           </TableBody>
         </Table>
         {footer}
@@ -149,19 +250,36 @@ export function DataTable<T>({
         {rows.map((row) => {
           const primaryCol = columns.find((c) => c.primary) ?? columns[0];
           const rest = columns.filter((c) => c !== primaryCol && !c.hideOnMobile);
+          const rowId = selectKey?.(row);
+          const checked = selectionEnabled && rowId !== undefined && selectedIds?.has(rowId);
           return (
             <div
               key={rowKey(row)}
               className={cn(
                 "relative rounded-xl border bg-card p-3 transition-colors",
                 onRowClick && "active:bg-muted/60 cursor-pointer",
-                onRowClick && "before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-primary/50 before:opacity-0 before:transition-opacity active:before:opacity-100"
+                onRowClick && "before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-primary/50 before:opacity-0 before:transition-opacity active:before:opacity-100",
+                checked && "border-primary/50 bg-primary/5"
               )}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
               role={onRowClick ? "button" : undefined}
             >
               <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 font-medium text-sm">
+                {selectKey && (
+                  <span
+                    className="flex shrink-0 items-center pt-0.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {selectionEnabled && rowId !== undefined ? (
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={() => toggleRow(rowId)}
+                        aria-label="Select row"
+                      />
+                    ) : null}
+                  </span>
+                )}
+                <div className="min-w-0 flex-1 font-medium text-sm">
                   {primaryCol.render ? primaryCol.render(row) : (primaryCol.value?.(row) ?? String((row as Record<string, unknown>)[primaryCol.key] ?? ""))}
                 </div>
               </div>

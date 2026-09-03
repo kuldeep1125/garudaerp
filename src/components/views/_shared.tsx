@@ -26,7 +26,7 @@ import {
   BarChart, Bar,
 } from "recharts";
 import {
-  AlertTriangle, AlertCircle, ArrowRight, Check, ChevronLeft, RefreshCw, Search, Users,
+  AlertTriangle, AlertCircle, ArrowRight, Banknote, Check, ChevronLeft, RefreshCw, Search, Users,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -300,6 +300,9 @@ export async function undoRequest(spec: {
   }
 }
 
+/** Fired after an undo succeeds via the Undo Center — open views may reload. */
+export const UNDO_APPLIED_EVENT = "bizhub:undo-applied";
+
 export function useMutation() {
   const [saving, setSaving] = useState(false);
   const mutate = useCallback(async (
@@ -392,7 +395,9 @@ export function Field({ label, required, hint, className, children }: {
 
 // Money amount input with an inline ₹ symbol prefix — makes currency unmistakable
 // without relying on the field label alone. Passes value/onChange like a plain Input.
-export function MoneyInput({ value, onChange, placeholder, className, min, max, step, disabled, id, "aria-label": ariaLabel }: {
+// `autoFocus` grabs focus when a dialog opens (amount is the field people come
+// here to type); `enterKeyHint="done"` gives mobile keypads a Done key.
+export function MoneyInput({ value, onChange, placeholder, className, min, max, step, disabled, id, "aria-label": ariaLabel, autoFocus, enterKeyHint }: {
   value: string | number;
   onChange: (v: string) => void;
   placeholder?: string;
@@ -403,6 +408,8 @@ export function MoneyInput({ value, onChange, placeholder, className, min, max, 
   disabled?: boolean;
   id?: string;
   "aria-label"?: string;
+  autoFocus?: boolean;
+  enterKeyHint?: React.HTMLAttributes<HTMLInputElement>["enterKeyHint"];
 }) {
   return (
     <div className="relative">
@@ -414,7 +421,8 @@ export function MoneyInput({ value, onChange, placeholder, className, min, max, 
       </span>
       <Input
         type="number"
-        inputMode="numeric"
+        inputMode="decimal"
+        enterKeyHint={enterKeyHint}
         min={min}
         max={max}
         step={step}
@@ -424,6 +432,7 @@ export function MoneyInput({ value, onChange, placeholder, className, min, max, 
         disabled={disabled}
         id={id}
         aria-label={ariaLabel}
+        autoFocus={autoFocus}
         className={cn("pl-8", className)}
       />
     </div>
@@ -431,6 +440,77 @@ export function MoneyInput({ value, onChange, placeholder, className, min, max, 
 }
 
 export interface Option { label: string; value: string }
+
+// ---------------------------------------------------------------------------
+// Large-amount confirmation echo
+// ---------------------------------------------------------------------------
+
+/** Payments at or above this amount ask for an explicit confirmation strip before saving. */
+export const LARGE_AMOUNT_THRESHOLD = 50_000;
+
+/**
+ * Guard rail for large money entries: render-props the dialog footer. When the
+ * parsed amount is ≥ LARGE_AMOUNT_THRESHOLD, the first press of the primary
+ * button shows an amber confirmation strip instead of submitting; the payment
+ * proceeds only via the strip's Confirm button. Under the threshold the
+ * confirm handler fires immediately (existing behaviour, unchanged).
+ */
+export function ConfirmAmount({ amount, subject, onSubmit, children }: {
+  amount: number;
+  subject: string;
+  /** the real save routine — runs only after explicit confirmation for large amounts */
+  onSubmit: () => void;
+  /** Render-prop footer: `confirm` wires into the primary save button, `edit`
+   *  collapses the echo strip, `armed` is true while the strip is showing. */
+  children: (h: { confirm: () => void; edit: () => void; armed: boolean }) => React.ReactNode;
+}) {
+  const [armed, setArmed] = useState(false);
+  const show = amount >= LARGE_AMOUNT_THRESHOLD && armed;
+
+  const confirm = () => {
+    if (amount >= LARGE_AMOUNT_THRESHOLD && !armed) {
+      setArmed(true);
+      return;
+    }
+    setArmed(false);
+    onSubmit();
+  };
+
+  return (
+    <>
+      {show && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5 dark:border-amber-900 dark:bg-amber-950/40"
+        >
+          <Banknote className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+          <p className="min-w-0 flex-1 text-xs font-medium leading-snug text-amber-800 dark:text-amber-300">
+            You are about to record <span className="font-bold tabular-nums">{formatINR(amount)}</span> for{" "}
+            <span className="font-semibold">{subject}</span>.
+          </p>
+          <span className="flex shrink-0 items-center gap-1.5">
+            <Button
+              size="sm"
+              className="h-8 bg-amber-600 text-white hover:bg-amber-700 focus-visible:ring-amber-600/40"
+              onClick={confirm}
+            >
+              Confirm
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 border-amber-300 text-amber-800 hover:bg-amber-100 dark:border-amber-900 dark:text-amber-300 dark:hover:bg-amber-950"
+              onClick={() => setArmed(false)}
+            >
+              Edit amount
+            </Button>
+          </span>
+        </div>
+      )}
+      {children({ confirm, edit: () => setArmed(false), armed: show })}
+    </>
+  );
+}
 
 // Sentinel for "no selection" options (Radix Select forbids empty-string values).
 export const EMPTY_SENTINEL = "__all__";
@@ -546,11 +626,18 @@ const TOOLTIP_STYLE = {
   boxShadow: "0 8px 24px -12px rgb(0 0 0 / 0.35)",
 } as const;
 
-export function AreaTrend({ data, xKey, series, height = 220 }: {
-  data: Record<string, unknown>[]; xKey: string; series: SeriesDef[]; height?: number;
+export function AreaTrend({ data, xKey, series, height, className }: {
+  data: Record<string, unknown>[]; xKey: string; series: SeriesDef[];
+  /** fixed pixel height — omit to use the responsive height classes */
+  height?: number;
+  /** responsive height classes (e.g. "h-44 sm:h-52 lg:h-60"); used when `height` is not set */
+  className?: string;
 }) {
   return (
-    <div className="w-full overflow-hidden" style={{ height }}>
+    <div
+      className={cn("w-full overflow-hidden", height === undefined && (className ?? "h-44 sm:h-52 lg:h-60"))}
+      style={height === undefined ? undefined : { height }}
+    >
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 8, right: 8, left: -14, bottom: 0 }}>
           <defs>
@@ -585,11 +672,18 @@ export function AreaTrend({ data, xKey, series, height = 220 }: {
   );
 }
 
-export function BarsCompare({ data, xKey, series, height = 220 }: {
-  data: Record<string, unknown>[]; xKey: string; series: SeriesDef[]; height?: number;
+export function BarsCompare({ data, xKey, series, height, className }: {
+  data: Record<string, unknown>[]; xKey: string; series: SeriesDef[];
+  /** fixed pixel height — omit to use the responsive height classes */
+  height?: number;
+  /** responsive height classes (e.g. "h-44 sm:h-52 lg:h-60"); used when `height` is not set */
+  className?: string;
 }) {
   return (
-    <div className="w-full overflow-hidden" style={{ height }}>
+    <div
+      className={cn("w-full overflow-hidden", height === undefined && (className ?? "h-44 sm:h-52 lg:h-60"))}
+      style={height === undefined ? undefined : { height }}
+    >
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 8, left: -14, bottom: 0 }} barCategoryGap="24%">
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
@@ -796,6 +890,14 @@ export function GiveAdvanceDialog({ open, onOpenChange, defaultEmployeeId, emplo
     }
   }
 
+  // Amount gets focus on open — Radix focuses the first focusable (employee
+  // search), so re-focus the amount shortly after mount to win the race.
+  useEffect(() => {
+    if (!open) return;
+    const t = window.setTimeout(() => document.getElementById("advance-amount")?.focus(), 80);
+    return () => window.clearTimeout(t);
+  }, [open]);
+
   const selected = employees.find((e) => e.id === employeeId);
 
   const submit = async () => {
@@ -839,7 +941,7 @@ export function GiveAdvanceDialog({ open, onOpenChange, defaultEmployeeId, emplo
           )}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Amount (₹)" required>
-              <MoneyInput value={amount} onChange={setAmount} min={1} className="h-10" />
+              <MoneyInput value={amount} onChange={setAmount} min={1} className="h-10" id="advance-amount" autoFocus enterKeyHint="done" />
             </Field>
             <Field label="Date" required>
               <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
@@ -858,12 +960,20 @@ export function GiveAdvanceDialog({ open, onOpenChange, defaultEmployeeId, emplo
             </Field>
           </div>
         </div>
-        <DialogFooter className="gap-2">
-          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>
-            {saving ? "Saving…" : "Give Advance"}
-          </Button>
-        </DialogFooter>
+        <ConfirmAmount
+          amount={parseAmount(amount)}
+          subject={selected?.fullName || "the selected employee"}
+          onSubmit={() => void submit()}
+        >
+          {({ confirm, armed }) => (
+            <DialogFooter className="gap-2">
+              <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button className="min-h-10 flex-1 sm:flex-none" onClick={confirm} disabled={saving || armed}>
+                {saving ? "Saving…" : armed ? "Confirm below" : "Give Advance"}
+              </Button>
+            </DialogFooter>
+          )}
+        </ConfirmAmount>
       </DialogContent>
     </Dialog>
   );
@@ -874,7 +984,7 @@ export function GiveAdvanceDialog({ open, onOpenChange, defaultEmployeeId, emplo
 // ---------------------------------------------------------------------------
 
 interface LedgerDay { date: string; billed: number; paid: number; outstanding: number; status: string }
-interface PropertyLedger { ledger: { billed: number; received: number; outstanding: number }; days: LedgerDay[] }
+interface PropertyLedger { property?: { id: string; name: string }; ledger: { billed: number; received: number; outstanding: number }; days: LedgerDay[] }
 
 export function RecordPaymentDialog({ open, onOpenChange, propertyId, properties: propertiesProp, onDone }: {
   open: boolean;
@@ -932,6 +1042,14 @@ export function RecordPaymentDialog({ open, onOpenChange, propertyId, properties
       .catch((e) => { if (!cancelled) toast.error(errMessage(e)); });
     return () => { cancelled = true; };
   }, [open, selected]);
+
+  // Amount gets focus on open — Radix focuses the first focusable (property
+  // select), so re-focus the amount shortly after mount to win the race.
+  useEffect(() => {
+    if (!open) return;
+    const t = window.setTimeout(() => document.getElementById("payment-amount")?.focus(), 80);
+    return () => window.clearTimeout(t);
+  }, [open]);
 
   const submit = async () => {
     if (!selected) { toast.error("Select a property"); return; }
@@ -999,7 +1117,7 @@ export function RecordPaymentDialog({ open, onOpenChange, propertyId, properties
 
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Amount (₹)" required>
-              <MoneyInput value={amount} onChange={setAmount} min={1} className="h-10" />
+              <MoneyInput value={amount} onChange={setAmount} min={1} className="h-10" id="payment-amount" autoFocus enterKeyHint="done" />
             </Field>
             <Field label="Date" required>
               <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
@@ -1017,10 +1135,20 @@ export function RecordPaymentDialog({ open, onOpenChange, propertyId, properties
             <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Optional" />
           </Field>
         </div>
-        <DialogFooter className="gap-2">
-          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : "Record Payment"}</Button>
-        </DialogFooter>
+        <ConfirmAmount
+          amount={parseAmount(amount)}
+          subject={properties.find((p) => p.id === selected)?.name || data?.property?.name || "the selected property"}
+          onSubmit={() => void submit()}
+        >
+          {({ confirm, armed }) => (
+            <DialogFooter className="gap-2">
+              <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button className="min-h-10 flex-1 sm:flex-none" onClick={confirm} disabled={saving || armed}>
+                {saving ? "Saving…" : armed ? "Confirm below" : "Record Payment"}
+              </Button>
+            </DialogFooter>
+          )}
+        </ConfirmAmount>
       </DialogContent>
     </Dialog>
   );
@@ -1243,7 +1371,7 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[86vh] flex-col gap-0 overflow-hidden p-0 sm:h-[82vh] sm:max-w-xl">
+      <DialogContent className="flex max-sm:max-h-[86dvh] flex-col gap-0 overflow-hidden p-0 sm:h-[82vh] sm:max-w-xl">
         <DialogHeader className="border-b px-5 pb-4 pt-5 text-left">
           <DialogTitle>Deploy Employees</DialogTitle>
           <DialogDescription>
@@ -1256,7 +1384,7 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
           </div>
         </DialogHeader>
 
-        <div className="flex-1 space-y-3.5 overflow-y-auto px-5 py-4">
+        <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto px-5 py-4 max-sm:overscroll-contain">
           {duplicates && duplicates.length > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs dark:border-amber-900 dark:bg-amber-950/40">
               <p className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300">
@@ -1451,7 +1579,7 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
           )}
         </div>
 
-        <div className="border-t bg-card px-5 py-3">
+        <div className="border-t bg-card px-5 py-3 max-sm:sticky max-sm:bottom-0 max-sm:z-10 max-sm:bg-background max-sm:pt-3">
           {step === 3 && conflictingSelected.length > 0 && (
             <p className="mb-2 rounded-lg bg-red-50 px-3 py-1.5 text-[11px] font-semibold text-red-600 dark:bg-red-950/40 dark:text-red-400">
               {conflictingSelected.length} employee{conflictingSelected.length === 1 ? " is" : "s are"} already booked for the selected shift — change the red shift or go back.

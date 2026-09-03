@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { useAuth, useNav, useBusiness, type BusinessScope } from "@/components/providers";
 import { usePwaInstall } from "@/components/shared/pwa-install";
 import { CommandPalette } from "@/components/shared/command-palette";
+import { UndoCenter } from "@/components/shared/undo-center";
+import { ShortcutsDialog } from "@/components/shared/shortcuts-dialog";
+import { readMutedGroups, NOTIF_MUTED_EVENT, NOTIF_CHANGED_EVENT } from "@/lib/notif-mute";
 import { VIEWS, getView } from "@/lib/views";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -16,7 +19,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import {
-  Bell, Building2, CarFront, Check, ChevronsLeft, Home, Languages, LayoutGrid, LogOut, Moon, Search, Smartphone, Sun,
+  Bell, Building2, CarFront, Check, ChevronsLeft, ChevronsRight, History, Home, Keyboard, Languages, LayoutGrid, LogOut, Moon, Search, Smartphone, Sun,
   Truck, Users, Wallet, ShieldCheck, Boxes, AlertTriangle, AlertCircle, Info,
 } from "lucide-react";
 import { useLang, t, viewLabel } from "@/lib/i18n";
@@ -35,7 +38,25 @@ const GROUP_ACCENT: Record<string, string> = {
   SYSTEM: "",
 };
 
-// Desktop sidebar (collapsible) — also the content of the mobile "More" sheet.
+// Media-query rail detection for md–lg widths (tablets / narrow laptops):
+// the sidebar becomes an icons-only rail there, while <md hides it entirely
+// and lg+ shows the full collapsible sidebar. useSyncExternalStore keeps this
+// SSR-safe (server snapshot = false, so hydration never mismatches).
+const RAIL_QUERY = "(min-width: 768px) and (max-width: 1023.98px)";
+function useIsRailWidth(): boolean {
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      const mq = window.matchMedia(RAIL_QUERY);
+      mq.addEventListener("change", onStoreChange);
+      return () => mq.removeEventListener("change", onStoreChange);
+    },
+    () => window.matchMedia(RAIL_QUERY).matches,
+    () => false
+  );
+}
+
+// Desktop sidebar (collapsible; icons-only rail at md–lg) — also the content
+// of the mobile "More" sheet (which always keeps full labels).
 function SideNav({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onToggle?: () => void; onNavigate?: () => void }) {
   const { view, navigate } = useNav();
   const { scope } = useBusiness();
@@ -67,6 +88,13 @@ function SideNav({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onT
             </div>
           )}
         </button>
+        {/* Rail mode (md–lg) passes no onToggle → neither button renders there.
+            At lg+ the toggle flips: collapse when expanded, expand when collapsed. */}
+        {onToggle && collapsed && (
+          <Button variant="ghost" size="icon" className="hidden lg:inline-flex h-8 w-8" onClick={onToggle} aria-label="Expand sidebar">
+            <ChevronsRight className="h-4 w-4" />
+          </Button>
+        )}
         {onToggle && !collapsed && (
           <Button variant="ghost" size="icon" className="hidden lg:inline-flex h-8 w-8" onClick={onToggle} aria-label="Collapse sidebar">
             <ChevronsLeft className="h-4 w-4" />
@@ -152,12 +180,14 @@ const SEVERITY_ICON: Record<AppNotification["severity"], React.ReactNode> = {
 };
 
 // Sticky top header
-function TopBar({ onOpenMore, onOpenPalette }: { onOpenMore: () => void; onOpenPalette: () => void }) {
+function TopBar({ onOpenMore, onOpenPalette, onOpenShortcuts }: { onOpenMore: () => void; onOpenPalette: () => void; onOpenShortcuts: () => void }) {
   const { owner, logout } = useAuth();
   const { navigate } = useNav();
   const { lang, setLang } = useLang();
   const [notifCount, setNotifCount] = useState(0);
   const [pulse, setPulse] = useState(false);
+  const [undoOpen, setUndoOpen] = useState(false);
+  const [notifRefresh, setNotifRefresh] = useState(0);
   const { canInstall, install } = usePwaInstall();
   const prevKeysRef = useRef<Set<string> | null>(null);
   const firstLoadRef = useRef(true);
@@ -171,12 +201,17 @@ function TopBar({ onOpenMore, onOpenPalette }: { onOpenMore: () => void; onOpenP
           api.get<AppNotification[]>("/api/notifications")
         );
         if (!alive || !Array.isArray(items)) return;
-        setNotifCount(items.length);
+        // Respect muted categories (localStorage) — the bell only counts alerts
+        // the owner hasn't muted from the notifications view.
+        const muted = readMutedGroups();
+        const visible = muted.length > 0 ? items.filter((n) => !muted.includes(n.severity)) : items;
+        setNotifCount(visible.length);
         const prevKeys = prevKeysRef.current;
         prevKeysRef.current = new Set(items.map((n) => n.key));
-        // Announce only genuine arrivals (skip initial load), when the tab is visible.
+        // Announce only genuine arrivals (skip initial load), when the tab is
+        // visible and the alert isn't muted.
         if (!firstLoadRef.current && prevKeys && document.visibilityState === "visible") {
-          const fresh = items.filter((n) => !prevKeys.has(n.key));
+          const fresh = visible.filter((n) => !prevKeys.has(n.key));
           if (fresh.length > 0) {
             const rank = { CRITICAL: 0, WARNING: 1, INFO: 2 } as const;
             const headline =
@@ -202,17 +237,27 @@ function TopBar({ onOpenMore, onOpenPalette }: { onOpenMore: () => void; onOpenP
     const t = setInterval(load, 60_000);
     // Re-check immediately when the user returns to the tab.
     const onVis = () => { if (document.visibilityState === "visible") void load(); };
+    // Mute toggles + dismissals (this tab via custom event, other tabs via
+    // storage) re-count instantly.
+    const onMuteChange = () => { void load(); };
     document.addEventListener("visibilitychange", onVis);
+    window.addEventListener(NOTIF_MUTED_EVENT, onMuteChange);
+    window.addEventListener(NOTIF_CHANGED_EVENT, onMuteChange);
+    window.addEventListener("storage", onMuteChange);
     return () => {
       alive = false; clearInterval(t);
       document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener(NOTIF_MUTED_EVENT, onMuteChange);
+      window.removeEventListener(NOTIF_CHANGED_EVENT, onMuteChange);
+      window.removeEventListener("storage", onMuteChange);
       if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
     };
-  }, [navigate]);
+  }, [navigate, notifRefresh]);
 
   const initials = (owner?.name ?? "?").slice(0, 2).toUpperCase();
 
   return (
+    <>
     <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
       <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-2 px-3 sm:px-5">
         <button className="flex items-center gap-2 md:hidden" onClick={() => navigate("dashboard")} aria-label="BizHub home">
@@ -239,6 +284,16 @@ function TopBar({ onOpenMore, onOpenPalette }: { onOpenMore: () => void; onOpenP
         <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
           <Button variant="ghost" size="icon" className="sm:hidden h-10 w-10" onClick={onOpenPalette} aria-label="Open command palette">
             <Search className="h-5 w-5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-10 w-10"
+            onClick={() => setUndoOpen(true)}
+            aria-label="Undo center"
+            title="Undo center"
+          >
+            <History className="h-5 w-5" />
           </Button>
           <Button variant="ghost" size="icon" className="h-10 w-10 relative" onClick={() => navigate("notifications")} aria-label={`Notifications${notifCount ? `, ${notifCount} active` : ""}`}>
             {pulse && <span className="absolute inset-0 rounded-full bg-red-500/30 animate-ping" aria-hidden />}
@@ -304,6 +359,10 @@ function TopBar({ onOpenMore, onOpenPalette }: { onOpenMore: () => void; onOpenP
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={onOpenShortcuts}>
+                <Keyboard className="mr-2 h-4 w-4" /> Press ? for shortcuts
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => logout()} className="text-red-600 dark:text-red-400">
                 <LogOut className="mr-2 h-4 w-4" /> {t(lang, "menu.logout")}
               </DropdownMenuItem>
@@ -312,6 +371,13 @@ function TopBar({ onOpenMore, onOpenPalette }: { onOpenMore: () => void; onOpenP
         </div>
       </div>
     </header>
+
+    <UndoCenter
+      open={undoOpen}
+      onOpenChange={setUndoOpen}
+      onChanged={() => setNotifRefresh((n) => n + 1)}
+    />
+    </>
   );
 }
 
@@ -421,32 +487,84 @@ function BottomNav({ onOpenMore }: { onOpenMore: () => void }) {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { navigate, view } = useNav();
   const [collapsed, setCollapsed] = useState(false);
+  // md–lg widths force the icons-only rail (no toggle there); lg+ keeps the
+  // full sidebar with the manual collapse button.
+  const railMode = useIsRailWidth();
+  const railActive = railMode || collapsed;
   const [moreOpen, setMoreOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   useEffect(() => {
+    // "G then key" chord: pendingG holds the timeout id while waiting for the
+    // second key (1s window). Cleared by typing anywhere else.
+    let pendingG: number | null = null;
+    const clearPendingG = () => {
+      if (pendingG !== null) window.clearTimeout(pendingG);
+      pendingG = null;
+    };
+    const GO_CHORDS: Record<string, string> = {
+      d: "dashboard", e: "employees", p: "properties", t: "trips",
+    };
+    const isTypingTarget = (el: EventTarget | null): boolean => {
+      const t = el as HTMLElement | null;
+      return Boolean(
+        t &&
+        (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)
+      );
+    };
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
+        clearPendingG();
         setPaletteOpen((o) => !o);
+        return;
+      }
+      // Palette is open → its input owns the keyboard; ignore global chords.
+      if (paletteOpen) return;
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      // Typing in a field always cancels any pending chord.
+      if (isTypingTarget(e.target)) {
+        clearPendingG();
+        return;
+      }
+      if (pendingG !== null) {
+        const target = GO_CHORDS[e.key.toLowerCase()];
+        clearPendingG();
+        if (target) {
+          e.preventDefault();
+          navigate(target);
+        }
+        return;
+      }
+      if (e.key === "g" || e.key === "G") {
+        pendingG = window.setTimeout(clearPendingG, 1000);
+        return;
+      }
+      if (e.key === "?") {
+        e.preventDefault();
+        setShortcutsOpen(true);
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      clearPendingG();
+    };
+  }, [navigate, paletteOpen]);
 
   const currentView = getView(view);
   const isWide = ["dashboard", "manpower", "transport"].includes(view);
 
   return (
     <div className="flex min-h-screen bg-muted/30">
-      {/* Desktop sidebar */}
-      <aside className={cn("sticky top-0 hidden h-screen shrink-0 border-r bg-background transition-all md:block", collapsed ? "w-[68px]" : "w-60")}>
-        <SideNav collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
+      {/* Desktop sidebar — icons-only rail at md–lg, full (collapsible) at lg+ */}
+      <aside className={cn("sticky top-0 hidden h-screen shrink-0 border-r bg-background transition-all md:block", railActive ? "w-[68px]" : "w-60")}>
+        <SideNav collapsed={railActive} onToggle={railMode ? undefined : () => setCollapsed((c) => !c)} />
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar onOpenMore={() => setMoreOpen(true)} onOpenPalette={() => setPaletteOpen(true)} />
+        <TopBar onOpenMore={() => setMoreOpen(true)} onOpenPalette={() => setPaletteOpen(true)} onOpenShortcuts={() => setShortcutsOpen(true)} />
         <BusinessBanner />
         <main
           id="main-scroll"
@@ -471,6 +589,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Global command palette (Ctrl/Cmd+K, search buttons) */}
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+
+      {/* Keyboard shortcuts overlay (? key or owner menu) */}
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
 
       {/* Mobile "More" sheet with full nav */}
       <Sheet open={moreOpen} onOpenChange={setMoreOpen}>

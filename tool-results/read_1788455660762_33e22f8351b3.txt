@@ -1,0 +1,606 @@
+     1→"use client";
+     2→
+     3→import { useState } from "react";
+     4→import { api, qs } from "@/lib/api-client";
+     5→import { formatINR, parseAmount } from "@/lib/money";
+     6→import type { ViewProps } from "@/components/view-types";
+     7→import { PageHeader } from "@/components/shared/page-header";
+     8→import { DataTable, type Column } from "@/components/shared/data-table";
+     9→import { StatCard, StatGrid } from "@/components/shared/stat-card";
+    10→import { RangeSelector, type RangeKey } from "@/components/shared/filters";
+    11→import { StatusBadge } from "@/components/shared/status-badge";
+    12→import { Button } from "@/components/ui/button";
+    13→import { Card, CardContent } from "@/components/ui/card";
+    14→import { Input } from "@/components/ui/input";
+    15→import { Textarea } from "@/components/ui/textarea";
+    16→import { Separator } from "@/components/ui/separator";
+    17→import { Progress } from "@/components/ui/progress";
+    18→import {
+    19→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    20→} from "@/components/ui/dialog";
+    21→import {
+    22→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+    23→  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+    24→} from "@/components/ui/alert-dialog";
+    25→import { cn } from "@/lib/utils";
+    26→import { toast } from "sonner";
+    27→import { useLang, t } from "@/lib/i18n";
+    28→import { Route, Plus, IndianRupee, TimerOff, BadgeCheck } from "lucide-react";
+    29→import {
+    30→  type TripRec, type VehicleRec, type ClientRec, type Option, SelectInput, Field, KV, ErrorState, MoneyInput,
+    31→  fmtDay, fmtDateTime, useAsync, useMutation, ConfirmAmount,
+    32→} from "./_shared";
+    33→
+    34→type TripsResp = { items: TripRec[]; total: number; totals?: { revenue: number; pending: number } };
+    35→
+    36→const STATUS_OPTIONS: Option[] = [
+    37→  { label: "All statuses", value: "" },
+    38→  { label: "Confirmed", value: "CONFIRMED" },
+    39→  { label: "Active", value: "ACTIVE" },
+    40→  { label: "Completed", value: "COMPLETED" },
+    41→  { label: "Cancelled", value: "CANCELLED" },
+    42→];
+    43→
+    44→const PAY_STATUS_OPTIONS: Option[] = [
+    45→  { label: "All payment states", value: "" },
+    46→  { label: "Pending", value: "PENDING" },
+    47→  { label: "Partial", value: "PARTIAL" },
+    48→  { label: "Paid", value: "PAID" },
+    49→];
+    50→
+    51→const TRIP_TYPE_OPTIONS: Option[] = [
+    52→  { label: "Rental", value: "RENTAL" },
+    53→  { label: "Trip", value: "TRIP" },
+    54→];
+    55→
+    56→const RENTAL_TYPE_OPTIONS: Option[] = ["DAILY", "WEEKLY", "MONTHLY", "OUTSTATION", "LOCAL"]
+    57→  .map((t) => ({ label: t.charAt(0) + t.slice(1).toLowerCase(), value: t }));
+    58→
+    59→const FUEL_OPTIONS: Option[] = [
+    60→  { label: "Owner pays fuel", value: "OWNER" },
+    61→  { label: "Client pays fuel", value: "CLIENT" },
+    62→];
+    63→
+    64→const METHOD_OPTIONS: Option[] = ["Cash", "UPI", "Bank", "Cheque", "Other"].map((m) => ({ label: m, value: m }));
+    65→
+    66→function rangeDates(r: RangeKey): { from: string; to: string } {
+    67→  const now = new Date();
+    68→  const f = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    69→  if (r === "today") { const t = f(now); return { from: t, to: t }; }
+    70→  if (r === "yesterday") return { from: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)), to: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)) };
+    71→  if (r === "week") return { from: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6)), to: f(now) };
+    72→  if (r === "lastweek") return { from: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 13)), to: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7)) };
+    73→  if (r === "lastmonth") return { from: f(new Date(now.getFullYear(), now.getMonth() - 1, 1)), to: f(new Date(now.getFullYear(), now.getMonth(), 0)) };
+    74→  return { from: f(new Date(now.getFullYear(), now.getMonth(), 1)), to: f(new Date(now.getFullYear(), now.getMonth() + 1, 0)) };
+    75→}
+    76→
+    77→function nowLocalValue(): string {
+    78→  return new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    79→}
+    80→
+    81→function tripTotal(t: TripRec): number {
+    82→  return t.finalAmount ?? (t.agreedAmount + (t.extraCharges ?? 0));
+    83→}
+    84→
+    85→function tripOutstanding(t: TripRec): number {
+    86→  return Math.max(0, tripTotal(t) - (t.paidAmount ?? 0));
+    87→}
+    88→
+    89→function tripPaidPct(t: TripRec): number {
+    90→  const target = tripTotal(t);
+    91→  if (target <= 0) return 0;
+    92→  return Math.min(100, Math.round(((t.paidAmount ?? 0) / target) * 100));
+    93→}
+    94→
+    95→// ---------------------------------------------------------------------------
+    96→// New rental / trip dialog
+    97→// ---------------------------------------------------------------------------
+    98→
+    99→function NewTripDialog({ open, onOpenChange, vehicles, clients, onDone }: {
+   100→  open: boolean;
+   101→  onOpenChange: (v: boolean) => void;
+   102→  vehicles: VehicleRec[];
+   103→  clients: ClientRec[];
+   104→  onDone: () => void;
+   105→}) {
+   106→  const [form, setForm] = useState({
+   107→    vehicleId: "", clientId: "", startAt: nowLocalValue(), endAt: "", tripType: "RENTAL",
+   108→    rentalType: "DAILY", pickup: "", destination: "", driver: "", fuelResponsibility: "CLIENT",
+   109→    agreedAmount: "", advanceReceived: "", notes: "",
+   110→  });
+   111→  const { mutate, saving } = useMutation();
+   112→
+   113→  const [prevOpen, setPrevOpen] = useState(open);
+   114→  if (open !== prevOpen) {
+   115→    setPrevOpen(open);
+   116→    if (open) {
+   117→      setForm({
+   118→        vehicleId: "", clientId: "", startAt: nowLocalValue(), endAt: "", tripType: "RENTAL",
+   119→        rentalType: "DAILY", pickup: "", destination: "", driver: "", fuelResponsibility: "CLIENT",
+   120→        agreedAmount: "", advanceReceived: "", notes: "",
+   121→      });
+   122→    }
+   123→  }
+   124→
+   125→  const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+   126→
+   127→  const submit = async () => {
+   128→    if (!form.vehicleId) { toast.error("Select a vehicle"); return; }
+   129→    if (!form.clientId) { toast.error("Select a client"); return; }
+   130→    if (!form.startAt) { toast.error("Start date & time is required"); return; }
+   131→    const amt = parseAmount(form.agreedAmount);
+   132→    if (amt <= 0) { toast.error("Enter the agreed amount"); return; }
+   133→    const res = await mutate(
+   134→      () => api.post("/api/trips", {
+   135→        vehicleId: form.vehicleId,
+   136→        clientId: form.clientId,
+   137→        startAt: new Date(form.startAt).toISOString(),
+   138→        endAt: form.endAt ? new Date(form.endAt).toISOString() : undefined,
+   139→        tripType: form.tripType,
+   140→        rentalType: form.rentalType || undefined,
+   141→        pickup: form.pickup || undefined,
+   142→        destination: form.destination || undefined,
+   143→        driver: form.driver || undefined,
+   144→        fuelResponsibility: form.fuelResponsibility || undefined,
+   145→        agreedAmount: amt,
+   146→        advanceReceived: form.advanceReceived ? parseAmount(form.advanceReceived) : undefined,
+   147→        notes: form.notes || undefined,
+   148→      }),
+   149→      "Rental created — vehicle marked as engaged",
+   150→      (data) => ({ module: "TRIP", recordId: (data as { id: string }).id, onUndo: onDone })
+   151→    );
+   152→    if (res.ok) { onOpenChange(false); onDone(); }
+   153→  };
+   154→
+   155→  return (
+   156→    <Dialog open={open} onOpenChange={onOpenChange}>
+   157→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+   158→        <DialogHeader>
+   159→          <DialogTitle>New Rental / Trip</DialogTitle>
+   160→          <DialogDescription>Overlapping bookings for the same vehicle are blocked automatically.</DialogDescription>
+   161→        </DialogHeader>
+   162→        <div className="grid gap-3 sm:grid-cols-2">
+   163→          <Field label="Vehicle" required className="sm:col-span-2">
+   164→            <SelectInput
+   165→              value={form.vehicleId}
+   166→              onChange={set("vehicleId")}
+   167→              placeholder="Select vehicle…"
+   168→              options={vehicles.map((v) => ({ label: `${v.name} · ${v.status}`, value: v.id }))}
+   169→            />
+   170→          </Field>
+   171→          <Field label="Client" required className="sm:col-span-2">
+   172→            <SelectInput
+   173→              value={form.clientId}
+   174→              onChange={set("clientId")}
+   175→              placeholder="Select client…"
+   176→              options={clients.map((c) => ({ label: c.company ? `${c.name} (${c.company})` : c.name, value: c.id }))}
+   177→            />
+   178→          </Field>
+   179→          <Field label="Start at" required>
+   180→            <Input type="datetime-local" value={form.startAt} onChange={(e) => set("startAt")(e.target.value)} className="h-10" />
+   181→          </Field>
+   182→          <Field label="End at" hint="Leave empty for an open-ended rental">
+   183→            <Input type="datetime-local" value={form.endAt} onChange={(e) => set("endAt")(e.target.value)} className="h-10" />
+   184→          </Field>
+   185→          <Field label="Type" required>
+   186→            <SelectInput value={form.tripType} onChange={set("tripType")} options={TRIP_TYPE_OPTIONS} />
+   187→          </Field>
+   188→          <Field label="Rental type">
+   189→            <SelectInput value={form.rentalType} onChange={set("rentalType")} options={RENTAL_TYPE_OPTIONS} />
+   190→          </Field>
+   191→          <Field label="Pickup">
+   192→            <Input value={form.pickup} onChange={(e) => set("pickup")(e.target.value)} className="h-10" placeholder="Pickup point" />
+   193→          </Field>
+   194→          <Field label="Destination">
+   195→            <Input value={form.destination} onChange={(e) => set("destination")(e.target.value)} className="h-10" placeholder="Drop point" />
+   196→          </Field>
+   197→          <Field label="Driver">
+   198→            <Input value={form.driver} onChange={(e) => set("driver")(e.target.value)} className="h-10" placeholder="Driver name" />
+   199→          </Field>
+   200→          <Field label="Fuel responsibility">
+   201→            <SelectInput value={form.fuelResponsibility} onChange={set("fuelResponsibility")} options={FUEL_OPTIONS} />
+   202→          </Field>
+   203→          <Field label="Agreed amount (₹)" required>
+   204→            <MoneyInput value={form.agreedAmount} onChange={set("agreedAmount")} min={1} className="h-10" />
+   205→          </Field>
+   206→          <Field label="Advance received (₹)">
+   207→            <MoneyInput value={form.advanceReceived} onChange={set("advanceReceived")} min={0} className="h-10" />
+   208→          </Field>
+   209→          <Field label="Notes" className="sm:col-span-2">
+   210→            <Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} rows={2} placeholder="Optional instructions" />
+   211→          </Field>
+   212→        </div>
+   213→        <DialogFooter className="gap-2">
+   214→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   215→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>
+   216→            {saving ? "Creating…" : "Create rental"}
+   217→          </Button>
+   218→        </DialogFooter>
+   219→      </DialogContent>
+   220→    </Dialog>
+   221→  );
+   222→}
+   223→
+   224→// ---------------------------------------------------------------------------
+   225→// Main view
+   226→// ---------------------------------------------------------------------------
+   227→
+   228→export default function TripsView({ params, navigate }: ViewProps) {
+   229→  const { lang } = useLang();
+   230→  void navigate; // reserved (vehicle-detail links here with vehicleId preselected)
+   231→  const { mutate, saving } = useMutation();
+   232→
+   233→  // Filters
+   234→  const [vehicleId, setVehicleId] = useState(params?.vehicleId ?? "");
+   235→  const [clientId, setClientId] = useState("");
+   236→  const [status, setStatus] = useState("");
+   237→  const [paymentStatus, setPaymentStatus] = useState("");
+   238→  const [rangeKey, setRangeKey] = useState<RangeKey | "custom">("month");
+   239→  const [customFrom, setCustomFrom] = useState("");
+   240→  const [customTo, setCustomTo] = useState("");
+   241→
+   242→  const eff = rangeKey === "custom" ? { from: customFrom, to: customTo } : rangeDates(rangeKey);
+   243→
+   244→  const vehicles = useAsync<{ items: VehicleRec[] }>(() => api.get("/api/vehicles"), []);
+   245→  const clients = useAsync<{ items: ClientRec[] }>(() => api.get("/api/clients"), []);
+   246→  const trips = useAsync<TripsResp>(
+   247→    () => api.get("/api/trips" + qs({
+   248→      vehicleId: vehicleId || undefined,
+   249→      clientId: clientId || undefined,
+   250→      status: status || undefined,
+   251→      paymentStatus: paymentStatus || undefined,
+   252→      from: eff.from || undefined,
+   253→      to: eff.to || undefined,
+   254→      pageSize: 200,
+   255→    })),
+   256→    [vehicleId, clientId, status, paymentStatus, eff.from, eff.to]
+   257→  );
+   258→
+   259→  const items = trips.data?.items ?? [];
+   260→
+   261→  // Dialogs
+   262→  const [detailId, setDetailId] = useState<string | null>(null);
+   263→  const [newOpen, setNewOpen] = useState(false);
+   264→  const [endFor, setEndFor] = useState<string | null>(null);
+   265→  const [endForm, setEndForm] = useState({ endAt: nowLocalValue(), finalAmount: "", extraCharges: "" });
+   266→  const [payFor, setPayFor] = useState<string | null>(null);
+   267→  const [payForm, setPayForm] = useState({ amount: "", method: "Cash" });
+   268→  const [cancelFor, setCancelFor] = useState<string | null>(null);
+   269→
+   270→  const detail = detailId ? items.find((t) => t.id === detailId) ?? null : null;
+   271→
+   272→  // Seed end-trip form when target changes (render-time adjustment).
+   273→  const [prevEndFor, setPrevEndFor] = useState<string | null>(null);
+   274→  if (endFor !== prevEndFor) {
+   275→    setPrevEndFor(endFor);
+   276→    const t = endFor ? items.find((x) => x.id === endFor) ?? null : null;
+   277→    setEndForm({
+   278→      endAt: nowLocalValue(),
+   279→      finalAmount: t ? String(tripTotal(t)) : "",
+   280→      extraCharges: "0",
+   281→    });
+   282→  }
+   283→
+   284→  // Seed payment form when target changes (render-time adjustment).
+   285→  const [prevPayFor, setPrevPayFor] = useState<string | null>(null);
+   286→  if (payFor !== prevPayFor) {
+   287→    setPrevPayFor(payFor);
+   288→    const t = payFor ? items.find((x) => x.id === payFor) ?? null : null;
+   289→    setPayForm({ amount: t ? String(tripOutstanding(t)) : "", method: "Cash" });
+   290→  }
+   291→
+   292→  const submitEnd = async () => {
+   293→    if (!endFor) return;
+   294→    if (!endForm.endAt) { toast.error("End date & time is required"); return; }
+   295→    const res = await mutate(
+   296→      () => api.put(`/api/trips/${endFor}`, {
+   297→        endAt: new Date(endForm.endAt).toISOString(),
+   298→        finalAmount: parseAmount(endForm.finalAmount),
+   299→        extraCharges: parseAmount(endForm.extraCharges),
+   300→      }),
+   301→      "Trip completed — vehicle released"
+   302→    );
+   303→    if (res.ok) { setEndFor(null); setDetailId(null); void trips.reload(); }
+   304→  };
+   305→
+   306→  const submitPayment = async () => {
+   307→    if (!payFor) return;
+   308→    const amt = parseAmount(payForm.amount);
+   309→    if (amt <= 0) { toast.error("Enter a valid amount"); return; }
+   310→    const res = await mutate(
+   311→      () => api.post(`/api/trips/${payFor}/payment`, { amount: amt, method: payForm.method || undefined }),
+   312→      `Payment of ${formatINR(amt)} recorded`,
+   313→      () => ({ module: "TRIP", recordId: payFor, onUndo: () => void trips.reload() })
+   314→    );
+   315→    if (res.ok) { setPayFor(null); void trips.reload(); }
+   316→  };
+   317→
+   318→  const payTrip = payFor ? items.find((x) => x.id === payFor) ?? null : null;
+   319→  const paySubject = payTrip ? `${payTrip.vehicleName ?? "Vehicle"} → ${payTrip.clientName ?? "Client"}` : "this trip";
+   320→
+   321→  const cancelTrip = async () => {
+   322→    if (!cancelFor) return;
+   323→    const res = await mutate(() => api.put(`/api/trips/${cancelFor}`, { status: "CANCELLED" }), "Trip cancelled", () => ({ module: "TRIP", recordId: cancelFor, onUndo: () => void trips.reload() }));
+   324→    if (res.ok) { setCancelFor(null); setDetailId(null); void trips.reload(); }
+   325→  };
+   326→
+   327→  const columns: Column<TripRec>[] = [
+   328→    {
+   329→      key: "vehicle", label: t(lang, "col.vehicleClient"), primary: true,
+   330→      render: (r) => (
+   331→        <div className="min-w-0">
+   332→          <p className="truncate font-medium">{r.vehicleName ?? "—"} <span className="text-muted-foreground">→ {r.clientName ?? "—"}</span></p>
+   333→          <p className="truncate text-[11px] text-muted-foreground">
+   334→            {fmtDateTime(r.startAt)} → {r.endAt ? fmtDateTime(r.endAt) : "ongoing"}
+   335→          </p>
+   336→        </div>
+   337→      ),
+   338→      value: (r) => `${r.vehicleName ?? "—"} → ${r.clientName ?? "—"}`,
+   339→    },
+   340→    {
+   341→      key: "type", label: t(lang, "col.type"), render: (r) => (
+   342→        <div className="flex flex-wrap gap-1">
+   343→          <StatusBadge status={r.tripType} />
+   344→          {r.rentalType && <StatusBadge status={r.rentalType} />}
+   345→        </div>
+   346→      ),
+   347→      value: (r) => `${r.tripType}${r.rentalType ? ` · ${r.rentalType}` : ""}`,
+   348→      hideOnMobile: true,
+   349→    },
+   350→    {
+   351→      key: "agreed", label: t(lang, "col.agreed"), className: "text-right",
+   352→      render: (r) => <span className="tabular-nums">{formatINR(tripTotal(r))}</span>,
+   353→      value: (r) => formatINR(tripTotal(r)),
+   354→    },
+   355→    {
+   356→      key: "paid", label: t(lang, "col.paid"), className: "text-right", hideOnMobile: true,
+   357→      render: (r) => <span className="tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(r.paidAmount ?? 0)}</span>,
+   358→      value: (r) => formatINR(r.paidAmount ?? 0),
+   359→    },
+   360→    {
+   361→      key: "paymentStatus", label: t(lang, "col.payment"),
+   362→      render: (r) => (
+   363→        <div className="min-w-[92px]">
+   364→          <StatusBadge status={r.paymentStatus} />
+   365→          <Progress
+   366→            value={tripPaidPct(r)}
+   367→            className="mt-1 h-1.5"
+   368→            aria-label={`Paid ${tripPaidPct(r)}% of ${formatINR(tripTotal(r))}`}
+   369→          />
+   370→          <p className="mt-0.5 text-[10px] tabular-nums text-muted-foreground">{tripPaidPct(r)}%</p>
+   371→        </div>
+   372→      ),
+   373→      value: (r) => r.paymentStatus,
+   374→    },
+   375→    { key: "status", label: t(lang, "col.status"), render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+   376→  ];
+   377→
+   378→  const detailTrip = detail;
+   379→
+   380→  return (
+   381→    <div className="space-y-4">
+   382→      <PageHeader
+   383→        title={t(lang, "page.trips")}
+   384→        subtitle={t(lang, "page.trips.sub")}
+   385→        actions={
+   386→          <Button size="sm" className="h-9 gap-1.5" onClick={() => setNewOpen(true)}>
+   387→            <Plus className="h-4 w-4" aria-hidden />New Rental
+   388→          </Button>
+   389→        }
+   390→      />
+   391→
+   392→      <Card>
+   393→        <CardContent className="space-y-3 p-3 sm:p-4">
+   394→          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
+   395→            <SelectInput
+   396→              value={vehicleId}
+   397→              onChange={setVehicleId}
+   398→              options={[{ label: "All vehicles", value: "" }, ...(vehicles.data?.items ?? []).map((v) => ({ label: v.name, value: v.id }))]}
+   399→              placeholder="All vehicles"
+   400→            />
+   401→            <SelectInput
+   402→              value={clientId}
+   403→              onChange={setClientId}
+   404→              options={[{ label: "All clients", value: "" }, ...(clients.data?.items ?? []).map((c) => ({ label: c.name, value: c.id }))]}
+   405→              placeholder="All clients"
+   406→            />
+   407→            <SelectInput value={status} onChange={setStatus} options={STATUS_OPTIONS} placeholder="All statuses" />
+   408→            <SelectInput value={paymentStatus} onChange={setPaymentStatus} options={PAY_STATUS_OPTIONS} placeholder="All payment states" />
+   409→          </div>
+   410→          <div className="flex w-full flex-wrap items-center gap-2">
+   411→            <RangeSelector value={rangeKey === "custom" ? "custom" : rangeKey} onChange={setRangeKey} />
+   412→            <Button
+   413→              size="sm"
+   414→              variant={rangeKey === "custom" ? "default" : "outline"}
+   415→              className="h-8 shrink-0 rounded-full px-3 text-xs"
+   416→              onClick={() => setRangeKey(rangeKey === "custom" ? "month" : "custom")}
+   417→            >
+   418→              Custom
+   419→            </Button>
+   420→          </div>
+   421→          {rangeKey === "custom" && (
+   422→            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed p-2.5">
+   423→              <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="h-9 w-full sm:w-40" aria-label="From date" />
+   424→              <span className="text-xs text-muted-foreground">to</span>
+   425→              <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-9 w-full sm:w-40" aria-label="To date" />
+   426→            </div>
+   427→          )}
+   428→        </CardContent>
+   429→      </Card>
+   430→
+   431→      <StatGrid cols={2}>
+   432→        <StatCard label="Revenue (filtered)" value={formatINR(trips.data?.totals?.revenue ?? 0)} icon={IndianRupee} tone="positive" />
+   433→        <StatCard label="Payment pending" value={formatINR(trips.data?.totals?.pending ?? 0)} icon={TimerOff} tone="warning" />
+   434→      </StatGrid>
+   435→
+   436→      <Card>
+   437→        <CardContent className="p-3 sm:p-4">
+   438→          {trips.error ? (
+   439→            <ErrorState message={trips.error} onRetry={() => void trips.reload()} />
+   440→          ) : (
+   441→            <DataTable
+   442→              columns={columns}
+   443→              rows={items}
+   444→              rowKey={(r) => r.id}
+   445→              onRowClick={(r) => setDetailId(r.id)}
+   446→              exportName="trips"
+   447→              stickyFirstCol
+   448→              loading={trips.loading}
+   449→              emptyIcon={Route}
+   450→              emptyTitle="No trips match"
+   451→              emptyDescription="Adjust filters or create a new rental."
+   452→            />
+   453→          )}
+   454→        </CardContent>
+   455→      </Card>
+   456→
+   457→      {/* Detail dialog */}
+   458→      <Dialog open={Boolean(detail)} onOpenChange={(v) => !v && setDetailId(null)}>
+   459→        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
+   460→          {detailTrip && (
+   461→            <>
+   462→              <DialogHeader>
+   463→                <DialogTitle className="flex flex-wrap items-center gap-2">
+   464→                  {detailTrip.vehicleName ?? "Vehicle"} <span className="text-muted-foreground">→</span> {detailTrip.clientName ?? "Client"}
+   465→                </DialogTitle>
+   466→                <DialogDescription className="flex flex-wrap items-center gap-1.5">
+   467→                  <StatusBadge status={detailTrip.status} />
+   468→                  <StatusBadge status={detailTrip.paymentStatus} />
+   469→                  <StatusBadge status={detailTrip.tripType} />
+   470→                  {detailTrip.rentalType && <StatusBadge status={detailTrip.rentalType} />}
+   471→                </DialogDescription>
+   472→              </DialogHeader>
+   473→
+   474→              <div className="rounded-xl border bg-muted/30 px-3.5 py-2">
+   475→                <KV label="Vehicle" value={detailTrip.vehicleReg ? `${detailTrip.vehicleName ?? ""} · ${detailTrip.vehicleReg}` : detailTrip.vehicleName ?? "—"} />
+   476→                <KV label="Period" value={`${fmtDay(detailTrip.startAt)} → ${detailTrip.endAt ? fmtDay(detailTrip.endAt) : "ongoing"}`} />
+   477→                <KV label="Pickup" value={detailTrip.pickup || "—"} />
+   478→                <KV label="Destination" value={detailTrip.destination || "—"} />
+   479→                <KV label="Driver" value={detailTrip.driver || "—"} />
+   480→                <KV label="Fuel responsibility" value={detailTrip.fuelResponsibility === "OWNER" ? "Owner" : detailTrip.fuelResponsibility === "CLIENT" ? "Client" : "—"} />
+   481→                <KV label="Agreed amount" value={formatINR(detailTrip.agreedAmount)} />
+   482→                <KV label="Advance received" value={formatINR(detailTrip.advanceReceived ?? 0)} className="text-emerald-600 dark:text-emerald-400" />
+   483→                <KV label="Extra charges" value={formatINR(detailTrip.extraCharges ?? 0)} />
+   484→                <KV label="Final amount" value={formatINR(tripTotal(detailTrip))} />
+   485→                <KV label="Paid" value={formatINR(detailTrip.paidAmount ?? 0)} className="text-emerald-600 dark:text-emerald-400" />
+   486→                <KV
+   487→                  label="Outstanding"
+   488→                  value={formatINR(tripOutstanding(detailTrip))}
+   489→                  className={tripOutstanding(detailTrip) > 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}
+   490→                />
+   491→                {detailTrip.notes && <KV label="Notes" value={<span className="text-xs font-normal">{detailTrip.notes}</span>} />}
+   492→                <KV label="Created by" value={detailTrip.createdByName ?? "—"} />
+   493→              </div>
+   494→
+   495→              <Separator />
+   496→
+   497→              <DialogFooter className="flex-col gap-2 sm:flex-row sm:flex-wrap">
+   498→                {(detailTrip.status === "ACTIVE" || detailTrip.status === "CONFIRMED") && (
+   499→                  <>
+   500→                    <Button variant="outline" className="min-h-10 gap-1.5" onClick={() => { setDetailId(null); setEndFor(detailTrip.id); }}>
+   501→                      <BadgeCheck className="h-4 w-4" aria-hidden />End Trip
+   502→                    </Button>
+   503→                    <Button
+   504→                      variant="outline" className="min-h-10 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950"
+   505→                      onClick={() => { setDetailId(null); setCancelFor(detailTrip.id); }}
+   506→                    >
+   507→                      Cancel Trip
+   508→                    </Button>
+   509→                  </>
+   510→                )}
+   511→                {(detailTrip.status === "ACTIVE" || detailTrip.status === "CONFIRMED" || detailTrip.status === "COMPLETED") && (
+   512→                  <Button className="min-h-10" onClick={() => { setDetailId(null); setPayFor(detailTrip.id); }}>
+   513→                    Record Payment
+   514→                  </Button>
+   515→                )}
+   516→              </DialogFooter>
+   517→            </>
+   518→          )}
+   519→        </DialogContent>
+   520→      </Dialog>
+   521→
+   522→      {/* End trip dialog */}
+   523→      <Dialog open={Boolean(endFor)} onOpenChange={(v) => !v && setEndFor(null)}>
+   524→        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-sm">
+   525→          <DialogHeader>
+   526→            <DialogTitle>End trip</DialogTitle>
+   527→            <DialogDescription>Vehicle becomes available after completion (unless another trip is active).</DialogDescription>
+   528→          </DialogHeader>
+   529→          <div className="space-y-3">
+   530→            <Field label="Ended at" required>
+   531→              <Input type="datetime-local" value={endForm.endAt} onChange={(e) => setEndForm((f) => ({ ...f, endAt: e.target.value }))} className="h-10" />
+   532→            </Field>
+   533→            <div className="grid gap-3 sm:grid-cols-2">
+   534→              <Field label="Final amount (₹)" required>
+   535→                <MoneyInput value={endForm.finalAmount} onChange={(v) => setEndForm((f) => ({ ...f, finalAmount: v }))} className="h-10" />
+   536→              </Field>
+   537→              <Field label="Extra charges (₹)">
+   538→                <MoneyInput value={endForm.extraCharges} onChange={(v) => setEndForm((f) => ({ ...f, extraCharges: v }))} min={0} className="h-10" />
+   539→              </Field>
+   540→            </div>
+   541→          </div>
+   542→          <DialogFooter className="gap-2">
+   543→            <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => setEndFor(null)}>Back</Button>
+   544→            <Button className="min-h-10 flex-1 sm:flex-none" onClick={() => void submitEnd()} disabled={saving}>{saving ? "Saving…" : "Complete trip"}</Button>
+   545→          </DialogFooter>
+   546→        </DialogContent>
+   547→      </Dialog>
+   548→
+   549→      {/* Record payment dialog */}
+   550→      <Dialog open={Boolean(payFor)} onOpenChange={(v) => !v && setPayFor(null)}>
+   551→        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-sm">
+   552→          <DialogHeader>
+   553→            <DialogTitle>Record trip payment</DialogTitle>
+   554→            <DialogDescription>Amount is added to the trip&apos;s paid total; payment status updates automatically.</DialogDescription>
+   555→          </DialogHeader>
+   556→          <div className="grid gap-3 sm:grid-cols-2">
+   557→            <Field label="Amount (₹)" required>
+   558→              <MoneyInput value={payForm.amount} onChange={(v) => setPayForm((f) => ({ ...f, amount: v }))} min={1} className="h-10" />
+   559→            </Field>
+   560→            <Field label="Method">
+   561→              <SelectInput value={payForm.method} onChange={(v) => setPayForm((f) => ({ ...f, method: v }))} options={METHOD_OPTIONS} />
+   562→            </Field>
+   563→          </div>
+   564→          <ConfirmAmount amount={parseAmount(payForm.amount)} subject={paySubject} onSubmit={() => void submitPayment()}>
+   565→            {({ confirm, armed }) => (
+   566→              <DialogFooter className="gap-2">
+   567→                <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => setPayFor(null)}>Cancel</Button>
+   568→                <Button className="min-h-10 flex-1 sm:flex-none" onClick={confirm} disabled={saving || armed}>
+   569→                  {saving ? "Saving…" : armed ? "Confirm below" : "Record payment"}
+   570→                </Button>
+   571→              </DialogFooter>
+   572→            )}
+   573→          </ConfirmAmount>
+   574→        </DialogContent>
+   575→      </Dialog>
+   576→
+   577→      {/* Cancel trip confirm */}
+   578→      <AlertDialog open={Boolean(cancelFor)} onOpenChange={(v) => !v && setCancelFor(null)}>
+   579→        <AlertDialogContent>
+   580→          <AlertDialogHeader>
+   581→            <AlertDialogTitle>Cancel this trip?</AlertDialogTitle>
+   582→            <AlertDialogDescription>The vehicle will be released and the trip marked CANCELLED. This cannot be undone.</AlertDialogDescription>
+   583→          </AlertDialogHeader>
+   584→          <AlertDialogFooter>
+   585→            <AlertDialogCancel className="min-h-10">Keep trip</AlertDialogCancel>
+   586→            <AlertDialogAction
+   587→              className={cn("min-h-10 bg-red-600 text-white hover:bg-red-700")}
+   588→              onClick={(e) => { e.preventDefault(); void cancelTrip(); }}
+   589→            >
+   590→              {saving ? "Cancelling…" : "Cancel trip"}
+   591→            </AlertDialogAction>
+   592→          </AlertDialogFooter>
+   593→        </AlertDialogContent>
+   594→      </AlertDialog>
+   595→
+   596→      <NewTripDialog
+   597→        open={newOpen}
+   598→        onOpenChange={setNewOpen}
+   599→        vehicles={vehicles.data?.items ?? []}
+   600→        clients={clients.data?.items ?? []}
+   601→        onDone={() => void trips.reload()}
+   602→      />
+   603→    </div>
+   604→  );
+   605→}
+   606→

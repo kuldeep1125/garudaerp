@@ -6,7 +6,8 @@ import { formatINR, parseAmount } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
 import { useBusiness } from "@/components/providers";
 import { PageHeader } from "@/components/shared/page-header";
-import { DataTable, type Column } from "@/components/shared/data-table";
+import { ViewFab } from "@/components/shared/view-fab";
+import { DataTable, downloadCsv, type Column } from "@/components/shared/data-table";
 import { StatCard, StatGrid } from "@/components/shared/stat-card";
 import { RangeSelector, SearchInput, type RangeKey } from "@/components/shared/filters";
 import { Button } from "@/components/ui/button";
@@ -29,11 +30,12 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useLang, t } from "@/lib/i18n";
 import {
-  Receipt, Plus, MoreHorizontal, Pencil, Trash2, Repeat, ChevronDown, Play, Wallet, Hash,
+  Receipt, Plus, MoreHorizontal, Pencil, Trash2, Repeat, ChevronDown, Play, Wallet, Hash, Download,
 } from "lucide-react";
 import {
   type ExpenseRec, type VehicleRec, type Option, SelectInput, Field, ErrorState, MiniBars, MoneyInput,
-  CHART_COLORS, type ListResp, useAsync, useMutation, useDebounced, fmtDay, todayStr,
+  CHART_COLORS, type ListResp, useAsync, useMutation, useDebounced, fmtDay, todayStr, undoRequest,
+  UNDO_APPLIED_EVENT,
 } from "./_shared";
 
 interface ExpenseCategoryRec { id: string; name: string; business: string; kind?: string }
@@ -377,6 +379,13 @@ export default function ExpensesView({ navigate }: ViewProps) {
   const items = expenses.data?.items ?? [];
   const vehicleItems = business === "TRANSPORT" ? vehicles.data?.items ?? [] : [];
 
+  // An undo applied from the global Undo Center may have restored rows — refresh.
+  useEffect(() => {
+    const onUndoApplied = () => void expenses.reload();
+    window.addEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
+    return () => window.removeEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
+  }, [expenses.reload]);
+
   const breakdown = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of items) {
@@ -393,6 +402,10 @@ export default function ExpensesView({ navigate }: ViewProps) {
   const [addOpen, setAddOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ExpenseRec | null>(null);
 
+  // Bulk selection + delete
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkConfirm, setBulkConfirm] = useState(false);
+
   const onBusinessChange = (v: string) => {
     setBusiness(v);
     setCategoryId("");
@@ -404,6 +417,43 @@ export default function ExpensesView({ navigate }: ViewProps) {
     const res = await mutate(() => api.del(`/api/expenses/${deleteTarget.id}`), "Expense deleted", () => ({ module: "EXPENSE", recordId: deleteTarget.id, onUndo: () => void expenses.reload() }));
     if (res.ok) void expenses.reload();
     setDeleteTarget(null);
+  };
+
+  // Bulk delete: one DELETE at a time (allSettled semantics — a failure never
+  // aborts the rest), then a single toast + one Undo action that reverses every
+  // deleted row via the audit log.
+  const bulkDelete = async () => {
+    const ids = items.filter((r) => selectedIds.has(r.id)).map((r) => r.id);
+    if (ids.length === 0) { setBulkConfirm(false); return; }
+    setBulkConfirm(false);
+    const results: PromiseSettledResult<unknown>[] = [];
+    for (const id of ids) {
+      try {
+        results.push({ status: "fulfilled", value: await api.del(`/api/expenses/${id}`) });
+      } catch (e) {
+        results.push({ status: "rejected", reason: e });
+      }
+    }
+    const okIds = ids.filter((_, i) => results[i].status === "fulfilled");
+    if (okIds.length > 0) {
+      toast.success(`Deleted ${okIds.length} of ${ids.length} expense${ids.length === 1 ? "" : "s"}`, {
+        duration: 8000,
+        action: {
+          label: "Undo",
+          onClick: () => {
+            void (async () => {
+              for (const id of okIds) {
+                await undoRequest({ module: "EXPENSE", recordId: id, onUndo: () => void expenses.reload() });
+              }
+            })();
+          },
+        },
+      });
+    } else {
+      toast.error("Could not delete the selected expenses");
+    }
+    setSelectedIds(new Set());
+    void expenses.reload();
   };
 
   const toggleRecurring = async (row: RecurringRow, next: boolean) => {
@@ -455,7 +505,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
         <div className="flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`Actions for ${r.description || "expense"}`}>
+              <Button variant="ghost" size="icon" className="h-9 w-9 sm:h-8 sm:w-8" aria-label={`Actions for ${r.description || "expense"}`}>
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -564,6 +614,40 @@ export default function ExpensesView({ navigate }: ViewProps) {
                 emptyIcon={Receipt}
                 emptyTitle="No expenses match"
                 emptyDescription="Try widening the date range or clearing filters."
+                selectKey={(r) => r.id}
+                selectedIds={selectedIds}
+                onSelectedChange={setSelectedIds}
+                bulkBar={(ids) => (
+                  <>
+                    <span className="px-1.5 text-xs font-semibold tabular-nums whitespace-nowrap">
+                      {ids.length} selected
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5 text-xs"
+                      onClick={() =>
+                        downloadCsv(
+                          "expenses-selected",
+                          columns,
+                          items.filter((r) => ids.includes(r.id))
+                        )
+                      }
+                      aria-label={`Export ${ids.length} selected expenses as CSV`}
+                    >
+                      <Download className="h-3.5 w-3.5" aria-hidden />Export CSV
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="h-8 gap-1.5 text-xs"
+                      onClick={() => setBulkConfirm(true)}
+                      aria-label={`Delete ${ids.length} selected expenses`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden />Delete
+                    </Button>
+                  </>
+                )}
               />
             )}
           </CardContent>
@@ -644,6 +728,12 @@ export default function ExpensesView({ navigate }: ViewProps) {
       </div>
 
       <ExpenseFormDialog open={addOpen} onOpenChange={setAddOpen} expense={null} vehicles={vehicles.data?.items ?? []} onDone={() => void expenses.reload()} />
+
+      {/* Mobile FAB — alternate trigger for Add Expense (hidden while bulk rows
+          are selected so the sticky bulk bar stays unobstructed) */}
+      {selectedIds.size === 0 && (
+        <ViewFab icon={Plus} label="Add expense" onClick={() => setAddOpen(true)} />
+      )}
       <ExpenseFormDialog open={Boolean(editTarget)} onOpenChange={(v) => !v && setEditTarget(null)} expense={editTarget} vehicles={vehicles.data?.items ?? []} onDone={() => void expenses.reload()} />
       <RecurringFormDialog open={recAddOpen} onOpenChange={setRecAddOpen} onDone={() => { void recurring.reload(); void expenses.reload(); }} />
 
@@ -663,6 +753,26 @@ export default function ExpensesView({ navigate }: ViewProps) {
               onClick={(e) => { e.preventDefault(); void removeExpense(); }}
             >
               {saving ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkConfirm} onOpenChange={setBulkConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {selectedIds.size} selected expense{selectedIds.size === 1 ? "" : "s"}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Each deleted expense is audit-logged — a single Undo action after deleting restores every row from the audit trail.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="min-h-10 bg-red-600 text-white hover:bg-red-700"
+              onClick={(e) => { e.preventDefault(); void bulkDelete(); }}
+            >
+              Delete {selectedIds.size}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

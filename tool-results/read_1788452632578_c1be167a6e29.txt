@@ -1,0 +1,606 @@
+     1→"use client";
+     2→
+     3→import { useState } from "react";
+     4→import { api, downloadJSON } from "@/lib/api-client";
+     5→import type { ViewProps } from "@/components/view-types";
+     6→import { PageHeader } from "@/components/shared/page-header";
+     7→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+     8→import { Button } from "@/components/ui/button";
+     9→import { Input } from "@/components/ui/input";
+    10→import { Textarea } from "@/components/ui/textarea";
+    11→import { Skeleton } from "@/components/ui/skeleton";
+    12→import {
+    13→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+    14→  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+    15→} from "@/components/ui/alert-dialog";
+    16→import { toast } from "sonner";
+    17→import {
+    18→  AlertTriangle, Building2, Check, Crown, Database, Download, History, Languages, Loader2, Receipt,
+    19→  ReceiptText, RefreshCw, Settings, ShieldCheck, Smartphone, Sparkles, Truck, Users,
+    20→} from "lucide-react";
+    21→import { errMessage, Field, todayStr, useAsync, useMutation } from "./_shared";
+    22→import { usePwaInstall } from "@/components/shared/pwa-install";
+    23→import { useLang, t, type Lang } from "@/lib/i18n";
+    24→import { cn } from "@/lib/utils";
+    25→
+    26→// ---------------------------------------------------------------------------
+    27→// Settings shape (GET /api/settings → { business })
+    28→// ---------------------------------------------------------------------------
+    29→
+    30→interface BusinessSettings {
+    31→  name?: string | null;
+    32→  address?: string | null;
+    33→  contact?: string | null;
+    34→  gstin?: string | null;
+    35→  logoText?: string | null;
+    36→}
+    37→
+    38→interface SettingsResp {
+    39→  business: BusinessSettings;
+    40→}
+    41→
+    42→type SettingsForm = { name: string; address: string; contact: string; gstin: string; logoText: string };
+    43→
+    44→// ---------------------------------------------------------------------------
+    45→// Data & backup — full JSON export (GET /api/settings/backup)
+    46→// ---------------------------------------------------------------------------
+    47→
+    48→interface BackupResp {
+    49→  format: string;
+    50→  version: number;
+    51→  generatedAt: string;
+    52→  counts: Record<string, number>;
+    53→}
+    54→
+    55→function BackupCard() {
+    56→  const { lang } = useLang();
+    57→  const [exporting, setExporting] = useState(false);
+    58→
+    59→  const exportBackup = async () => {
+    60→    setExporting(true);
+    61→    try {
+    62→      const backup = await api.get<BackupResp>("/api/settings/backup");
+    63→      const total = Object.values(backup.counts).reduce((s, n) => s + n, 0);
+    64→      downloadJSON(`bizhub-backup-${todayStr()}.json`, backup);
+    65→      toast.success(
+    66→        t(lang, "settings.backupDone")
+    67→          .replace("{total}", total.toLocaleString("en-IN"))
+    68→          .replace("{collections}", String(Object.keys(backup.counts).length))
+    69→      );
+    70→    } catch (e) {
+    71→      toast.error(errMessage(e));
+    72→    } finally {
+    73→      setExporting(false);
+    74→    }
+    75→  };
+    76→
+    77→  return (
+    78→    <Card>
+    79→      <CardHeader>
+    80→        <CardTitle className="flex items-center gap-2 text-base">
+    81→          <Database className="h-4 w-4 text-primary" aria-hidden />
+    82→          {t(lang, "settings.backupTitle")}
+    83→        </CardTitle>
+    84→        <CardDescription>{t(lang, "settings.backupDesc")}</CardDescription>
+    85→      </CardHeader>
+    86→      <CardContent className="space-y-3">
+    87→        <Button variant="outline" className="min-h-10 gap-2" onClick={() => void exportBackup()} disabled={exporting}>
+    88→          {exporting ? (
+    89→            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+    90→          ) : (
+    91→            <Download className="h-4 w-4" aria-hidden />
+    92→          )}
+    93→          {exporting ? t(lang, "settings.backupWorking") : t(lang, "settings.backupAction")}
+    94→        </Button>
+    95→        <p className="text-xs leading-relaxed text-muted-foreground">{t(lang, "settings.backupNote")}</p>
+    96→      </CardContent>
+    97→    </Card>
+    98→  );
+    99→}
+   100→
+   101→// ---------------------------------------------------------------------------
+   102→// Data integrity — zero-mismatch health checks (GET/POST /api/settings/integrity)
+   103→// ---------------------------------------------------------------------------
+   104→
+   105→interface IntegrityResp {
+   106→  ok: boolean;
+   107→  checks: { id: string; label: string; detail: string; count: number; status: "ok" | "warn" }[];
+   108→  totals: { trips: number; settlements: number };
+   109→}
+   110→
+   111→function IntegrityCard() {
+   112→  const { data, loading, error, reload } = useAsync<IntegrityResp>(() => api.get("/api/settings/integrity"), []);
+   113→  const [repairing, setRepairing] = useState(false);
+   114→
+   115→  const repair = async () => {
+   116→    setRepairing(true);
+   117→    try {
+   118→      const r = await api.post<{ repaired: { properties: number; cancelledCleaned: number } }>("/api/settings/integrity");
+   119→      toast.success(`Repaired — allocations re-checked across ${r.repaired.properties} property(ies)`);
+   120→      void reload();
+   121→    } catch (e) {
+   122→      toast.error(errMessage(e));
+   123→    } finally {
+   124→      setRepairing(false);
+   125→    }
+   126→  };
+   127→
+   128→  const issues = data?.checks.reduce((s, c) => s + c.count, 0) ?? 0;
+   129→
+   130→  return (
+   131→    <Card>
+   132→      <CardHeader>
+   133→        <CardTitle className="flex items-center gap-2 text-base">
+   134→          <ShieldCheck className="h-4 w-4 text-primary" aria-hidden />
+   135→          Data integrity
+   136→        </CardTitle>
+   137→        <CardDescription>
+   138→          Continuous zero-mismatch audit — derived numbers are re-checked against their source records.
+   139→        </CardDescription>
+   140→      </CardHeader>
+   141→      <CardContent className="space-y-3">
+   142→        {loading ? (
+   143→          <div className="space-y-2" aria-busy="true">
+   144→            <Skeleton className="h-9 w-full" />
+   145→            <Skeleton className="h-9 w-full" />
+   146→            <Skeleton className="h-9 w-full" />
+   147→          </div>
+   148→        ) : error ? (
+   149→          <div className="flex items-center justify-between gap-2">
+   150→            <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
+   151→            <Button variant="outline" size="sm" className="h-8" onClick={() => void reload()}>Retry</Button>
+   152→          </div>
+   153→        ) : data ? (
+   154→          <>
+   155→            <div
+   156→              className={cn(
+   157→                "flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium",
+   158→                data.ok
+   159→                  ? "border-emerald-200 bg-emerald-50/70 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"
+   160→                  : "border-amber-300 bg-amber-50/70 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"
+   161→              )}
+   162→              role="status"
+   163→            >
+   164→              {data.ok ? <Check className="h-4 w-4 shrink-0" aria-hidden /> : <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />}
+   165→              {data.ok
+   166→                ? "All checks passed — books are consistent"
+   167→                : `${issues} issue${issues === 1 ? "" : "s"} found — auto-repair can fix allocation drift`}
+   168→            </div>
+   169→            <ul className="space-y-1.5">
+   170→              {data.checks.map((c) => (
+   171→                <li key={c.id} className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2">
+   172→                  <div className="min-w-0">
+   173→                    <p className="text-xs font-semibold">{c.label}</p>
+   174→                    <p className="truncate text-[10px] text-muted-foreground">{c.detail}</p>
+   175→                  </div>
+   176→                  <span
+   177→                    className={cn(
+   178→                      "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold",
+   179→                      c.count === 0
+   180→                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+   181→                        : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+   182→                    )}
+   183→                  >
+   184→                    {c.count === 0 ? "OK" : c.count}
+   185→                  </span>
+   186→                </li>
+   187→              ))}
+   188→            </ul>
+   189→            <div className="flex gap-2">
+   190→              <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => void reload()} disabled={loading}>
+   191→                <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+   192→                Re-run checks
+   193→              </Button>
+   194→              {issues > 0 && (
+   195→                <Button size="sm" className="h-9 gap-1.5" onClick={() => void repair()} disabled={repairing}>
+   196→                  {repairing ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <ShieldCheck className="h-3.5 w-3.5" aria-hidden />}
+   197→                  Auto-repair
+   198→                </Button>
+   199→              )}
+   200→            </div>
+   201→          </>
+   202→        ) : null}
+   203→      </CardContent>
+   204→    </Card>
+   205→  );
+   206→}
+   207→
+   208→// ---------------------------------------------------------------------------
+   209→// Danger zone — reset all business data (POST /api/settings/reset)
+   210→// ---------------------------------------------------------------------------
+   211→
+   212→function DangerZoneCard() {
+   213→  const [confirmText, setConfirmText] = useState("");
+   214→  const [resetting, setResetting] = useState(false);
+   215→
+   216→  const doReset = async () => {
+   217→    setResetting(true);
+   218→    try {
+   219→      await api.post("/api/settings/reset", { confirm: confirmText });
+   220→      toast.success("All business data wiped — clean slate ready. Master data and your login were kept.");
+   221→      setConfirmText("");
+   222→      window.location.reload();
+   223→    } catch (e) {
+   224→      toast.error(errMessage(e));
+   225→    } finally {
+   226→      setResetting(false);
+   227→    }
+   228→  };
+   229→
+   230→  return (
+   231→    <Card className="border-red-200 dark:border-red-900/60">
+   232→      <CardHeader>
+   233→        <CardTitle className="flex items-center gap-2 text-base text-red-700 dark:text-red-400">
+   234→          <AlertTriangle className="h-4 w-4" aria-hidden />
+   235→          Danger zone
+   236→        </CardTitle>
+   237→        <CardDescription>
+   238→          Start over: wipe every employee, property, vehicle, trip, payment and expense. Your login and
+   239→          master lists (shifts, categories) are kept.
+   240→        </CardDescription>
+   241→      </CardHeader>
+   242→      <CardContent>
+   243→        <AlertDialog>
+   244→          <AlertDialogTrigger asChild>
+   245→            <Button variant="destructive" className="min-h-10 gap-1.5">
+   246→              <AlertTriangle className="h-4 w-4" aria-hidden />
+   247→              Reset all business data
+   248→            </Button>
+   249→          </AlertDialogTrigger>
+   250→          <AlertDialogContent>
+   251→            <AlertDialogHeader>
+   252→              <AlertDialogTitle>Wipe all business data?</AlertDialogTitle>
+   253→              <AlertDialogDescription>
+   254→                This permanently deletes every employee, property, deployment, payment,
+   255→                advance, expense, vehicle, client, trip and settlement. Type <span className="font-mono font-bold">RESET</span> below
+   256→                to confirm. This cannot be undone.
+   257→              </AlertDialogDescription>
+   258→            </AlertDialogHeader>
+   259→            <Input
+   260→              value={confirmText}
+   261→              onChange={(e) => setConfirmText(e.target.value)}
+   262→              placeholder="Type RESET"
+   263→              aria-label="Type RESET to confirm"
+   264→              className="h-10 font-mono"
+   265→            />
+   266→            <AlertDialogFooter>
+   267→              <AlertDialogCancel>Cancel</AlertDialogCancel>
+   268→              <AlertDialogAction
+   269→                className="bg-destructive text-white hover:bg-destructive/90"
+   270→                disabled={confirmText.trim().toUpperCase() !== "RESET" || resetting}
+   271→                onClick={(e) => {
+   272→                  e.preventDefault();
+   273→                  void doReset();
+   274→                }}
+   275→              >
+   276→                {resetting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <AlertTriangle className="h-4 w-4" aria-hidden />}
+   277→                Yes, wipe everything
+   278→              </AlertDialogAction>
+   279→            </AlertDialogFooter>
+   280→          </AlertDialogContent>
+   281→        </AlertDialog>
+   282→      </CardContent>
+   283→    </Card>
+   284→  );
+   285→}
+   286→
+   287→// ---------------------------------------------------------------------------
+   288→// Language preference (i18n scaffolding — persisted in localStorage)
+   289→// ---------------------------------------------------------------------------
+   290→
+   291→const LANG_OPTIONS: { key: Lang; nameKey: string; native: string; sample: string }[] = [
+   292→  { key: "en", nameKey: "lang.en", native: "English", sample: "Dashboard · Reports · Settings" },
+   293→  { key: "hi", nameKey: "lang.hi", native: "हिन्दी", sample: "डैशबोर्ड · रिपोर्ट · सेटिंग" },
+   294→];
+   295→
+   296→function LanguageCard() {
+   297→  const { lang, setLang } = useLang();
+   298→  return (
+   299→    <Card>
+   300→      <CardHeader>
+   301→        <CardTitle className="flex items-center gap-2 text-base">
+   302→          <Languages className="h-4 w-4 text-primary" aria-hidden />
+   303→          {t(lang, "settings.language")}
+   304→        </CardTitle>
+   305→        <CardDescription>{t(lang, "settings.languageDesc")}</CardDescription>
+   306→      </CardHeader>
+   307→      <CardContent>
+   308→        <div className="grid gap-2.5 sm:grid-cols-2" role="radiogroup" aria-label={t(lang, "settings.language")}>
+   309→          {LANG_OPTIONS.map((o) => {
+   310→            const active = lang === o.key;
+   311→            return (
+   312→              <button
+   313→                key={o.key}
+   314→                type="button"
+   315→                role="radio"
+   316→                aria-checked={active}
+   317→                onClick={() => setLang(o.key)}
+   318→                className={cn(
+   319→                  "flex min-h-[64px] items-center gap-3 rounded-xl border p-3 text-left transition-all",
+   320→                  active
+   321→                    ? "border-primary/50 bg-primary/5 ring-1 ring-primary/30"
+   322→                    : "border-border bg-card hover:border-primary/30 hover:bg-muted/40"
+   323→                )}
+   324→              >
+   325→                <span
+   326→                  className={cn(
+   327→                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-sm font-bold",
+   328→                    active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+   329→                  )}
+   330→                  aria-hidden
+   331→                >
+   332→                  {o.key === "hi" ? "अ" : "A"}
+   333→                </span>
+   334→                <span className="min-w-0 flex-1">
+   335→                  <span className="block text-sm font-semibold">{o.native}</span>
+   336→                  <span className="block truncate text-[11px] text-muted-foreground">{o.sample}</span>
+   337→                </span>
+   338→                {active && <Check className="h-4 w-4 shrink-0 text-primary" aria-label="Selected" />}
+   339→              </button>
+   340→            );
+   341→          })}
+   342→        </div>
+   343→        <p className="mt-2.5 flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+   344→          <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-primary" aria-hidden />
+   345→          {t(lang, "lang.note")}
+   346→        </p>
+   347→      </CardContent>
+   348→    </Card>
+   349→  );
+   350→}
+   351→
+   352→export default function SettingsView({ navigate }: ViewProps) {
+   353→  const { canInstall, install, isStandalone } = usePwaInstall();
+   354→  const { data, loading, error, reload } = useAsync<SettingsResp>(
+   355→    () => api.get<SettingsResp>("/api/settings"),
+   356→    []
+   357→  );
+   358→
+   359→  const [form, setForm] = useState<SettingsForm | null>(null);
+   360→  const { mutate, saving } = useMutation();
+   361→
+   362→  // Derived defaults from server data; user edits take over via `form`.
+   363→  const biz = data?.business;
+   364→  const derived: SettingsForm | null = biz
+   365→    ? {
+   366→        name: biz.name ?? "",
+   367→        address: biz.address ?? "",
+   368→        contact: biz.contact ?? "",
+   369→        gstin: biz.gstin ?? "",
+   370→        logoText: biz.logoText ?? "",
+   371→      }
+   372→    : null;
+   373→  const current = form ?? derived;
+   374→
+   375→  const dirty = Boolean(form && derived && JSON.stringify(form) !== JSON.stringify(derived));
+   376→
+   377→  const set = (k: keyof SettingsForm) => (v: string) => setForm((f) => ({ ...(f ?? derived ?? { name: "", address: "", contact: "", gstin: "", logoText: "" }), [k]: v }));
+   378→
+   379→  const save = async () => {
+   380→    if (!current) return;
+   381→    if (!current.name.trim()) {
+   382→      toast.error("Business name is required");
+   383→      return;
+   384→    }
+   385→    const res = await mutate(
+   386→      () => api.put("/api/settings", {
+   387→        name: current.name.trim(),
+   388→        address: current.address || undefined,
+   389→        contact: current.contact || undefined,
+   390→        gstin: current.gstin || undefined,
+   391→        logoText: current.logoText || undefined,
+   392→      }),
+   393→      "Settings saved"
+   394→    );
+   395→    if (res.ok) {
+   396→      setForm(null);
+   397→      reload();
+   398→    }
+   399→  };
+   400→
+   401→  return (
+   402→    <div className="space-y-4">
+   403→      <PageHeader title="Settings" subtitle="Business profile & system" icon={Settings} />
+   404→
+   405→      <div className="mx-auto w-full max-w-3xl space-y-4">
+   406→        {/* 1 — Business profile */}
+   407→        <Card>
+   408→          <CardHeader>
+   409→            <CardTitle className="flex items-center gap-2 text-base">
+   410→              <Building2 className="h-4 w-4 text-primary" aria-hidden />
+   411→              Business profile
+   412→            </CardTitle>
+   413→            <CardDescription>
+   414→              Shown on statements, reports and printed documents.
+   415→            </CardDescription>
+   416→          </CardHeader>
+   417→          <CardContent className="space-y-3">
+   418→            {loading && (
+   419→              <div className="space-y-2.5" aria-busy="true">
+   420→                <Skeleton className="h-10 w-full" />
+   421→                <Skeleton className="h-10 w-full" />
+   422→                <Skeleton className="h-10 w-2/3" />
+   423→              </div>
+   424→            )}
+   425→
+   426→            {error && (
+   427→              <div className="rounded-xl border border-red-200 bg-red-50/60 p-4 text-center dark:border-red-900 dark:bg-red-950/30">
+   428→                <p className="text-xs text-red-700 dark:text-red-300">{error}</p>
+   429→                <Button variant="outline" size="sm" className="mt-2 h-8" onClick={() => void reload()}>Retry</Button>
+   430→              </div>
+   431→            )}
+   432→
+   433→            {!loading && !error && current && (
+   434→              <>
+   435→                <div className="grid gap-3 sm:grid-cols-2">
+   436→                  <Field label="Business name" required className="sm:col-span-2">
+   437→                    <Input value={current.name} onChange={(e) => set("name")(e.target.value)} className="h-10" placeholder="e.g. Sri Balaji Services" />
+   438→                  </Field>
+   439→                  <Field label="Contact">
+   440→                    <Input value={current.contact} onChange={(e) => set("contact")(e.target.value)} inputMode="tel" className="h-10" placeholder="Phone / email" />
+   441→                  </Field>
+   442→                  <Field label="GSTIN">
+   443→                    <Input value={current.gstin} onChange={(e) => set("gstin")(e.target.value)} className="h-10" placeholder="e.g. 29ABCDE1234F1Z5" />
+   444→                  </Field>
+   445→                  <Field label="Logo text" className="sm:col-span-2" hint="Short initials shown in the header & sidebar (e.g. SB)">
+   446→                    <Input value={current.logoText} onChange={(e) => set("logoText")(e.target.value)} className="h-10" maxLength={4} />
+   447→                  </Field>
+   448→                  <Field label="Address" className="sm:col-span-2">
+   449→                    <Textarea value={current.address} onChange={(e) => set("address")(e.target.value)} rows={2} />
+   450→                  </Field>
+   451→                </div>
+   452→                <div className="flex items-center justify-between gap-3">
+   453→                  <p className="text-[11px] text-muted-foreground" aria-live="polite">
+   454→                    {dirty ? "Unsaved changes" : "All changes saved"}
+   455→                  </p>
+   456→                  <Button className="min-h-10" onClick={save} disabled={saving || !dirty}>
+   457→                    {saving ? "Saving…" : "Save changes"}
+   458→                  </Button>
+   459→                </div>
+   460→              </>
+   461→            )}
+   462→          </CardContent>
+   463→        </Card>
+   464→
+   465→        {/* 2 — Two businesses explainer */}
+   466→        <Card>
+   467→          <CardHeader>
+   468→            <CardTitle className="text-base">Two businesses, one platform</CardTitle>
+   469→          </CardHeader>
+   470→          <CardContent className="space-y-3">
+   471→            <div className="grid gap-2.5 sm:grid-cols-2">
+   472→              <div className="flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900 dark:bg-emerald-950/30">
+   473→                <span className="shrink-0 rounded-lg bg-emerald-100 p-1.5 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300" aria-hidden>
+   474→                  <Users className="h-4 w-4" />
+   475→                </span>
+   476→                <div className="min-w-0">
+   477→                  <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">Manpower</p>
+   478→                  <p className="text-xs leading-relaxed text-emerald-700/80 dark:text-emerald-300/80">
+   479→                    Employees, deployments, collections, advances & payroll.
+   480→                  </p>
+   481→                </div>
+   482→              </div>
+   483→              <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-900 dark:bg-amber-950/30">
+   484→                <span className="shrink-0 rounded-lg bg-amber-100 p-1.5 text-amber-700 dark:bg-amber-900 dark:text-amber-300" aria-hidden>
+   485→                  <Truck className="h-4 w-4" />
+   486→                </span>
+   487→                <div className="min-w-0">
+   488→                  <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">Transport</p>
+   489→                  <p className="text-xs leading-relaxed text-amber-700/80 dark:text-amber-300/80">
+   490→                    Vehicles, clients, trips, expenses, EMI & maintenance.
+   491→                  </p>
+   492→                </div>
+   493→              </div>
+   494→            </div>
+   495→            <p className="text-xs leading-relaxed text-muted-foreground">
+   496→              <span className="font-medium text-foreground">Financial records never mix between businesses.</span> Every
+   497→              expense, trip and revenue entry is tagged to its business, so profit, receivables and payables are always
+   498→              reported separately.
+   499→            </p>
+   500→          </CardContent>
+   501→        </Card>
+   502→
+   503→        {/* 3 — Language */}
+   504→        <LanguageCard />
+   505→
+   506→        {/* 4 — Data & backup */}
+   507→        <BackupCard />
+   508→
+   509→        {/* 4b — Data integrity (zero-mismatch audit) */}
+   510→        <IntegrityCard />
+   511→
+   512→        {/* 4c — Danger zone (reset business data) */}
+   513→        <DangerZoneCard />
+   514→
+   515→        {/* 5 — System shortcuts */}
+   516→        <Card>
+   517→          <CardHeader>
+   518→            <CardTitle className="text-base">System shortcuts</CardTitle>
+   519→            <CardDescription>Jump to administration and control screens.</CardDescription>
+   520→          </CardHeader>
+   521→          <CardContent>
+   522→            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+   523→              {[
+   524→                { label: "Audit Log", icon: History, view: "audit" },
+   525→                { label: "Owners", icon: Crown, view: "owners" },
+   526→                { label: "Expenses", icon: Receipt, view: "expenses" },
+   527→                { label: "Settlements", icon: ReceiptText, view: "settlements" },
+   528→              ].map((s) => (
+   529→                <Button
+   530→                  key={s.view}
+   531→                  variant="outline"
+   532→                  className="min-h-10 min-w-0 flex-col gap-1.5 px-2 py-3"
+   533→                  onClick={() => navigate(s.view)}
+   534→                >
+   535→                  <s.icon className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+   536→                  <span className="w-full truncate text-center text-xs">{s.label}</span>
+   537→                </Button>
+   538→              ))}
+   539→            </div>
+   540→          </CardContent>
+   541→        </Card>
+   542→
+   543→        {/* 6 — About */}
+   544→        <Card>
+   545→          <CardHeader>
+   546→            <CardTitle className="text-base">About</CardTitle>
+   547→          </CardHeader>
+   548→          <CardContent className="space-y-2.5">
+   549→            <div className="flex items-center gap-3">
+   550→              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-base font-bold text-primary-foreground" aria-hidden>
+   551→                B
+   552→              </div>
+   553→              <div className="min-w-0">
+   554→                <p className="flex flex-wrap items-center gap-2 text-sm font-bold">
+   555→                  BizHub
+   556→                  <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">v1.0</span>
+   557→                </p>
+   558→                <p className="text-xs text-muted-foreground">Business management for Manpower & Transport</p>
+   559→              </div>
+   560→            </div>
+   561→            <div className="flex items-start gap-2 rounded-lg bg-muted/60 p-3">
+   562→              <Smartphone className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+   563→              <div className="min-w-0 flex-1">
+   564→                <p className="text-xs leading-relaxed text-muted-foreground">
+   565→                  {isStandalone ? (
+   566→                    <span className="font-medium text-foreground">BizHub is running as an installed app — enjoy the full-screen experience.</span>
+   567→                  ) : canInstall ? (
+   568→                    <span className="font-medium text-foreground">Install BizHub on this device for a full-screen, offline-friendly app experience.</span>
+   569→                  ) : (
+   570→                    <span className="font-medium text-foreground">Add to home screen</span>
+   571→                  )}
+   572→                  {!isStandalone && !canInstall && (
+   573→                    <>
+   574→                      {" "}from your browser menu (Share → Add to Home Screen on iOS, ⋮ → Install app on Android/Chrome).
+   575→                    </>
+   576→                  )}
+   577→                </p>
+   578→              </div>
+   579→              {canInstall && (
+   580→                <Button
+   581→                  size="sm"
+   582→                  className="h-8 shrink-0"
+   583→                  onClick={() =>
+   584→                    install().then((r) => {
+   585→                      if (r === "accepted") toast.success("BizHub installed — find it on your home screen");
+   586→                    })
+   587→                  }
+   588→                >
+   589→                  Install
+   590→                </Button>
+   591→              )}
+   592→            </div>
+   593→            <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
+   594→              <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
+   595→              <span>
+   596→                <span className="font-medium text-foreground">Enter information once → the system calculates everything</span> —
+   597→                billing, payouts, advances, settlements, profit and alerts.
+   598→              </span>
+   599→            </p>
+   600→          </CardContent>
+   601→        </Card>
+   602→      </div>
+   603→    </div>
+   604→  );
+   605→}
+   606→

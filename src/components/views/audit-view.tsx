@@ -229,7 +229,7 @@ export default function AuditView(_props: ViewProps) {
           <Button
             variant="outline"
             size="sm"
-            className="min-h-8 gap-1 px-2 text-[11px]"
+            className="min-h-9 sm:min-h-8 gap-1 px-2 text-[11px]"
             onClick={() => void undoRow(r)}
             aria-label={`Undo ${r.action.toLowerCase()} on ${r.module}`}
           >

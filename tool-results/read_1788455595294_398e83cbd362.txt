@@ -1,0 +1,648 @@
+     1→"use client";
+     2→
+     3→import { useState } from "react";
+     4→import { api } from "@/lib/api-client";
+     5→import { formatINR } from "@/lib/money";
+     6→import type { ViewProps } from "@/components/view-types";
+     7→import { useAuth } from "@/components/providers";
+     8→import { PageHeader } from "@/components/shared/page-header";
+     9→import { StatCard } from "@/components/shared/stat-card";
+    10→import { OnboardingChecklist } from "@/components/shared/onboarding-checklist";
+    11→import { RangeSelector, type RangeKey } from "@/components/shared/filters";
+    12→import { MonthPicker, toMonth } from "@/components/shared/month-picker";
+    13→import { t as tr, useLang } from "@/lib/i18n";
+    14→import { Button } from "@/components/ui/button";
+    15→import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+    16→import { Skeleton } from "@/components/ui/skeleton";
+    17→import { Badge } from "@/components/ui/badge";
+    18→import { cn } from "@/lib/utils";
+    19→import {
+    20→  Users, Truck, Wallet, IndianRupee, Landmark, CalendarCheck, Receipt, HandCoins, ReceiptText,
+    21→  Route, AlertTriangle, AlertCircle, Info, ChevronRight, Building2, RefreshCw, Activity, PieChart as PieChartIcon, History,
+    22→  CalendarRange, TrendingUp, TrendingDown, Minus, Sparkles, CalendarDays, Printer,
+    23→} from "lucide-react";
+    24→import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
+    25→import { ErrorState, useAsync, AreaTrend, CHART_COLORS } from "./_shared";
+    26→
+    27→interface AttentionItem {
+    28→  key: string;
+    29→  severity: string;
+    30→  title: string;
+    31→  message: string;
+    32→  view?: string;
+    33→  params?: Record<string, string>;
+    34→}
+    35→
+    36→interface SummaryResp {
+    37→  manpower: {
+    38→    employeesDeployed: number; propertiesServed: number; expectedBilling: number; payout: number;
+    39→    grossMargin: number; received: number; pending: number; advancesGiven: number; expenses: number;
+    40→    dayShifts: number; nightShifts: number; deployments: number;
+    41→  };
+    42→  transport: {
+    43→    availableVehicles: number; onTripVehicles: number; revenue: number; expenses: number;
+    44→    received: number; pending: number; monthRevenue: number; monthExpense: number;
+    45→    monthEmi: number; monthNet: number;
+    46→  };
+    47→  combined: { revenue: number; expenses: number; net: number; manpowerMargin: number; transportNet: number };
+    48→  collections: {
+    49→    totalBilled: number; totalReceived: number; totalOutstanding: number;
+    50→    byProperty: { propertyId: string; propertyName: string; outstanding: number }[];
+    51→  };
+    52→  attention: AttentionItem[];
+    53→}
+    54→
+    55→interface TrendRow { date: string; billing: number; collections: number; transport: number; expenses: number }
+    56→
+    57→interface AuditItem {
+    58→  id: string; ownerName: string; action: string; module: string;
+    59→  recordLabel: string | null; createdAt: string;
+    60→}
+    61→
+    62→interface MonthMetrics {
+    63→  deployments: number; manpowerBilling: number; manpowerPayout: number; manpowerMargin: number;
+    64→  manpowerOtherExpenses: number; collections: number; advances: number; trips: number;
+    65→  transportRevenue: number; transportCollected: number; transportOpex: number; transportEmi: number;
+    66→  net: number;
+    67→}
+    68→interface MonthlySummaryResp {
+    69→  month: string; prevMonth: string;
+    70→  current: MonthMetrics; previous: MonthMetrics;
+    71→  insights: string[]; note: string;
+    72→}
+    73→
+    74→const SEVERITY_STYLE: Record<string, { icon: typeof Info; cls: string }> = {
+    75→  CRITICAL: { icon: AlertCircle, cls: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50" },
+    76→  WARNING: { icon: AlertTriangle, cls: "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50" },
+    77→  INFO: { icon: Info, cls: "text-zinc-600 dark:text-zinc-400 bg-muted" },
+    78→};
+    79→
+    80→const QUICK_ACTIONS = [
+    81→  { label: "Deploy Employee", icon: CalendarCheck, view: "deployments" },
+    82→  { label: "Record Payment", icon: Wallet, view: "payments" },
+    83→  { label: "Add Expense", icon: Receipt, view: "expenses" },
+    84→  { label: "New Rental", icon: Route, view: "trips" },
+    85→  { label: "Add Advance", icon: HandCoins, view: "advances" },
+    86→  { label: "Settlements", icon: ReceiptText, view: "settlements" },
+    87→];
+    88→
+    89→const ACTION_BADGE: Record<string, string> = {
+    90→  CREATE: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+    91→  UPDATE: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+    92→  DELETE: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+    93→};
+    94→
+    95→const TOOLTIP_STYLE = {
+    96→  borderRadius: 10,
+    97→  border: "1px solid var(--border)",
+    98→  background: "var(--card)",
+    99→  color: "var(--foreground)",
+   100→  fontSize: 12,
+   101→} as const;
+   102→
+   103→function greetingForHour(): string {
+   104→  const h = new Date().getHours();
+   105→  if (h < 5) return "Burning the midnight oil";
+   106→  if (h < 12) return "Good morning";
+   107→  if (h < 17) return "Good afternoon";
+   108→  return "Good evening";
+   109→}
+   110→
+   111→function fmtRel(iso: string): string {
+   112→  const diff = Date.now() - new Date(iso).getTime();
+   113→  const mins = Math.floor(diff / 60_000);
+   114→  if (mins < 1) return "just now";
+   115→  if (mins < 60) return `${mins}m ago`;
+   116→  const hrs = Math.floor(mins / 60);
+   117→  if (hrs < 24) return `${hrs}h ago`;
+   118→  const days = Math.floor(hrs / 24);
+   119→  if (days < 7) return `${days}d ago`;
+   120→  return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+   121→}
+   122→
+   123→function prettyDate(): string {
+   124→  return new Intl.DateTimeFormat("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date());
+   125→}
+   126→
+   127→// Month-over-month delta chip: ▲/▼ with % — colored by whether the move is good.
+   128→function Delta({ pct, goodUp = true }: { pct: number | null; goodUp?: boolean }) {
+   129→  if (pct === null) {
+   130→    return <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">new</span>;
+   131→  }
+   132→  if (pct === 0) {
+   133→    return (
+   134→      <span className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+   135→        <Minus className="h-2.5 w-2.5" aria-hidden />0%
+   136→      </span>
+   137→    );
+   138→  }
+   139→  const up = pct > 0;
+   140→  const good = up === goodUp;
+   141→  const Icon = up ? TrendingUp : TrendingDown;
+   142→  return (
+   143→    <span
+   144→      className={cn(
+   145→        "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums",
+   146→        good
+   147→          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+   148→          : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+   149→      )}
+   150→    >
+   151→      <Icon className="h-2.5 w-2.5" aria-hidden />
+   152→      {Math.abs(pct)}%
+   153→    </span>
+   154→  );
+   155→}
+   156→
+   157→function pctOf(cur: number, prev: number): number | null {
+   158→  if (prev === 0) return cur === 0 ? 0 : null;
+   159→  return Math.round(((cur - prev) / Math.abs(prev)) * 100);
+   160→}
+   161→
+   162→function monthShort(month: string): string {
+   163→  const [y, m] = month.split("-").map(Number);
+   164→  return new Date(y, m - 1, 1).toLocaleDateString("en-IN", { month: "short" });
+   165→}
+   166→
+   167→export default function DashboardView({ navigate }: ViewProps) {
+   168→  const { owner } = useAuth();
+   169→  const { lang } = useLang();
+   170→  const [range, setRange] = useState<RangeKey>("today");
+   171→  const { data, loading, error, reload } = useAsync<SummaryResp>(
+   172→    () => api.get<SummaryResp>("/api/dashboard/summary" + (range !== "custom" ? `?range=${range}` : `?range=month`)),
+   173→    [range]
+   174→  );
+   175→  const { data: trend, loading: trendLoading, reload: reloadTrend } = useAsync<{ trend: TrendRow[] }>(
+   176→    () => api.get<{ trend: TrendRow[] }>("/api/dashboard/combined-trend?days=14"),
+   177→    []
+   178→  );
+   179→  const { data: audit, loading: auditLoading, reload: reloadAudit } = useAsync<{ items: AuditItem[] }>(
+   180→    () => api.get<{ items: AuditItem[] }>("/api/audit?page=1&pageSize=6"),
+   181→    []
+   182→  );
+   183→  const [summaryMonth, setSummaryMonth] = useState<string>(() => toMonth());
+   184→  const { data: monthly, loading: monthlyLoading } = useAsync<MonthlySummaryResp>(
+   185→    () => api.get<MonthlySummaryResp>(`/api/dashboard/monthly-summary?month=${summaryMonth}`),
+   186→    [summaryMonth]
+   187→  );
+   188→
+   189→  const m = data?.manpower;
+   190→  const t = data?.transport;
+   191→  const c = data?.collections;
+   192→  const net = data?.combined.net ?? 0;
+   193→  const busy = loading || trendLoading;
+   194→
+   195→  const refreshAll = () => { reload(); reloadTrend(); reloadAudit(); };
+   196→
+   197→  const firstName = (owner?.name ?? "Owner").split(" ")[0];
+   198→  const expenseSplit = [
+   199→    { name: "Manpower", value: m?.expenses ?? 0, color: CHART_COLORS.emerald },
+   200→    { name: "Transport", value: t?.expenses ?? 0, color: CHART_COLORS.amber },
+   201→  ].filter((d) => d.value > 0);
+   202→  const expenseTotal = expenseSplit.reduce((s, d) => s + d.value, 0);
+   203→
+   204→  return (
+   205→    <div className="space-y-5">
+   206→      <PageHeader
+   207→        title={`${greetingForHour()}, ${firstName}`}
+   208→        subtitle={prettyDate()}
+   209→        actions={
+   210→          <div className="flex items-center gap-2">
+   211→            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={refreshAll} aria-label="Refresh dashboard">
+   212→              <RefreshCw className={cn("h-3.5 w-3.5", busy && "animate-spin")} aria-hidden />
+   213→              <span className="hidden sm:inline">{tr(lang, "common.refresh")}</span>
+   214→            </Button>
+   215→            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => navigate("reports")}>
+   216→              <Landmark className="h-3.5 w-3.5" aria-hidden />{tr(lang, "common.reports")}
+   217→            </Button>
+   218→          </div>
+   219→        }
+   220→      />
+   221→
+   222→      <RangeSelector value={range} onChange={setRange} />
+   223→
+   224→      {error && <ErrorState message={error} onRetry={reload} />}
+   225→
+   226→      {loading && (
+   227→        <div className="space-y-3">
+   228→          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
+   229→            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)}
+   230→          </div>
+   231→          <div className="grid gap-3 lg:grid-cols-3">
+   232→            <Skeleton className="h-64 rounded-xl lg:col-span-2" />
+   233→            <Skeleton className="h-64 rounded-xl" />
+   234→          </div>
+   235→        </div>
+   236→      )}
+   237→
+   238→      {!loading && data && !error && (
+   239→        <>
+   240→          {/* Row 1 — headline stats */}
+   241→          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6" role="list" aria-label="Key numbers">
+   242→            <StatCard label="Today Billing" value={formatINR(m?.expectedBilling ?? 0, { compact: true })} icon={IndianRupee} onClick={() => navigate("manpower")} hint="Manpower expected" />
+   243→            <StatCard label="Collections" value={formatINR(m?.received ?? 0, { compact: true })} icon={Wallet} tone="positive" onClick={() => navigate("payments")} hint="Received in range" />
+   244→            <StatCard label="Outstanding" value={formatINR(c?.totalOutstanding ?? 0, { compact: true })} icon={Building2} tone="negative" onClick={() => navigate("payments")} hint="All properties" />
+   245→            <StatCard label="Employee Payout" value={formatINR(m?.payout ?? 0, { compact: true })} icon={Users} onClick={() => navigate("manpower")} hint={`${m?.deployments ?? 0} deployments`} />
+   246→            <StatCard label="Transport Revenue" value={formatINR(t?.revenue ?? 0, { compact: true })} icon={Truck} tone="transport" onClick={() => navigate("transport")} hint={`${t?.onTripVehicles ?? 0} on trip`} />
+   247→            <StatCard label="Net Result" value={formatINR(net, { compact: true })} icon={Landmark} tone={net >= 0 ? "positive" : "negative"} onClick={() => navigate("reports")} hint="Revenue − all expenses" />
+   248→          </div>
+   249→
+   250→          {/* First-run setup checklist — self-hides once the business is set up */}
+   251→          <OnboardingChecklist navigate={navigate} />
+   252→
+   253→          {/* Row 2 — 14-day performance trend + expense split */}
+   254→          <section className="grid gap-3 lg:grid-cols-3" aria-label="Trends">
+   255→            <Card className="lg:col-span-2">
+   256→              <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+   257→                <div className="space-y-1">
+   258→                  <CardTitle className="flex items-center gap-2 text-base">
+   259→                    <Activity className="h-4 w-4 text-primary" aria-hidden />
+   260→                    {tr(lang, "dash.trend")}
+   261→                  </CardTitle>
+   262→                  <CardDescription className="text-xs">Manpower billing · collections · transport revenue</CardDescription>
+   263→                </div>
+   264→                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("reports")}>{tr(lang, "common.reports")}</Button>
+   265→              </CardHeader>
+   266→              <CardContent>
+   267→                {trendLoading ? (
+   268→                  <Skeleton className="h-[220px] w-full rounded-lg" />
+   269→                ) : (
+   270→                  <AreaTrend
+   271→                    data={(trend?.trend ?? []) as unknown as Record<string, unknown>[]}
+   272→                    xKey="date"
+   273→                    height={220}
+   274→                    series={[
+   275→                      { key: "billing", label: "Manpower billing", color: CHART_COLORS.emerald },
+   276→                      { key: "collections", label: "Collections", color: CHART_COLORS.teal },
+   277→                      { key: "transport", label: "Transport revenue", color: CHART_COLORS.amber },
+   278→                    ]}
+   279→                  />
+   280→                )}
+   281→              </CardContent>
+   282→            </Card>
+   283→
+   284→            <Card>
+   285→              <CardHeader className="pb-2">
+   286→                <CardTitle className="flex items-center gap-2 text-base">
+   287→                  <PieChartIcon className="h-4 w-4 text-primary" aria-hidden />
+   288→                  {tr(lang, "dash.expenseSplit")}
+   289→                </CardTitle>
+   290→                <CardDescription className="text-xs">This range, by business</CardDescription>
+   291→              </CardHeader>
+   292→              <CardContent>
+   293→                {expenseTotal === 0 ? (
+   294→                  <p className="flex h-[220px] items-center justify-center text-center text-xs text-muted-foreground">
+   295→                    No expenses recorded in this range
+   296→                  </p>
+   297→                ) : (
+   298→                  <div className="relative h-[220px]">
+   299→                    <ResponsiveContainer width="100%" height="100%">
+   300→                      <PieChart>
+   301→                        <Pie
+   302→                          data={expenseSplit}
+   303→                          dataKey="value"
+   304→                          nameKey="name"
+   305→                          innerRadius="64%"
+   306→                          outerRadius="88%"
+   307→                          paddingAngle={3}
+   308→                          strokeWidth={0}
+   309→                        >
+   310→                          {expenseSplit.map((d) => (
+   311→                            <Cell key={d.name} fill={d.color} />
+   312→                          ))}
+   313→                        </Pie>
+   314→                        <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} />
+   315→                      </PieChart>
+   316→                    </ResponsiveContainer>
+   317→                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+   318→                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Total</p>
+   319→                      <p className="text-sm font-bold tabular-nums">{formatINR(expenseTotal, { compact: true })}</p>
+   320→                    </div>
+   321→                  </div>
+   322→                )}
+   323→                {expenseTotal > 0 && (
+   324→                  <div className="mt-2 space-y-1.5">
+   325→                    {expenseSplit.map((d) => (
+   326→                      <div key={d.name} className="flex items-center justify-between text-xs">
+   327→                        <span className="flex items-center gap-1.5 text-muted-foreground">
+   328→                          <span className="h-2 w-2 rounded-full" style={{ background: d.color }} aria-hidden />
+   329→                          {d.name}
+   330→                        </span>
+   331→                        <span className="font-semibold tabular-nums">
+   332→                          {formatINR(d.value, { compact: true })}
+   333→                          <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+   334→                            {Math.round((d.value / expenseTotal) * 100)}%
+   335→                          </span>
+   336→                        </span>
+   337→                      </div>
+   338→                    ))}
+   339→                  </div>
+   340→                )}
+   341→              </CardContent>
+   342→            </Card>
+   343→          </section>
+   344→
+   345→          {/* Business split */}
+   346→          <section aria-label="Business split" className="grid gap-3 md:grid-cols-2">
+   347→            <Card className="border-emerald-200/70 dark:border-emerald-900">
+   348→              <CardHeader className="flex-row items-center gap-3 space-y-0 pb-2">
+   349→                <div className="rounded-xl bg-emerald-100 p-2 dark:bg-emerald-950">
+   350→                  <Users className="h-5 w-5 text-emerald-600 dark:text-emerald-400" aria-hidden />
+   351→                </div>
+   352→                <div>
+   353→                  <CardTitle className="text-base">Manpower Business</CardTitle>
+   354→                  <p className="text-xs text-muted-foreground">Staffing · deployments · payroll</p>
+   355→                </div>
+   356→              </CardHeader>
+   357→              <CardContent className="space-y-0.5">
+   358→                <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Expected billing</span><span className="font-semibold tabular-nums">{formatINR(m?.expectedBilling ?? 0)}</span></div>
+   359→                <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Employee payout</span><span className="font-semibold tabular-nums">{formatINR(m?.payout ?? 0)}</span></div>
+   360→                <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Gross margin</span><span className={cn("font-semibold tabular-nums", (m?.grossMargin ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{formatINR(m?.grossMargin ?? 0)}</span></div>
+   361→                <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Other expenses</span><span className="font-semibold tabular-nums">{formatINR(m?.expenses ?? 0)}</span></div>
+   362→                <div className="flex justify-between border-t pt-1.5 text-sm"><span className="text-muted-foreground">Net result</span><span className="font-bold tabular-nums">{formatINR((m?.grossMargin ?? 0) - (m?.expenses ?? 0))}</span></div>
+   363→                <Button variant="outline" size="sm" className="mt-3 h-9 w-full gap-1 sm:w-auto" onClick={() => navigate("manpower")}>
+   364→                  View details <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+   365→                </Button>
+   366→              </CardContent>
+   367→            </Card>
+   368→
+   369→            <Card className="border-amber-200/70 dark:border-amber-900">
+   370→              <CardHeader className="flex-row items-center gap-3 space-y-0 pb-2">
+   371→                <div className="rounded-xl bg-amber-100 p-2 dark:bg-amber-950">
+   372→                  <Truck className="h-5 w-5 text-amber-600 dark:text-amber-400" aria-hidden />
+   373→                </div>
+   374→                <div>
+   375→                  <CardTitle className="text-base">Transport Business</CardTitle>
+   376→                  <p className="text-xs text-muted-foreground">Vehicles · trips & rentals</p>
+   377→                </div>
+   378→              </CardHeader>
+   379→              <CardContent className="space-y-0.5">
+   380→                <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Revenue</span><span className="font-semibold tabular-nums">{formatINR(t?.revenue ?? 0)}</span></div>
+   381→                <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Expenses</span><span className="font-semibold tabular-nums">{formatINR(t?.expenses ?? 0)}</span></div>
+   382→                <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">EMI (this month)</span><span className="font-semibold tabular-nums">{formatINR(t?.monthEmi ?? 0)}</span></div>
+   383→                <div className="flex justify-between border-t pt-1.5 text-sm"><span className="text-muted-foreground">Net result</span><span className={cn("font-bold tabular-nums", (t?.monthNet ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{formatINR(t?.monthNet ?? 0)}</span></div>
+   384→                <div className="flex gap-2 pt-1.5">
+   385→                  <Button variant="outline" size="sm" className="mt-1 h-9 flex-1 gap-1 sm:flex-none" onClick={() => navigate("transport")}>
+   386→                    View details <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+   387→                  </Button>
+   388→                  <Button variant="outline" size="sm" className="mt-1 h-9 flex-1 gap-1 sm:flex-none" onClick={() => navigate("trips")}>
+   389→                    <Route className="h-3.5 w-3.5" aria-hidden />Trips
+   390→                  </Button>
+   391→                </div>
+   392→              </CardContent>
+   393→            </Card>
+   394→          </section>
+   395→
+   396→          {/* Monthly business summary — month-over-month, both businesses */}
+   397→          {monthlyLoading ? (
+   398→            <Card>
+   399→              <CardContent className="space-y-3 p-4 sm:p-6">
+   400→                <div className="flex items-center justify-between">
+   401→                  <Skeleton className="h-5 w-48" />
+   402→                  <Skeleton className="h-9 w-40 rounded-full" />
+   403→                </div>
+   404→                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+   405→                  {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 rounded-xl" />)}
+   406→                </div>
+   407→                <Skeleton className="h-9 w-full rounded-lg" />
+   408→              </CardContent>
+   409→            </Card>
+   410→          ) : monthly ? (
+   411→            <div className="print-area space-y-2">
+   412→              {/* Print-only header (hidden on screen) */}
+   413→              <div className="hidden print:block">
+   414→                <h1 className="text-lg font-bold">Monthly business summary — BizHub</h1>
+   415→                <p className="text-xs">Month: {monthShort(monthly.month)} (compared with {monthShort(monthly.prevMonth)})</p>
+   416→                <p className="text-xs">Generated {new Date().toLocaleString("en-IN")}</p>
+   417→                <hr className="my-2" />
+   418→              </div>
+   419→              <Card className="overflow-hidden border-primary/20">
+   420→                <div className="h-0.5 w-full bg-gradient-to-r from-emerald-500/70 via-teal-500/70 to-amber-500/70" aria-hidden />
+   421→                <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
+   422→                  <div className="space-y-0.5">
+   423→                    <CardTitle className="flex items-center gap-2 text-base">
+   424→                      <CalendarRange className="h-4 w-4 text-primary" aria-hidden />
+   425→                      {tr(lang, "dash.monthlySummary")}
+   426→                    </CardTitle>
+   427→                    <CardDescription className="text-xs">
+   428→                      {monthShort(monthly.prevMonth)} → {monthShort(monthly.month)} · {tr(lang, "dash.bothBusinesses")}
+   429→                    </CardDescription>
+   430→                  </div>
+   431→                  <div className="no-print flex items-center gap-1.5">
+   432→                    <MonthPicker month={summaryMonth} onChange={setSummaryMonth} className="scale-95" />
+   433→                    <Button
+   434→                      variant="outline"
+   435→                      size="icon"
+   436→                      className="h-9 w-9 transition-colors hover:border-primary/40 hover:text-primary"
+   437→                      onClick={() => window.print()}
+   438→                      aria-label="Print or save this summary as PDF"
+   439→                      title="Print / Save PDF"
+   440→                    >
+   441→                      <Printer className="h-4 w-4" aria-hidden />
+   442→                    </Button>
+   443→                  </div>
+   444→                </CardHeader>
+   445→              <CardContent className="space-y-3">
+   446→                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+   447→                  {([
+   448→                    { label: "Manpower billing", value: monthly.current.manpowerBilling, prev: monthly.previous.manpowerBilling, goodUp: true, icon: Users, cls: "text-emerald-600 dark:text-emerald-400" },
+   449→                    { label: "Collections", value: monthly.current.collections, prev: monthly.previous.collections, goodUp: true, icon: Wallet, cls: "text-teal-600 dark:text-teal-400" },
+   450→                    { label: "Transport revenue", value: monthly.current.transportRevenue, prev: monthly.previous.transportRevenue, goodUp: true, icon: Truck, cls: "text-amber-600 dark:text-amber-400" },
+   451→                    { label: "Total expenses", value: monthly.current.manpowerOtherExpenses + monthly.current.transportOpex + monthly.current.transportEmi, prev: monthly.previous.manpowerOtherExpenses + monthly.previous.transportOpex + monthly.previous.transportEmi, goodUp: false, icon: Receipt, cls: "text-red-600 dark:text-red-400" },
+   452→                    { label: "Net result", value: monthly.current.net, prev: monthly.previous.net, goodUp: true, icon: Landmark, cls: "" },
+   453→                  ] as const).map((row) => (
+   454→                    <div key={row.label} className="rounded-xl border bg-muted/30 p-3 transition-colors hover:bg-muted/50">
+   455→                      <div className="flex items-center justify-between gap-1">
+   456→                        <span className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+   457→                          <row.icon className={cn("h-3.5 w-3.5 shrink-0", row.cls)} aria-hidden />
+   458→                          <span className="truncate">{row.label}</span>
+   459→                        </span>
+   460→                        <Delta pct={pctOf(row.value, row.prev)} goodUp={row.goodUp} />
+   461→                      </div>
+   462→                      <p className="mt-1 text-base font-bold tabular-nums">{formatINR(row.value, { compact: true })}</p>
+   463→                      <p className="text-[10px] tabular-nums text-muted-foreground">was {formatINR(row.prev, { compact: true })}</p>
+   464→                    </div>
+   465→                  ))}
+   466→                </div>
+   467→                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+   468→                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+   469→                    <CalendarCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" aria-hidden />
+   470→                    {monthly.current.deployments} deployment{monthly.current.deployments === 1 ? "" : "s"}
+   471→                  </span>
+   472→                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+   473→                    <Route className="h-3 w-3 text-amber-600 dark:text-amber-400" aria-hidden />
+   474→                    {monthly.current.trips} trip{monthly.current.trips === 1 ? "" : "s"}
+   475→                  </span>
+   476→                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+   477→                    <CalendarDays className="h-3 w-3" aria-hidden />
+   478→                    advances {formatINR(monthly.current.advances, { compact: true })}
+   479→                  </span>
+   480→                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+   481→                    EMI {formatINR(monthly.current.transportEmi, { compact: true })}
+   482→                  </span>
+   483→                </div>
+   484→                {monthly.insights.length > 0 && (
+   485→                  <div
+   486→                    className="flex items-start gap-2 rounded-xl border border-primary/20 bg-gradient-to-r from-primary/5 via-primary/[0.03] to-transparent p-3 print:border-border print:bg-transparent"
+   487→                    role="note"
+   488→                    aria-label="Automated insights"
+   489→                  >
+   490→                    <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+   491→                    <ul className="min-w-0 space-y-0.5">
+   492→                      {monthly.insights.map((line) => (
+   493→                        <li key={line} className="text-xs leading-relaxed text-foreground/80">{line}</li>
+   494→                      ))}
+   495→                    </ul>
+   496→                  </div>
+   497→                )}
+   498→                <p className="flex items-start gap-1.5 text-[10px] leading-relaxed text-muted-foreground">
+   499→                  <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+   500→                  {monthly.note}
+   501→                </p>
+   502→              </CardContent>
+   503→              </Card>
+   504→            </div>
+   505→          ) : null}
+   506→
+   507→          {/* Collections + attention */}
+   508→          <section className="grid gap-3 lg:grid-cols-2" aria-label="Collections and attention">
+   509→            <Card>
+   510→              <CardHeader className="pb-2">
+   511→                <CardTitle className="text-base">{tr(lang, "dash.collections")}</CardTitle>
+   512→              </CardHeader>
+   513→              <CardContent>
+   514→                <div className="grid grid-cols-3 gap-2">
+   515→                  <div className="rounded-xl bg-muted/60 p-3 text-center">
+   516→                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Billed</p>
+   517→                    <p className="text-sm font-bold tabular-nums">{formatINR(c?.totalBilled ?? 0, { compact: true })}</p>
+   518→                  </div>
+   519→                  <div className="rounded-xl bg-emerald-50 p-3 text-center dark:bg-emerald-950/40">
+   520→                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Received</p>
+   521→                    <p className="text-sm font-bold tabular-nums text-emerald-700 dark:text-emerald-300">{formatINR(c?.totalReceived ?? 0, { compact: true })}</p>
+   522→                  </div>
+   523→                  <div className="rounded-xl bg-red-50 p-3 text-center dark:bg-red-950/40">
+   524→                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Outstanding</p>
+   525→                    <p className="text-sm font-bold tabular-nums text-red-600 dark:text-red-400">{formatINR(c?.totalOutstanding ?? 0, { compact: true })}</p>
+   526→                  </div>
+   527→                </div>
+   528→                <p className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">Top pending properties</p>
+   529→                <div className="space-y-1">
+   530→                  {(c?.byProperty ?? []).slice(0, 5).map((p) => (
+   531→                    <button
+   532→                      key={p.propertyId}
+   533→                      type="button"
+   534→                      onClick={() => navigate("property-detail", { id: p.propertyId })}
+   535→                      className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-muted/60"
+   536→                    >
+   537→                      <span className="min-w-0 truncate">{p.propertyName}</span>
+   538→                      <span className="shrink-0 font-semibold tabular-nums text-red-600 dark:text-red-400">{formatINR(p.outstanding, { compact: true })}</span>
+   539→                    </button>
+   540→                  ))}
+   541→                  {(c?.byProperty?.length ?? 0) === 0 && (
+   542→                    <p className="py-3 text-center text-xs text-muted-foreground">Nothing pending — all collected</p>
+   543→                  )}
+   544→                </div>
+   545→              </CardContent>
+   546→            </Card>
+   547→
+   548→            <Card>
+   549→              <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+   550→                <CardTitle className="text-base">{tr(lang, "dash.attention")}</CardTitle>
+   551→                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("notifications")}>{tr(lang, "common.viewAll")}</Button>
+   552→              </CardHeader>
+   553→              <CardContent className="space-y-1.5">
+   554→                {(data.attention ?? []).length === 0 && (
+   555→                  <p className="py-6 text-center text-xs text-muted-foreground">All clear — nothing needs your attention</p>
+   556→                )}
+   557→                {(data.attention ?? []).map((n) => {
+   558→                  const sev = SEVERITY_STYLE[n.severity] ?? SEVERITY_STYLE.INFO;
+   559→                  const Icon = sev.icon;
+   560→                  return (
+   561→                    <button
+   562→                      key={n.key}
+   563→                      type="button"
+   564→                      onClick={() => n.view && navigate(n.view, n.params)}
+   565→                      className="flex w-full items-start gap-2.5 rounded-lg border p-2.5 text-left transition-colors hover:bg-muted/60"
+   566→                    >
+   567→                      <span className={cn("rounded-lg p-1.5", sev.cls)} aria-hidden><Icon className="h-3.5 w-3.5" /></span>
+   568→                      <span className="min-w-0">
+   569→                        <span className="block truncate text-xs font-semibold">{n.title}</span>
+   570→                        <span className="mt-0.5 line-clamp-2 block text-[11px] text-muted-foreground">{n.message}</span>
+   571→                      </span>
+   572→                    </button>
+   573→                  );
+   574→                })}
+   575→              </CardContent>
+   576→            </Card>
+   577→          </section>
+   578→
+   579→          {/* Recent activity */}
+   580→          <section aria-label="Recent activity">
+   581→            <Card>
+   582→              <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+   583→                <div className="space-y-1">
+   584→                  <CardTitle className="flex items-center gap-2 text-base">
+   585→                    <History className="h-4 w-4 text-primary" aria-hidden />
+   586→                    {tr(lang, "dash.activity")}
+   587→                  </CardTitle>
+   588→                  <CardDescription className="text-xs">Latest actions across both businesses — fully audited</CardDescription>
+   589→                </div>
+   590→                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("audit")}>{tr(lang, "common.viewAll")}</Button>
+   591→              </CardHeader>
+   592→              <CardContent>
+   593→                {auditLoading ? (
+   594→                  <div className="space-y-2">
+   595→                    {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-10 w-full rounded-lg" />)}
+   596→                  </div>
+   597→                ) : (
+   598→                  <ul className="divide-y">
+   599→                    {(audit?.items ?? []).map((a) => (
+   600→                      <li key={a.id} className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
+   601→                        <Badge
+   602→                          variant="secondary"
+   603→                          className={cn("w-[68px] shrink-0 justify-center text-[10px] font-semibold", ACTION_BADGE[a.action] ?? "bg-muted text-muted-foreground")}
+   604→                        >
+   605→                          {a.action}
+   606→                        </Badge>
+   607→                        <div className="min-w-0 flex-1">
+   608→                          <p className="truncate text-xs font-medium">
+   609→                            {a.recordLabel || a.module}
+   610→                            <span className="ml-1.5 font-normal text-muted-foreground">· {a.module}</span>
+   611→                          </p>
+   612→                          <p className="truncate text-[11px] text-muted-foreground">{a.ownerName}</p>
+   613→                        </div>
+   614→                        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{fmtRel(a.createdAt)}</span>
+   615→                      </li>
+   616→                    ))}
+   617→                    {(audit?.items?.length ?? 0) === 0 && (
+   618→                      <li className="py-4 text-center text-xs text-muted-foreground">No activity yet</li>
+   619→                    )}
+   620→                  </ul>
+   621→                )}
+   622→              </CardContent>
+   623→            </Card>
+   624→          </section>
+   625→
+   626→          {/* Quick actions */}
+   627→          <section aria-label="Quick actions">
+   628→            <p className="mb-2 text-xs font-medium text-muted-foreground">Quick actions</p>
+   629→            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+   630→              {QUICK_ACTIONS.map((a) => (
+   631→                <Button
+   632→                  key={a.view + a.label}
+   633→                  variant="outline"
+   634→                  className="h-auto min-h-11 flex-col gap-1.5 py-2.5"
+   635→                  onClick={() => navigate(a.view)}
+   636→                >
+   637→                  <a.icon className="h-4 w-4 text-primary" aria-hidden />
+   638→                  <span className="text-xs font-medium leading-none">{a.label}</span>
+   639→                </Button>
+   640→              ))}
+   641→            </div>
+   642→          </section>
+   643→        </>
+   644→      )}
+   645→    </div>
+   646→  );
+   647→}
+   648→

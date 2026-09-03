@@ -5,6 +5,7 @@ import { api, qs } from "@/lib/api-client";
 import { formatINR, parseAmount } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
 import { PageHeader } from "@/components/shared/page-header";
+import { ViewFab } from "@/components/shared/view-fab";
 import { DataTable, type Column } from "@/components/shared/data-table";
 import { SearchInput } from "@/components/shared/filters";
 import { Button } from "@/components/ui/button";
@@ -202,6 +203,9 @@ export default function PropertiesView({ navigate }: ViewProps) {
       </Card>
 
       <PropertyFormDialog open={addOpen} onOpenChange={setAddOpen} onDone={load} />
+
+      {/* Mobile FAB — alternate trigger for Add Property */}
+      <ViewFab icon={Plus} label="Add property" onClick={() => setAddOpen(true)} />
     </div>
   );
 }

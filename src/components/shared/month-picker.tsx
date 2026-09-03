@@ -26,14 +26,14 @@ export function MonthPicker({
   const isCurrent = month === `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, "0")}`;
   return (
     <div className={cn("inline-flex items-center gap-1 rounded-full border bg-card p-1", className)}>
-      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => shift(-1)} aria-label="Previous month">
+      <Button variant="ghost" size="icon" className="h-9 w-9 sm:h-8 sm:w-8" onClick={() => shift(-1)} aria-label="Previous month">
         <ChevronLeft className="h-4 w-4" />
       </Button>
       <span className="min-w-[120px] text-center text-sm font-medium tabular-nums">
         {label}
         {isCurrent && <span className="ml-1.5 text-[10px] text-muted-foreground font-normal">(current)</span>}
       </span>
-      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => shift(1)} aria-label="Next month">
+      <Button variant="ghost" size="icon" className="h-9 w-9 sm:h-8 sm:w-8" onClick={() => shift(1)} aria-label="Next month">
         <ChevronRight className="h-4 w-4" />
       </Button>
     </div>

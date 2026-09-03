@@ -5,6 +5,7 @@ import { api, qs } from "@/lib/api-client";
 import { formatINR, parseAmount } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
 import { PageHeader } from "@/components/shared/page-header";
+import { ViewFab } from "@/components/shared/view-fab";
 import { DataTable, type Column } from "@/components/shared/data-table";
 import { StatCard, StatGrid } from "@/components/shared/stat-card";
 import { RangeSelector, type RangeKey } from "@/components/shared/filters";
@@ -28,7 +29,7 @@ import { useLang, t } from "@/lib/i18n";
 import { Route, Plus, IndianRupee, TimerOff, BadgeCheck } from "lucide-react";
 import {
   type TripRec, type VehicleRec, type ClientRec, type Option, SelectInput, Field, KV, ErrorState, MoneyInput,
-  fmtDay, fmtDateTime, useAsync, useMutation,
+  fmtDay, fmtDateTime, useAsync, useMutation, ConfirmAmount,
 } from "./_shared";
 
 type TripsResp = { items: TripRec[]; total: number; totals?: { revenue: number; pending: number } };
@@ -315,6 +316,9 @@ export default function TripsView({ params, navigate }: ViewProps) {
     if (res.ok) { setPayFor(null); void trips.reload(); }
   };
 
+  const payTrip = payFor ? items.find((x) => x.id === payFor) ?? null : null;
+  const paySubject = payTrip ? `${payTrip.vehicleName ?? "Vehicle"} → ${payTrip.clientName ?? "Client"}` : "this trip";
+
   const cancelTrip = async () => {
     if (!cancelFor) return;
     const res = await mutate(() => api.put(`/api/trips/${cancelFor}`, { status: "CANCELLED" }), "Trip cancelled", () => ({ module: "TRIP", recordId: cancelFor, onUndo: () => void trips.reload() }));
@@ -441,6 +445,7 @@ export default function TripsView({ params, navigate }: ViewProps) {
               rowKey={(r) => r.id}
               onRowClick={(r) => setDetailId(r.id)}
               exportName="trips"
+              stickyFirstCol
               loading={trips.loading}
               emptyIcon={Route}
               emptyTitle="No trips match"
@@ -557,10 +562,16 @@ export default function TripsView({ params, navigate }: ViewProps) {
               <SelectInput value={payForm.method} onChange={(v) => setPayForm((f) => ({ ...f, method: v }))} options={METHOD_OPTIONS} />
             </Field>
           </div>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => setPayFor(null)}>Cancel</Button>
-            <Button className="min-h-10 flex-1 sm:flex-none" onClick={() => void submitPayment()} disabled={saving}>{saving ? "Saving…" : "Record payment"}</Button>
-          </DialogFooter>
+          <ConfirmAmount amount={parseAmount(payForm.amount)} subject={paySubject} onSubmit={() => void submitPayment()}>
+            {({ confirm, armed }) => (
+              <DialogFooter className="gap-2">
+                <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => setPayFor(null)}>Cancel</Button>
+                <Button className="min-h-10 flex-1 sm:flex-none" onClick={confirm} disabled={saving || armed}>
+                  {saving ? "Saving…" : armed ? "Confirm below" : "Record payment"}
+                </Button>
+              </DialogFooter>
+            )}
+          </ConfirmAmount>
         </DialogContent>
       </Dialog>
 
@@ -590,6 +601,9 @@ export default function TripsView({ params, navigate }: ViewProps) {
         clients={clients.data?.items ?? []}
         onDone={() => void trips.reload()}
       />
+
+      {/* Mobile FAB — alternate trigger for New Rental */}
+      <ViewFab icon={Plus} label="New trip" onClick={() => setNewOpen(true)} />
     </div>
   );
 }
