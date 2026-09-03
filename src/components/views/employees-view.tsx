@@ -26,7 +26,7 @@ import {
   UserRound, MoreHorizontal, Pencil, Eye, HandCoins, UserPlus,
 } from "lucide-react";
 import {
-  EmployeeRec, Field, GiveAdvanceDialog, ListResp, Option, SelectInput, errMessage, todayStr, useMutation,
+  EmployeeRec, Field, GiveAdvanceDialog, ListResp, MoneyInput, Option, SelectInput, errMessage, todayStr, useMutation,
 } from "./_shared";
 
 const STATUS_OPTIONS: Option[] = [
@@ -119,7 +119,7 @@ function EmployeeFormDialog({ open, onOpenChange, employee, onDone }: {
               ? "Applies to future deployments only — past records keep their original rate."
               : "Paid to the employee per shift. Full shift = 2 units."}
           >
-            <Input type="number" inputMode="numeric" value={form.standardRate} onChange={(e) => set("standardRate")(e.target.value)} className="h-10" placeholder="e.g. 500" />
+            <MoneyInput value={form.standardRate} onChange={set("standardRate")} className="h-10" placeholder="e.g. 500" />
           </Field>
           <Field label="Joining date"><Input type="date" value={form.joiningDate} onChange={(e) => set("joiningDate")(e.target.value)} className="h-10" /></Field>
           <Field label="Gender">

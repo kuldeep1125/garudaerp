@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 import { useLang, t } from "@/lib/i18n";
 import { CarFront, Plus, ShieldAlert, GaugeCircle } from "lucide-react";
 import {
-  type VehicleRec, type Option, SelectInput, Field, ErrorState, moneyCls,
+  type VehicleRec, type Option, SelectInput, Field, ErrorState, moneyCls, MoneyInput,
   useAsync, useMutation, useDebounced, fmtDay,
 } from "./_shared";
 
@@ -125,13 +125,13 @@ function AddVehicleDialog({ open, onOpenChange, onDone }: {
           <Field label="Variant"><Input value={form.variant} onChange={set("variant")} className="h-10" placeholder="VXi" /></Field>
           <Field label="Year"><Input type="number" inputMode="numeric" value={form.year} onChange={set("year")} className="h-10" placeholder="2023" /></Field>
           <Field label="Purchase date"><Input type="date" value={form.purchaseDate} onChange={set("purchaseDate")} className="h-10" /></Field>
-          <Field label="Purchase price (₹)"><Input type="number" inputMode="numeric" value={form.purchasePrice} onChange={set("purchasePrice")} className="h-10" /></Field>
+          <Field label="Purchase price (₹)"><MoneyInput value={form.purchasePrice} onChange={(v) => setForm((f) => ({ ...f, purchasePrice: v }))} className="h-10" /></Field>
 
           <div className="sm:col-span-2">
             <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Loan & EMI</p>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Loan amount (₹)"><Input type="number" inputMode="numeric" value={form.loanAmount} onChange={set("loanAmount")} className="h-10" /></Field>
-              <Field label="Monthly EMI (₹)"><Input type="number" inputMode="numeric" value={form.monthlyEmi} onChange={set("monthlyEmi")} className="h-10" /></Field>
+              <Field label="Loan amount (₹)"><MoneyInput value={form.loanAmount} onChange={(v) => setForm((f) => ({ ...f, loanAmount: v }))} className="h-10" /></Field>
+              <Field label="Monthly EMI (₹)"><MoneyInput value={form.monthlyEmi} onChange={(v) => setForm((f) => ({ ...f, monthlyEmi: v }))} className="h-10" /></Field>
               <Field label="EMI start date"><Input type="date" value={form.emiStartDate} onChange={set("emiStartDate")} className="h-10" /></Field>
               <Field label="Installments" hint="Number of monthly EMIs"><Input type="number" inputMode="numeric" value={form.emiCount} onChange={set("emiCount")} className="h-10" /></Field>
             </div>

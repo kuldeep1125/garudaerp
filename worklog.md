@@ -404,3 +404,22 @@ Stage Summary:
 - 409 error payloads from deployments now optionally carry `extra.conflicts` (detail strings) — ApiError.extra surfaces them in wizard; other views just toast e.message.
 - Theme: all colors token-driven; never hardcode hex — use var(--chart-N)/var(--border)/text-muted-foreground (now much darker in light mode, so small grey text is readable).
 - Next-step candidates: settlements-view FULL-aware labels + Hindi for new wizard strings; per-employee payslip PDF; notification when today's deployments double-book (defence-in-depth report); multi-day deployment wizard mode; backup RESTORE import UI.
+
+---
+Task ID: 17
+Agent: main (orchestrator)
+Task: USER REQUEST — (a) replace all "$" with "₹" throughout the project; (b) add relevant symbols/icons for visual clarity; (c) LIST (not implement) proposed enhancements for visual design, UX, and responsiveness for user review.
+
+Work Log:
+- ₹ AUDIT (comprehensive): grepped src/ + public/ + prisma/ + configs for `$`. Finding: the project ALREADY uses ₹ everywhere user-visible — central formatter `formatINR()` (src/lib/money.ts) emits ₹/K/L/Cr, all field labels say "(₹)", API audit recordLabels, notifications, and reports all use ₹. Remaining `$` chars are ALL non-currency: template literals `${…}`, regex anchors `$`, regex backrefs `$1`, and Prisma `db.$transaction`. ZERO currency-$ replacements were needed (verified, no false positives touched).
+- MoneyInput COMPONENT (the "symbols for clarity" deliverable): new exported `MoneyInput` in _shared.tsx — number input with an aria-hidden ₹ prefix pinned inside the field (left-3, pl-8 padding, muted-foreground, font-semibold), pass-through value/onChange/placeholder/min/max/step/disabled/id/aria-label, className merges via cn (h-9/h-8/text-right variants preserved).
+- APPLIED TO 28 MONEY INPUTS across 11 files: vehicles (purchase/loan/EMI), employees (payout rate create+edit), properties (billing rate create), property-detail (billing rate edit), deployments edit-dialog (billing/payout/±adjustment), DeployWizard step-3 per-employee compact rate inputs (billing/payout), settlements draft (additions/deductions), trips (agreed/advance/final/extra/payment), expenses (amount + recurring amount/month), employee-detail (adjustment amount), vehicle-detail (EMI amount + maintenance cost). Non-money numbers (Year, Installments) deliberately left plain.
+- FIXES during conversion: vehicles-view's `set` helper is event-style (differs from other views) → used inline arrows for its 3 MoneyInputs instead of touching the shared helper; tsc(src) clean after (only pre-existing unrelated error in skills/stock-analysis-skill remains).
+- QA: lint clean; tsc src clean; agent-browser E2E — login, Add Property dialog (₹ prefix + typed ₹650, no overlap, spinners intact), Add Expense dialog (₹ 0 placeholder), forced-dark sweep of same dialog (₹ visible), console ZERO errors/warnings, dev.log clean. NO test data created (dialogs escaped before submit; DB stays pristine for the user's manual entry).
+- Enhancement proposal list (visual design / UX / responsiveness) delivered to user as text — NOT implemented per explicit instruction ("Do not implement these additional enhancements yet — only provide the list for review first").
+
+Stage Summary:
+- Contract: ANY new money/rate input MUST use `MoneyInput` from _shared.tsx (never a bare number Input) so the ₹ prefix stays consistent app-wide.
+- Currency display convention unchanged: `formatINR()` for all rendered amounts; ₹ never hardcoded next to numbers outside the formatter (except audit labels).
+- Pending user review: the 3-part enhancement list (visual design, UX, responsiveness) — implement only after user approves selected items.
+- DB state: pristine (admin/admin123), no seeded/fake rows.

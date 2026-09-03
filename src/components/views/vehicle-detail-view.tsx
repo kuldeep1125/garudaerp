@@ -23,7 +23,7 @@ import {
   CarFront, Plus, Route, Receipt, CalendarClock, Wrench, IndianRupee, BadgeCheck, ShieldAlert,
 } from "lucide-react";
 import {
-  type VehicleRec, type TripRec, type ExpenseRec, type Option, SelectInput, Field, ErrorState,
+  type VehicleRec, type TripRec, type ExpenseRec, type Option, SelectInput, Field, ErrorState, MoneyInput,
   useAsync, useMutation, fmtDay, todayStr,
 } from "./_shared";
 
@@ -139,7 +139,7 @@ function VehicleExpenseDialog({ open, onOpenChange, vehicleId, onDone }: {
             />
           </Field>
           <Field label="Amount (₹)" required>
-            <Input type="number" inputMode="numeric" min="1" value={form.amount} onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} className="h-10" placeholder="0" />
+            <MoneyInput value={form.amount} onChange={(v) => setForm((f) => ({ ...f, amount: v }))} min={1} className="h-10" />
           </Field>
           <Field label="Method">
             <SelectInput value={form.method} onChange={(v) => setForm((f) => ({ ...f, method: v }))} options={METHOD_OPTIONS} />
@@ -211,7 +211,7 @@ function AddMaintenanceDialog({ open, onOpenChange, vehicleId, onDone }: {
             <Input value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} className="h-10" placeholder="Service, Tyres, Repair…" />
           </Field>
           <Field label="Cost (₹)">
-            <Input type="number" inputMode="numeric" min="0" value={form.cost} onChange={(e) => setForm((f) => ({ ...f, cost: e.target.value }))} className="h-10" placeholder="0" />
+            <MoneyInput value={form.cost} onChange={(v) => setForm((f) => ({ ...f, cost: v }))} min={0} className="h-10" />
           </Field>
           <Field label="Next due date">
             <Input type="date" value={form.nextDueDate} onChange={(e) => setForm((f) => ({ ...f, nextDueDate: e.target.value }))} className="h-10" />

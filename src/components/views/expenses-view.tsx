@@ -32,7 +32,7 @@ import {
   Receipt, Plus, MoreHorizontal, Pencil, Trash2, Repeat, ChevronDown, Play, Wallet, Hash,
 } from "lucide-react";
 import {
-  type ExpenseRec, type VehicleRec, type Option, SelectInput, Field, ErrorState, MiniBars,
+  type ExpenseRec, type VehicleRec, type Option, SelectInput, Field, ErrorState, MiniBars, MoneyInput,
   CHART_COLORS, type ListResp, useAsync, useMutation, useDebounced, fmtDay, todayStr,
 } from "./_shared";
 
@@ -183,7 +183,7 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
             />
           </Field>
           <Field label="Amount (₹)" required>
-            <Input type="number" inputMode="numeric" min="1" value={form.amount} onChange={(e) => set("amount")(e.target.value)} className="h-10" placeholder="0" />
+            <MoneyInput value={form.amount} onChange={set("amount")} min={1} className="h-10" />
           </Field>
           <Field label="Method">
             <SelectInput value={form.method} onChange={set("method")} options={METHOD_OPTIONS} />
@@ -296,7 +296,7 @@ function RecurringFormDialog({ open, onOpenChange, onDone }: {
             />
           </Field>
           <Field label="Amount (₹ / month)" required>
-            <Input type="number" inputMode="numeric" min="1" value={form.amount} onChange={(e) => set("amount")(e.target.value)} className="h-10" placeholder="0" />
+            <MoneyInput value={form.amount} onChange={set("amount")} min={1} className="h-10" />
           </Field>
           <Field label="Start date" required>
             <Input type="date" value={form.startDate} onChange={(e) => set("startDate")(e.target.value)} className="h-10" />

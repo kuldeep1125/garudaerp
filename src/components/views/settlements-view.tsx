@@ -27,7 +27,7 @@ import {
   ReceiptText, Users, Landmark, Banknote, CheckCircle2, Wand2, FileText, CalendarClock,
 } from "lucide-react";
 import {
-  type SettlementRec, type Option, SelectInput, Field, KV, ShiftBadgeInline,
+  type SettlementRec, type Option, SelectInput, Field, KV, MoneyInput, ShiftBadgeInline,
   fmtDay, todayStr, useAsync, useMutation,
 } from "./_shared";
 
@@ -315,10 +315,10 @@ export default function SettlementsView({ navigate }: ViewProps) {
                     <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Adjust draft</p>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <Field label="Additions (₹)" hint="Bonus, overtime, extra payout">
-                        <Input type="number" inputMode="numeric" value={additions} onChange={(e) => setAdditions(e.target.value)} className="h-10" />
+                        <MoneyInput value={additions} onChange={setAdditions} className="h-10" />
                       </Field>
                       <Field label="Other deductions (₹)" hint="Penalty, damage, unpaid leave">
-                        <Input type="number" inputMode="numeric" value={otherDeductions} onChange={(e) => setOtherDeductions(e.target.value)} className="h-10" />
+                        <MoneyInput value={otherDeductions} onChange={setOtherDeductions} className="h-10" />
                       </Field>
                     </div>
                     <Field label="Notes">

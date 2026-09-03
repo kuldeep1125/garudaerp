@@ -18,7 +18,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { toast } from "sonner";
 import { useLang, t } from "@/lib/i18n";
 import { Building2, Plus } from "lucide-react";
-import { Field, ListResp, Option, PropertyRec, SelectInput, errMessage, useMutation } from "./_shared";
+import { Field, ListResp, MoneyInput, Option, PropertyRec, SelectInput, errMessage, useMutation } from "./_shared";
 
 const STATUS_OPTIONS: Option[] = [
   { label: "All statuses", value: "" },
@@ -82,7 +82,7 @@ function PropertyFormDialog({ open, onOpenChange, onDone }: {
             className="sm:col-span-2"
             hint="Charged to the property per employee per shift. Full shift = 2 units. Change it anytime — old records keep their original rate."
           >
-            <Input type="number" inputMode="numeric" value={form.billingRate} onChange={(e) => set("billingRate")(e.target.value)} className="h-10" placeholder="e.g. 650" />
+            <MoneyInput value={form.billingRate} onChange={set("billingRate")} className="h-10" placeholder="e.g. 650" />
           </Field>
           <Field label="Contact person"><Input value={form.contactPerson} onChange={(e) => set("contactPerson")(e.target.value)} className="h-10" /></Field>
           <Field label="Contact number"><Input value={form.contactNumber} onChange={(e) => set("contactNumber")(e.target.value)} inputMode="tel" className="h-10" /></Field>

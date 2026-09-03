@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils";
 import { useLang, t } from "@/lib/i18n";
 import { CalendarCheck, Pencil, Trash2, CalendarDays, ChevronDown } from "lucide-react";
 import {
-  DeploymentRec, DeployWizard, ListResp, Option, PropertyRec, SelectInput, ShiftBadgeInline,
+  DeploymentRec, DeployWizard, ListResp, MoneyInput, Option, PropertyRec, SelectInput, ShiftBadgeInline,
   SHIFT_OPTIONS, SHIFT_UNITS, errMessage, fmtDateTime, fmtDay, todayStr, useAsync, useMutation,
   undoRequest,
 } from "./_shared";
@@ -572,15 +572,15 @@ export default function DeploymentsView({ params }: ViewProps) {
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
                       <Label className="text-xs">Billing rate (₹/shift)</Label>
-                      <Input type="number" inputMode="numeric" className="h-9" value={rateForm.billingRate} onChange={(e) => setRateForm((f) => ({ ...f, billingRate: e.target.value }))} />
+                      <MoneyInput className="h-9" value={rateForm.billingRate} onChange={(v) => setRateForm((f) => ({ ...f, billingRate: v }))} />
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs">Payout rate (₹/shift)</Label>
-                      <Input type="number" inputMode="numeric" className="h-9" value={rateForm.payoutRate} onChange={(e) => setRateForm((f) => ({ ...f, payoutRate: e.target.value }))} />
+                      <MoneyInput className="h-9" value={rateForm.payoutRate} onChange={(v) => setRateForm((f) => ({ ...f, payoutRate: v }))} />
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs">Adjustment amount (± ₹)</Label>
-                      <Input type="number" inputMode="numeric" className="h-9" value={rateForm.adjustmentAmount} onChange={(e) => setRateForm((f) => ({ ...f, adjustmentAmount: e.target.value }))} placeholder="e.g. -100 or 250" />
+                      <MoneyInput className="h-9" value={rateForm.adjustmentAmount} onChange={(v) => setRateForm((f) => ({ ...f, adjustmentAmount: v }))} placeholder="e.g. -100 or 250" />
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs">Adjustment note</Label>

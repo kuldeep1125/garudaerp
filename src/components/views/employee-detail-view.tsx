@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import {
   AdvanceRec, AreaTrend, CHART_COLORS, DeploymentRec, EmployeeRec, Field, GiveAdvanceDialog,
-  InitialAvatar, Option, SelectInput, SettlementRec, SHIFT_UNITS, ShiftBadgeInline, errMessage, fmtDay,
+  InitialAvatar, MoneyInput, Option, SelectInput, SettlementRec, SHIFT_UNITS, ShiftBadgeInline, errMessage, fmtDay,
   todayStr, useMutation,
 } from "./_shared";
 
@@ -88,7 +88,7 @@ function AddAdjustmentDialog({ open, onOpenChange, employeeId, onDone }: {
             <SelectInput value={type} onChange={setType} options={ADJ_TYPES} />
           </Field>
           <Field label="Amount (₹)" required>
-            <Input type="number" inputMode="numeric" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} className="h-10" placeholder="0" />
+            <MoneyInput value={amount} onChange={setAmount} min={1} className="h-10" />
           </Field>
           <Field label="Date" required>
             <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
@@ -613,7 +613,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
               label="Payout rate (₹/shift)"
               hint="Applies to future deployments only — past records keep their original rate."
             >
-              <Input type="number" inputMode="numeric" value={editForm.standardRate} onChange={(e) => setEditForm((f) => ({ ...f, standardRate: e.target.value }))} className="h-10" />
+              <MoneyInput value={editForm.standardRate} onChange={(v) => setEditForm((f) => ({ ...f, standardRate: v }))} className="h-10" />
             </Field>
             <Field label="City"><Input value={editForm.city} onChange={(e) => setEditForm((f) => ({ ...f, city: e.target.value }))} className="h-10" /></Field>
             <Field label="Skills" className="sm:col-span-2"><Input value={editForm.skills} onChange={(e) => setEditForm((f) => ({ ...f, skills: e.target.value }))} className="h-10" /></Field>

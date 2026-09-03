@@ -27,7 +27,7 @@ import { toast } from "sonner";
 import { useLang, t } from "@/lib/i18n";
 import { Route, Plus, IndianRupee, TimerOff, BadgeCheck } from "lucide-react";
 import {
-  type TripRec, type VehicleRec, type ClientRec, type Option, SelectInput, Field, KV, ErrorState,
+  type TripRec, type VehicleRec, type ClientRec, type Option, SelectInput, Field, KV, ErrorState, MoneyInput,
   fmtDay, fmtDateTime, useAsync, useMutation,
 } from "./_shared";
 
@@ -201,10 +201,10 @@ function NewTripDialog({ open, onOpenChange, vehicles, clients, onDone }: {
             <SelectInput value={form.fuelResponsibility} onChange={set("fuelResponsibility")} options={FUEL_OPTIONS} />
           </Field>
           <Field label="Agreed amount (₹)" required>
-            <Input type="number" inputMode="numeric" min="1" value={form.agreedAmount} onChange={(e) => set("agreedAmount")(e.target.value)} className="h-10" placeholder="0" />
+            <MoneyInput value={form.agreedAmount} onChange={set("agreedAmount")} min={1} className="h-10" />
           </Field>
           <Field label="Advance received (₹)">
-            <Input type="number" inputMode="numeric" min="0" value={form.advanceReceived} onChange={(e) => set("advanceReceived")(e.target.value)} className="h-10" placeholder="0" />
+            <MoneyInput value={form.advanceReceived} onChange={set("advanceReceived")} min={0} className="h-10" />
           </Field>
           <Field label="Notes" className="sm:col-span-2">
             <Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} rows={2} placeholder="Optional instructions" />
@@ -528,10 +528,10 @@ export default function TripsView({ params, navigate }: ViewProps) {
             </Field>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Final amount (₹)" required>
-                <Input type="number" inputMode="numeric" value={endForm.finalAmount} onChange={(e) => setEndForm((f) => ({ ...f, finalAmount: e.target.value }))} className="h-10" />
+                <MoneyInput value={endForm.finalAmount} onChange={(v) => setEndForm((f) => ({ ...f, finalAmount: v }))} className="h-10" />
               </Field>
               <Field label="Extra charges (₹)">
-                <Input type="number" inputMode="numeric" min="0" value={endForm.extraCharges} onChange={(e) => setEndForm((f) => ({ ...f, extraCharges: e.target.value }))} className="h-10" />
+                <MoneyInput value={endForm.extraCharges} onChange={(v) => setEndForm((f) => ({ ...f, extraCharges: v }))} min={0} className="h-10" />
               </Field>
             </div>
           </div>
@@ -551,7 +551,7 @@ export default function TripsView({ params, navigate }: ViewProps) {
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Amount (₹)" required>
-              <Input type="number" inputMode="numeric" min="1" value={payForm.amount} onChange={(e) => setPayForm((f) => ({ ...f, amount: e.target.value }))} className="h-10" />
+              <MoneyInput value={payForm.amount} onChange={(v) => setPayForm((f) => ({ ...f, amount: v }))} min={1} className="h-10" />
             </Field>
             <Field label="Method">
               <SelectInput value={payForm.method} onChange={(v) => setPayForm((f) => ({ ...f, method: v }))} options={METHOD_OPTIONS} />

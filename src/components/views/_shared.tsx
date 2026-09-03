@@ -390,6 +390,46 @@ export function Field({ label, required, hint, className, children }: {
   );
 }
 
+// Money amount input with an inline ₹ symbol prefix — makes currency unmistakable
+// without relying on the field label alone. Passes value/onChange like a plain Input.
+export function MoneyInput({ value, onChange, placeholder, className, min, max, step, disabled, id, "aria-label": ariaLabel }: {
+  value: string | number;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  className?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  disabled?: boolean;
+  id?: string;
+  "aria-label"?: string;
+}) {
+  return (
+    <div className="relative">
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-3 flex select-none items-center text-sm font-semibold text-muted-foreground"
+      >
+        ₹
+      </span>
+      <Input
+        type="number"
+        inputMode="numeric"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder ?? "0"}
+        disabled={disabled}
+        id={id}
+        aria-label={ariaLabel}
+        className={cn("pl-8", className)}
+      />
+    </div>
+  );
+}
+
 export interface Option { label: string; value: string }
 
 // Sentinel for "no selection" options (Radix Select forbids empty-string values).
@@ -799,7 +839,7 @@ export function GiveAdvanceDialog({ open, onOpenChange, defaultEmployeeId, emplo
           )}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Amount (₹)" required>
-              <Input type="number" inputMode="numeric" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" className="h-10" />
+              <MoneyInput value={amount} onChange={setAmount} min={1} className="h-10" />
             </Field>
             <Field label="Date" required>
               <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
@@ -959,7 +999,7 @@ export function RecordPaymentDialog({ open, onOpenChange, propertyId, properties
 
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Amount (₹)" required>
-              <Input type="number" inputMode="numeric" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" className="h-10" />
+              <MoneyInput value={amount} onChange={setAmount} min={1} className="h-10" />
             </Field>
             <Field label="Date" required>
               <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
@@ -1375,23 +1415,19 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <div>
                           <Label className="mb-1 block text-[10px] uppercase tracking-wide text-muted-foreground">Billing ₹/shift</Label>
-                          <Input
-                            type="number"
-                            inputMode="numeric"
+                          <MoneyInput
                             className="h-8 text-right text-xs tabular-nums"
                             value={st.billingRate ?? String(property?.billingRate ?? 0)}
-                            onChange={(ev) => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], billingRate: ev.target.value } }))}
+                            onChange={(v) => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], billingRate: v } }))}
                             aria-label={`Billing rate for ${e.fullName}`}
                           />
                         </div>
                         <div>
                           <Label className="mb-1 block text-[10px] uppercase tracking-wide text-muted-foreground">Payout ₹/shift</Label>
-                          <Input
-                            type="number"
-                            inputMode="numeric"
+                          <MoneyInput
                             className="h-8 text-right text-xs tabular-nums"
                             value={st.payoutRate ?? String(e.standardRate ?? 0)}
-                            onChange={(ev) => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], payoutRate: ev.target.value } }))}
+                            onChange={(v) => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], payoutRate: v } }))}
                             aria-label={`Payout rate for ${e.fullName}`}
                           />
                         </div>

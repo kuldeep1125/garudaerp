@@ -21,7 +21,7 @@ import {
   Building, Pencil, Phone, MessageCircle, Mail, MapPin, Wallet, CalendarCheck, IndianRupee,
 } from "lucide-react";
 import {
-  BarsCompare, CHART_COLORS, DeploymentRec, Field, PaymentRec,
+  BarsCompare, CHART_COLORS, DeploymentRec, Field, MoneyInput, PaymentRec,
   PropertyRec, ShiftBadgeInline, errMessage, fmtDay, useMutation,
 } from "./_shared";
 
@@ -269,7 +269,7 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
               className="sm:col-span-2"
               hint="Applies to future deployments only — every past record keeps its original rate, so history and profit never change."
             >
-              <Input type="number" inputMode="numeric" value={form.billingRate} onChange={(e) => setForm((f) => ({ ...f, billingRate: e.target.value }))} className="h-10" />
+              <MoneyInput value={form.billingRate} onChange={(v) => setForm((f) => ({ ...f, billingRate: v }))} className="h-10" />
             </Field>
             <Field label="Brand name"><Input value={form.brandName} onChange={(e) => setForm((f) => ({ ...f, brandName: e.target.value }))} className="h-10" /></Field>
             <Field label="Type"><Input value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} className="h-10" /></Field>
