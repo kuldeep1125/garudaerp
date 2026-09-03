@@ -356,10 +356,10 @@ function OwnerCard({ owner, isSelf, saving, onEdit, onReset, onToggleActive, onE
   onEmail: () => void;
 }) {
   return (
-    <Card className="transition-all hover:shadow-sm">
+    <Card className="min-w-0 transition-all hover:shadow-sm">
       <CardContent className="p-4">
         <div className="flex items-start gap-3">
-          <InitialAvatar name={owner.name} tone={owner.isActive ? "emerald" : "zinc"} className="h-10 w-10" />
+          <InitialAvatar name={owner.name} tone={owner.isActive ? "emerald" : "zinc"} className="h-10 w-10 shrink-0" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <p className="truncate text-sm font-bold">{owner.name}</p>
@@ -680,7 +680,7 @@ export default function OwnersView(_props: ViewProps) {
       )}
 
       {!loading && !error && owners.length > 0 && (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-3 [&>*]:min-w-0">
           {owners.map((o) => (
             <OwnerCard
               key={o.id}

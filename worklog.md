@@ -523,3 +523,26 @@ Stage Summary:
 - Login for user: admin / admin123. Start from the onboarding checklist on the dashboard.
 - Known minor debts (non-blocking): DialogContent aria-describedby warning; payslip uses window.print (Chromium verified); bulk delete is sequential by design (FIFO determinism).
 - Recurring 15-min webDevReview cron registered to keep iterating (styling details + features) per standing instructions.
+
+---
+Task ID: 19
+Agent: main (orchestrator)
+Task: MOBILE RESPONSIVENESS EMERGENCY FIX — user reported "mobile view responsiveness totally gone, home + many views/pages unresponsive". Full responsive + UI/UX repair pass for mobile (320/360/390 + landscape), tablet rail, and laptop/desktop (1280/1366/1920).
+
+Work Log:
+- ROOT CAUSE ANALYSIS: app code layout was mostly intact; the breakage the user saw was (a) the dev server repeatedly DYING in this sandbox (background process reaping between tool calls) so phones got failed fetches / stale offline-cache pages, and (b) several genuine mobile defects below. NOTE: an apparent "corrupted app-shell.tsx" scare (SEVERITY_ICON[headline] / [moreOpen lines) was a TOOL-DISPLAY artifact — codepoints verified the file was always intact; do not "fix" such ghosts without hexdump/codepoint proof.
+- DEV SERVER RELIABILITY FIX: plain `nohup bun run dev &` gets killed between sessions here. Working launch = python double-fork (setsid + Popen start_new_session) of `bunx next dev -p 3000` writing dev.log; survived 45min+ across many tool calls. Reuse this pattern for restarts.
+- next.config.ts: `devIndicators: false` — the floating Next.js dev badge overlapped the mobile bottom nav (bottom-left "N" circle).
+- SW v2 (public/sw.js): cache renamed bizhub-static-v2 (purges any poisoned v1 HTML from interrupted builds); HTML navigations are NEVER cache-fallback anymore — only /_next/static, /icons, manifest, logo.svg get offline fallback. A crashed server can no longer serve a stale broken shell.
+- FIX TopBar overflow (<420px): header container px-2.5/gap-1, brand text hidden <400px (logo stays), ALL header icon buttons h-9 w-9 below 420px (h-10 at min-[420px]), avatar h-8 <420px, right group shrink-0 gap-0; removed dead always-hidden placeholder Button.
+- FIX BusinessBanner overflow at 320px + LANDSCAPE: scope badge hidden <480px, pills px-2/min-h-[32px] touch targets <420px; container gained `w-full min-w-0` — CRITICAL LESSON: a `mx-auto` flex-COLUMN item opts out of align-stretch and sizes fit-content → min-content floor overflows viewport; w-full restores fill behavior (landscape 740px was 823px before).
+- GLOBAL GRID SAFETY: globals.css @layer base `.grid > * { min-width: 0 }` — implicit single-column grid tracks no longer blow out from nowrap min-content (phone numbers/amounts). Fixed Owners cards (379→360 at 320/360px).
+- FIX CardHeader grid bug (all dashboards): shadcn CardHeader is `grid` by default; `className="flex-row ..."` did nothing → "Reports"/"View all" buttons dropped BELOW titles in all dashboard cards. All 7 headers (dashboard ×6 incl. monthly summary + attention + activity, transport top-trips) restructured with explicit inner flex wrappers + min-w-0/shrink-0.
+- Mobile density: trips + expenses filter selects now grid-cols-2 on phones (was 3-4 stacked full-width selects); deployments filters date spans 2 cols then 2-col selects; "All payment states"→"All payments" (truncate fix).
+- VERIFICATION (agent-browser, admin/admin123, user's REAL test data preserved — no DB reset, no records created): overflow sweep doc-level clean at 320×568, 360×740, 390×844, 740×360 landscape, 800×900 rail, 1366×856, 1920×1080 across ALL 17 views + notifications + search; Add Expense bottom sheet exercised (₹250 + description typed, Escape-cancelled); DeployWizard sheet clean; property detail clean; dark mode mobile verified; zero failed resources; console clean; lint clean; tsc zero src errors.
+- DB final state: user's manual test data intact (Raga palace property, Yash EMP-001, 1 deployment; 0 payments/expenses/trips). Login admin/admin123.
+
+Stage Summary:
+- Responsive is now verified across 320→1920 with zero horizontal overflow on every view, dialogs work as bottom sheets, filters are 2-col dense, topbar/banner fit the smallest phones, landscape works, dark mode mobile clean.
+- New contracts: (1) NEVER put `mx-auto` alone on flex-column children that must fill width — use w-full; (2) shadcn CardHeader is a grid — never use flex-row classes on it, wrap content in an inner flex div; (3) `.grid > * {min-width:0}` is global — still add min-w-0 on nowrap-text flex rows; (4) SW never caches HTML; bump CACHE version when shipping shell changes; (5) restart dev server via the python double-fork pattern, plain nohup dies here.
+- Recommended next: (a) wire a keepalive watchdog for the dev server, (b) hi-language label audit on compressed topbar, (c) 900px+ ultra-wide audit for tables.

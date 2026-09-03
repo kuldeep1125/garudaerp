@@ -253,15 +253,17 @@ export default function DashboardView({ navigate }: ViewProps) {
           {/* Row 2 — 14-day performance trend + expense split */}
           <section className="grid gap-3 lg:grid-cols-3" aria-label="Trends">
             <Card className="lg:col-span-2">
-              <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-                <div className="space-y-1">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Activity className="h-4 w-4 text-primary" aria-hidden />
-                    {tr(lang, "dash.trend")}
-                  </CardTitle>
-                  <CardDescription className="text-xs">Manpower billing · collections · transport revenue</CardDescription>
+              <CardHeader className="pb-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0 space-y-1">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Activity className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+                      {tr(lang, "dash.trend")}
+                    </CardTitle>
+                    <CardDescription className="text-xs">Manpower billing · collections · transport revenue</CardDescription>
+                  </div>
+                  <Button variant="ghost" size="sm" className="h-8 shrink-0 text-xs" onClick={() => navigate("reports")}>{tr(lang, "common.reports")}</Button>
                 </div>
-                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("reports")}>{tr(lang, "common.reports")}</Button>
               </CardHeader>
               <CardContent>
                 {trendLoading ? (
@@ -345,13 +347,15 @@ export default function DashboardView({ navigate }: ViewProps) {
           {/* Business split */}
           <section aria-label="Business split" className="grid gap-3 md:grid-cols-2">
             <Card className="border-emerald-200/70 dark:border-emerald-900">
-              <CardHeader className="flex-row items-center gap-3 space-y-0 pb-2">
-                <div className="rounded-xl bg-emerald-100 p-2 dark:bg-emerald-950">
-                  <Users className="h-5 w-5 text-emerald-600 dark:text-emerald-400" aria-hidden />
-                </div>
-                <div>
-                  <CardTitle className="text-base">Manpower Business</CardTitle>
-                  <p className="text-xs text-muted-foreground">Staffing · deployments · payroll</p>
+              <CardHeader className="pb-2">
+                <div className="flex items-center gap-3">
+                  <div className="shrink-0 rounded-xl bg-emerald-100 p-2 dark:bg-emerald-950">
+                    <Users className="h-5 w-5 text-emerald-600 dark:text-emerald-400" aria-hidden />
+                  </div>
+                  <div className="min-w-0">
+                    <CardTitle className="text-base">Manpower Business</CardTitle>
+                    <p className="text-xs text-muted-foreground">Staffing · deployments · payroll</p>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-0.5">
@@ -367,13 +371,15 @@ export default function DashboardView({ navigate }: ViewProps) {
             </Card>
 
             <Card className="border-amber-200/70 dark:border-amber-900">
-              <CardHeader className="flex-row items-center gap-3 space-y-0 pb-2">
-                <div className="rounded-xl bg-amber-100 p-2 dark:bg-amber-950">
-                  <Truck className="h-5 w-5 text-amber-600 dark:text-amber-400" aria-hidden />
-                </div>
-                <div>
-                  <CardTitle className="text-base">Transport Business</CardTitle>
-                  <p className="text-xs text-muted-foreground">Vehicles · trips & rentals</p>
+              <CardHeader className="pb-2">
+                <div className="flex items-center gap-3">
+                  <div className="shrink-0 rounded-xl bg-amber-100 p-2 dark:bg-amber-950">
+                    <Truck className="h-5 w-5 text-amber-600 dark:text-amber-400" aria-hidden />
+                  </div>
+                  <div className="min-w-0">
+                    <CardTitle className="text-base">Transport Business</CardTitle>
+                    <p className="text-xs text-muted-foreground">Vehicles · trips & rentals</p>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-0.5">
@@ -418,17 +424,18 @@ export default function DashboardView({ navigate }: ViewProps) {
               </div>
               <Card className="overflow-hidden border-primary/20">
                 <div className="h-0.5 w-full bg-gradient-to-r from-emerald-500/70 via-teal-500/70 to-amber-500/70" aria-hidden />
-                <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
-                  <div className="space-y-0.5">
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <CalendarRange className="h-4 w-4 text-primary" aria-hidden />
-                      {tr(lang, "dash.monthlySummary")}
-                    </CardTitle>
-                    <CardDescription className="text-xs">
-                      {monthShort(monthly.prevMonth)} → {monthShort(monthly.month)} · {tr(lang, "dash.bothBusinesses")}
-                    </CardDescription>
-                  </div>
-                  <div className="no-print flex items-center gap-1.5">
+                <CardHeader className="pb-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0 space-y-0.5">
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <CalendarRange className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+                        {tr(lang, "dash.monthlySummary")}
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        {monthShort(monthly.prevMonth)} → {monthShort(monthly.month)} · {tr(lang, "dash.bothBusinesses")}
+                      </CardDescription>
+                    </div>
+                    <div className="no-print flex shrink-0 items-center gap-1.5">
                     <MonthPicker month={summaryMonth} onChange={setSummaryMonth} className="scale-95" />
                     <Button
                       variant="outline"
@@ -440,6 +447,7 @@ export default function DashboardView({ navigate }: ViewProps) {
                     >
                       <Printer className="h-4 w-4" aria-hidden />
                     </Button>
+                  </div>
                   </div>
                 </CardHeader>
               <CardContent className="space-y-3">
@@ -546,9 +554,11 @@ export default function DashboardView({ navigate }: ViewProps) {
             </Card>
 
             <Card>
-              <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-base">{tr(lang, "dash.attention")}</CardTitle>
-                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("notifications")}>{tr(lang, "common.viewAll")}</Button>
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="min-w-0 text-base">{tr(lang, "dash.attention")}</CardTitle>
+                  <Button variant="ghost" size="sm" className="h-8 shrink-0 text-xs" onClick={() => navigate("notifications")}>{tr(lang, "common.viewAll")}</Button>
+                </div>
               </CardHeader>
               <CardContent className="space-y-1.5">
                 {(data.attention ?? []).length === 0 && (
@@ -579,15 +589,17 @@ export default function DashboardView({ navigate }: ViewProps) {
           {/* Recent activity */}
           <section aria-label="Recent activity">
             <Card>
-              <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-                <div className="space-y-1">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <History className="h-4 w-4 text-primary" aria-hidden />
-                    {tr(lang, "dash.activity")}
-                  </CardTitle>
-                  <CardDescription className="text-xs">Latest actions across both businesses — fully audited</CardDescription>
+              <CardHeader className="pb-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0 space-y-1">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <History className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+                      {tr(lang, "dash.activity")}
+                    </CardTitle>
+                    <CardDescription className="text-xs">Latest actions across both businesses — fully audited</CardDescription>
+                  </div>
+                  <Button variant="ghost" size="sm" className="h-8 shrink-0 text-xs" onClick={() => navigate("audit")}>{tr(lang, "common.viewAll")}</Button>
                 </div>
-                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => navigate("audit")}>{tr(lang, "common.viewAll")}</Button>
               </CardHeader>
               <CardContent>
                 {auditLoading ? (

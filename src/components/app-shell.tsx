@@ -154,7 +154,7 @@ function ThemeToggle() {
     <Button
       variant="ghost"
       size="icon"
-      className="h-10 w-10"
+      className="h-9 w-9 min-[420px]:h-10 min-[420px]:w-10"
       onClick={() => setTheme(dark ? "light" : "dark")}
       aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
     >
@@ -259,15 +259,13 @@ function TopBar({ onOpenMore, onOpenPalette, onOpenShortcuts }: { onOpenMore: ()
   return (
     <>
     <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-      <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-2 px-3 sm:px-5">
-        <button className="flex items-center gap-2 md:hidden" onClick={() => navigate("dashboard")} aria-label="BizHub home">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600 text-white font-bold">
+      <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-1 px-2.5 min-[420px]:px-3 sm:px-5">
+        <button className="flex min-w-0 items-center gap-1.5 md:hidden" onClick={() => navigate("dashboard")} aria-label="BizHub home">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white font-bold">
             <span className="text-xs">B</span>
           </div>
-          <span className="text-sm font-bold">BizHub</span>
+          <span className="hidden truncate text-sm font-bold min-[400px]:inline">BizHub</span>
         </button>
-
-        <Button variant="ghost" size="icon" className="hidden lg:inline-flex h-9 w-9 lg:hidden" aria-hidden tabIndex={-1} />
 
         {/* Global search trigger — opens the command palette (Ctrl K) */}
         <button
@@ -281,21 +279,21 @@ function TopBar({ onOpenMore, onOpenPalette, onOpenShortcuts }: { onOpenMore: ()
           <kbd className="ml-auto hidden md:inline-flex shrink-0 rounded border bg-background px-1.5 font-mono text-[10px]">Ctrl K</kbd>
         </button>
 
-        <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
-          <Button variant="ghost" size="icon" className="sm:hidden h-10 w-10" onClick={onOpenPalette} aria-label="Open command palette">
+        <div className="ml-auto flex shrink-0 items-center gap-0 sm:gap-1">
+          <Button variant="ghost" size="icon" className="sm:hidden h-9 w-9 min-[420px]:h-10 min-[420px]:w-10" onClick={onOpenPalette} aria-label="Open command palette">
             <Search className="h-5 w-5" />
           </Button>
           <Button
             variant="ghost"
             size="icon"
-            className="h-10 w-10"
+            className="h-9 w-9 min-[420px]:h-10 min-[420px]:w-10"
             onClick={() => setUndoOpen(true)}
             aria-label="Undo center"
             title="Undo center"
           >
             <History className="h-5 w-5" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-10 w-10 relative" onClick={() => navigate("notifications")} aria-label={`Notifications${notifCount ? `, ${notifCount} active` : ""}`}>
+          <Button variant="ghost" size="icon" className="h-9 w-9 min-[420px]:h-10 min-[420px]:w-10 relative" onClick={() => navigate("notifications")} aria-label={`Notifications${notifCount ? `, ${notifCount} active` : ""}`}>
             {pulse && <span className="absolute inset-0 rounded-full bg-red-500/30 animate-ping" aria-hidden />}
             <Bell className={cn("h-5 w-5 transition-transform", pulse && "scale-110")} />
             {notifCount > 0 && (
@@ -310,7 +308,7 @@ function TopBar({ onOpenMore, onOpenPalette, onOpenShortcuts }: { onOpenMore: ()
           <ThemeToggle />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-10 w-10" aria-label={t(lang, "topbar.language")} title={t(lang, "topbar.language")}>
+              <Button variant="ghost" size="icon" className="h-9 w-9 min-[420px]:h-10 min-[420px]:w-10" aria-label={t(lang, "topbar.language")} title={t(lang, "topbar.language")}>
                 <Languages className="h-5 w-5" />
               </Button>
             </DropdownMenuTrigger>
@@ -330,7 +328,7 @@ function TopBar({ onOpenMore, onOpenPalette, onOpenShortcuts }: { onOpenMore: ()
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="ml-0.5 flex items-center gap-2 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Owner menu">
-                <Avatar className="h-9 w-9 border">
+                <Avatar className="h-8 w-8 min-[420px]:h-9 min-[420px]:w-9 border">
                   <AvatarFallback className="bg-emerald-100 text-emerald-800 text-xs font-bold dark:bg-emerald-900 dark:text-emerald-200">{initials}</AvatarFallback>
                 </Avatar>
               </button>
@@ -396,9 +394,9 @@ function BusinessBanner() {
     { key: "TRANSPORT", label: t(lang, "scope.TRANSPORT") },
   ];
   return (
-    <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-2 px-3 pt-2.5 sm:px-5">
-      <div className="flex items-center gap-2 overflow-hidden">
-        <Badge variant="outline" className={cn("shrink-0 font-semibold", scopeInfo.cls)}>{scopeInfo.label}</Badge>
+    <div className="mx-auto flex w-full min-w-0 max-w-[1600px] items-center justify-between gap-2 px-2.5 pt-2 min-[420px]:px-3 min-[420px]:pt-2.5 sm:px-5">
+      <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+        <Badge variant="outline" className={cn("hidden shrink-0 font-semibold min-[480px]:inline-flex", scopeInfo.cls)}>{scopeInfo.label}</Badge>
         <span className="hidden text-xs text-muted-foreground truncate sm:inline">{t(lang, `scope.hint.${scope}`)}</span>
       </div>
       <div className="flex shrink-0 items-center rounded-full border bg-card p-0.5" role="group" aria-label="Business scope">
@@ -407,7 +405,7 @@ function BusinessBanner() {
             key={o.key}
             onClick={() => { setScope(o.key); navigate(o.key === "MANPOWER" ? "manpower" : o.key === "TRANSPORT" ? "transport" : "dashboard"); }}
             className={cn(
-              "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors min-h-[26px]",
+              "flex items-center gap-1.5 rounded-full px-2 min-[420px]:px-2.5 py-1 text-[11px] font-medium transition-colors min-h-[32px] min-[420px]:min-h-[26px]",
               scope === o.key ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
             )}
             aria-pressed={scope === o.key}

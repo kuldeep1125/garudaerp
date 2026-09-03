@@ -112,23 +112,25 @@ export default function TransportDashboardView({ navigate }: ViewProps) {
             </Card>
           ) : tpError ? null : tripProfit && tripProfit.trips.length > 0 ? (
             <Card>
-              <CardHeader className="flex-row items-start justify-between space-y-0 pb-2">
-                <div>
-                  <CardTitle className="text-base">Top trips by estimated profit</CardTitle>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {tripProfit.totalTrips} {tripProfit.totalTrips === 1 ? "trip" : "trips"} {RANGE_HINT[range]}
-                  </p>
+              <CardHeader className="pb-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <CardTitle className="text-base">Top trips by estimated profit</CardTitle>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {tripProfit.totalTrips} {tripProfit.totalTrips === 1 ? "trip" : "trips"} {RANGE_HINT[range]}
+                    </p>
+                  </div>
+                  <span
+                    className={cn(
+                      "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums",
+                      tripProfit.totals.profit >= 0
+                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                        : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                    )}
+                  >
+                    Net {formatINR(tripProfit.totals.profit, { compact: true })}
+                  </span>
                 </div>
-                <span
-                  className={cn(
-                    "rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums",
-                    tripProfit.totals.profit >= 0
-                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-                      : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
-                  )}
-                >
-                  Net {formatINR(tripProfit.totals.profit, { compact: true })}
-                </span>
               </CardHeader>
               <CardContent className="space-y-2.5">
                 {tripProfit.trips.map((t, i) => {

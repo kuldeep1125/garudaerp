@@ -466,7 +466,7 @@ export default function DeploymentsView({ params }: ViewProps) {
             value={(rangeKey ?? "today") as RangeKey}
             onChange={onRange}
           />
-          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-2 lg:grid-cols-4 [&>*:first-child]:max-sm:col-span-2">
             <div>
               <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Date</Label>
               <Input type="date" value={date} onChange={(e) => onDateChange(e.target.value)} className="h-10" aria-label="Filter by date" />

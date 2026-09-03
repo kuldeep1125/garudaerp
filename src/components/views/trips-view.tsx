@@ -43,7 +43,7 @@ const STATUS_OPTIONS: Option[] = [
 ];
 
 const PAY_STATUS_OPTIONS: Option[] = [
-  { label: "All payment states", value: "" },
+  { label: "All payments", value: "" },
   { label: "Pending", value: "PENDING" },
   { label: "Partial", value: "PARTIAL" },
   { label: "Paid", value: "PAID" },
@@ -392,7 +392,7 @@ export default function TripsView({ params, navigate }: ViewProps) {
 
       <Card>
         <CardContent className="space-y-3 p-3 sm:p-4">
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2.5 sm:gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <SelectInput
               value={vehicleId}
               onChange={setVehicleId}

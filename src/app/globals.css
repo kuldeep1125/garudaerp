@@ -122,6 +122,15 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* Grid items must be allowed to shrink below their min-content width.
+     Without this, a single long nowrap string (phone number, amount, code)
+     inside an implicit single-column grid blows the track out past the
+     viewport on narrow phones — the classic "page is sideways-scrollable"
+     mobile bug. Safe: it only *permits* shrinking, never changes layout
+     where content already fits. */
+  .grid > * {
+    min-width: 0;
+  }
   html {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
