@@ -114,9 +114,9 @@ export function DataTable<T>({
       <div className={cn("hidden md:block overflow-x-auto rounded-xl border", className)}>
         <Table>
           <TableHeader>
-            <TableRow className="bg-muted/50 hover:bg-muted/50">
+            <TableRow className="bg-muted/60 hover:bg-muted/60 border-b">
               {columns.map((c) => (
-                <TableHead key={c.key} className={cn("whitespace-nowrap", c.className)}>{c.label}</TableHead>
+                <TableHead key={c.key} className={cn("whitespace-nowrap text-[11px] font-semibold uppercase tracking-wide text-muted-foreground", c.className)}>{c.label}</TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -168,7 +168,7 @@ export function DataTable<T>({
               <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5">
                 {rest.map((c) => (
                   <div key={c.key} className="min-w-0">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{c.label}</p>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{c.label}</p>
                     <div className="text-[13px] tabular-nums">
                       {c.render ? c.render(row) : (c.value?.(row) ?? String((row as Record<string, unknown>)[c.key] ?? ""))}
                     </div>

@@ -19,6 +19,25 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
   if (!SHIFTS.includes(shift as (typeof SHIFTS)[number])) throw new HttpError(400, "Invalid shift: DAY, NIGHT or FULL");
   const units = SHIFT_UNITS[shift] ?? 1;
 
+  // Overlap guard — correcting the shift must not collide with the employee's
+  // OTHER same-day rows at any property (FULL blocks everything; DAY+NIGHT is
+  // the only same-day combination that can coexist).
+  if (shift !== existing.shift) {
+    const dayStart = new Date(existing.date); dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(existing.date); dayEnd.setHours(23, 59, 59, 999);
+    const others = await db.deployment.findMany({
+      where: { employeeId: existing.employeeId, date: { gte: dayStart, lte: dayEnd }, id: { not: id } },
+      select: { shift: true, property: { select: { name: true } } },
+    });
+    const clash = others.find((w) => shift === "FULL" || w.shift === "FULL" || w.shift === shift);
+    if (clash) {
+      throw new HttpError(
+        409,
+        `Cannot change to ${shift} — ${existing.employee.code} — ${existing.employee.fullName} already works ${clash.shift} at ${clash.property.name} on this date`,
+      );
+    }
+  }
+
   const billingRate = body.billingRate !== undefined ? optionalAmount(body.billingRate, existing.billingRate) : existing.billingRate;
   const payoutRate = body.payoutRate !== undefined ? optionalAmount(body.payoutRate, existing.payoutRate) : existing.payoutRate;
   const adjustmentAmount =

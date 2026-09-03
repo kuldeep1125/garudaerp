@@ -67,6 +67,20 @@ interface EntryInput {
   payoutRate?: number | string;
 }
 
+/**
+ * Shift-overlap rule — a person physically cannot be in two places for the same
+ * working time, across ANY two properties:
+ *   FULL covers both halves → conflicts with EVERYTHING (DAY, NIGHT, FULL).
+ *   DAY + DAY and NIGHT + NIGHT → same half twice → conflict.
+ *   DAY + NIGHT → different halves → ALLOWED (morning venue + evening venue).
+ */
+function shiftsOverlap(a: string, b: string): boolean {
+  if (a === "FULL" || b === "FULL") return true;
+  return a === b;
+}
+
+interface ExistingWork { shift: string; propertyName: string; propertyId: string }
+
 // POST /api/deployments — create work records for one property + date.
 // Rates resolve automatically: override > property.billingRate (billing) /
 // employee.standardRate (payout). Amounts = rate × shift units (FULL = 2).
@@ -112,17 +126,27 @@ export const POST = handleRoute(async ({ owner, req }) => {
   }[] = [];
   const skipped: { employeeName: string; reason: string }[] = [];
 
-  // Fetch employees + existing rows for duplicate detection in bulk.
+  // Fetch employees + EVERY same-day row for these employees ACROSS ALL
+  // properties — an employee booked elsewhere today cannot be double-booked
+  // into an overlapping shift here.
   const empIds = [...new Set(rawEntries.map((e) => String(e.employeeId ?? "")))].filter(Boolean);
   const [employees, existingSameDay] = await Promise.all([
     db.employee.findMany({ where: { id: { in: empIds } } }),
     db.deployment.findMany({
-      where: { propertyId: property.id, date: { gte: dayStart, lte: dayEnd } },
-      select: { employeeId: true, shift: true },
+      where: { employeeId: { in: empIds }, date: { gte: dayStart, lte: dayEnd } },
+      select: { employeeId: true, shift: true, propertyId: true, property: { select: { name: true } } },
     }),
   ]);
   const empById = new Map(employees.map((e) => [e.id, e]));
-  const existingKeys = new Set(existingSameDay.map((d) => `${d.employeeId}|${d.shift}`));
+  const bookedByEmployee = new Map<string, ExistingWork[]>();
+  for (const d of existingSameDay) {
+    const list = bookedByEmployee.get(d.employeeId) ?? [];
+    list.push({ shift: d.shift, propertyName: d.property.name, propertyId: d.propertyId });
+    bookedByEmployee.set(d.employeeId, list);
+  }
+  // Rows being created in THIS same request also block each other (e.g. the
+  // same employee entered twice with DAY and FULL).
+  const plannedByEmployee = new Map<string, ExistingWork[]>();
 
   if (property.billingRate <= 0) {
     throw new HttpError(400, `Set a billing rate for ${property.name} first (edit the property).`);
@@ -141,10 +165,27 @@ export const POST = handleRoute(async ({ owner, req }) => {
       skipped.push({ employeeName: employeeLabel, reason: `Invalid shift "${shift}"` });
       continue;
     }
-    if (existingKeys.has(`${empId}|${shift}`)) {
-      skipped.push({ employeeName: employeeLabel, reason: `Duplicate: already deployed on this date for ${shift} shift` });
+    const clashes = [
+      ...(bookedByEmployee.get(empId) ?? []),
+      ...(plannedByEmployee.get(empId) ?? []),
+    ].filter((w) => shiftsOverlap(w.shift, shift));
+    if (clashes.length > 0) {
+      const sameProperty = clashes.some((w) => w.propertyId === property.id);
+      const detail = clashes
+        .map((w) => `${w.shift} @ ${w.propertyName}`)
+        .slice(0, 2)
+        .join(", ");
+      skipped.push({
+        employeeName: employeeLabel,
+        reason: sameProperty
+          ? `Already deployed on this date for ${clashes[0].shift} shift at ${property.name}`
+          : `Already works ${detail} on this date — overlapping shift`,
+      });
       continue;
     }
+    const plannedList = plannedByEmployee.get(empId) ?? [];
+    plannedList.push({ shift, propertyName: property.name, propertyId: property.id });
+    plannedByEmployee.set(empId, plannedList);
     const units = SHIFT_UNITS[shift] ?? 1;
     const billingRate = entry.billingRate !== undefined && entry.billingRate !== null && entry.billingRate !== ""
       ? round2(Number(entry.billingRate))
@@ -169,15 +210,29 @@ export const POST = handleRoute(async ({ owner, req }) => {
   }
 
   if (!planned.length) {
-    if (skipped.some((s) => s.reason.startsWith("Duplicate"))) {
-      throw new HttpError(409, "No deployments created — all selected employees are duplicates for this property/date/shift", {
+    if (skipped.some((s) => s.reason.includes("Already"))) {
+      throw new HttpError(409, "No deployments created — selected employees are already booked for overlapping shifts on this date", {
         duplicates: skipped.map((s) => s.employeeName),
+        conflicts: skipped.map((s) => `${s.employeeName}: ${s.reason}`),
       });
     }
     throw new HttpError(400, skipped[0]?.reason ?? "No deployments created");
   }
 
   const created = await db.$transaction(async (tx) => {
+    // Race-safe re-check inside the write transaction: another request could
+    // have booked the same employee between validation and commit.
+    for (const p of planned) {
+      const nowBooked = await tx.deployment.findMany({
+        where: { employeeId: p.employeeId, date: { gte: dayStart, lte: dayEnd } },
+        select: { shift: true, propertyId: true },
+      });
+      const clash = nowBooked.find((w) => shiftsOverlap(w.shift, p.shift));
+      if (clash) {
+        const emp = empById.get(p.employeeId);
+        throw new HttpError(409, `${emp ? `${emp.code} — ${emp.fullName}` : "Employee"} is already booked for an overlapping shift on this date`);
+      }
+    }
     const rows: ReturnType<typeof serializeDeployment>[] = [];
     for (const p of planned) {
       const row = await tx.deployment.create({

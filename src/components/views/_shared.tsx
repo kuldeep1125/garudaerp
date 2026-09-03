@@ -602,12 +602,14 @@ export interface PickerEmployee {
   advanceBalance?: number | null;
 }
 
-export function EmployeePicker({ employees, value, onChange, multi = true, height = "max-h-60" }: {
+export function EmployeePicker({ employees, value, onChange, multi = true, height = "max-h-60", unavailable }: {
   employees: PickerEmployee[];
   value: string[];
   onChange: (ids: string[]) => void;
   multi?: boolean;
   height?: string;
+  /** Return a short reason string to mark an employee as unselectable (e.g. already booked all day), or null when selectable. */
+  unavailable?: (e: PickerEmployee) => string | null;
 }) {
   const [search, setSearch] = useState("");
   const filtered = useMemo(() => {
@@ -617,6 +619,10 @@ export function EmployeePicker({ employees, value, onChange, multi = true, heigh
   }, [employees, search]);
 
   const toggle = (id: string) => {
+    if (unavailable) {
+      const emp = employees.find((e) => e.id === id);
+      if (emp && unavailable(emp)) return; // blocked — ignore toggle
+    }
     if (!multi) { onChange([id]); return; }
     onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
   };
@@ -647,16 +653,20 @@ export function EmployeePicker({ employees, value, onChange, multi = true, heigh
         )}
         {filtered.map((e) => {
           const on = value.includes(e.id);
+          const blockedReason = unavailable?.(e) ?? null;
+          const blocked = Boolean(blockedReason);
           return (
             <div
               key={e.id}
               role="option"
               aria-selected={on}
-              tabIndex={0}
-              onClick={() => toggle(e.id)}
-              onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(e.id); } }}
+              aria-disabled={blocked || undefined}
+              tabIndex={blocked ? -1 : 0}
+              onClick={() => { if (!blocked) toggle(e.id); }}
+              onKeyDown={(ev) => { if (!blocked && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); toggle(e.id); } }}
               className={cn(
-                "flex cursor-pointer items-center gap-2.5 border-b px-3 py-2.5 transition-colors last:border-b-0 hover:bg-muted/60",
+                "flex items-center gap-2.5 border-b px-3 py-2.5 transition-colors last:border-b-0",
+                blocked ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-muted/60",
                 on && "bg-primary/5"
               )}
             >
@@ -681,7 +691,11 @@ export function EmployeePicker({ employees, value, onChange, multi = true, heigh
                   {e.code ?? ""}{e.standardRate ? ` · ${formatINR(e.standardRate)}/shift` : ""}
                 </p>
               </div>
-              {(e.advanceBalance ?? 0) > 0 && (
+              {blocked && blockedReason ? (
+                <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                  {blockedReason}
+                </span>
+              ) : (e.advanceBalance ?? 0) > 0 && (
                 <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium tabular-nums text-red-600 dark:bg-red-950 dark:text-red-400">
                   Adv {formatINR(e.advanceBalance ?? 0, { compact: true })}
                 </span>
@@ -1014,6 +1028,10 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
   const [rowState, setRowState] = useState<Record<string, ShiftOverrides>>({});
   const [duplicates, setDuplicates] = useState<string[] | null>(null);
   const [creating, setCreating] = useState(false);
+  // Same-day bookings for the picked date — across ALL properties. Drives the
+  // "already booked" badges in the picker and the overlap guard in step 3.
+  const [booked, setBooked] = useState<Record<string, { shift: string; propertyName: string }[]>>({});
+  const [bookedLoadedFor, setBookedLoadedFor] = useState("");
 
   // Load properties + reset on open (render-time state adjustment).
   const [prevOpen, setPrevOpen] = useState(open);
@@ -1027,6 +1045,8 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
       setSelected([]);
       setRowState({});
       setDuplicates(null);
+      setBooked({});
+      setBookedLoadedFor("");
     }
   }
 
@@ -1039,6 +1059,30 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
     return () => { cancelled = true; };
   }, [open]);
 
+  // Load the day's deployments (any property) whenever the wizard reaches the
+  // employee step — the picker greys out fully-booked people, and step 3 uses
+  // the same data to block overlapping shift choices.
+  useEffect(() => {
+    if (!open || step < 2) return;
+    const key = `${date}|${selected.join(",")}`;
+    if (bookedLoadedFor === key) return;
+    let cancelled = false;
+    api.get<ListResp<DeploymentRec>>("/api/deployments" + qs({ from: date, to: date, pageSize: 500 }))
+      .then((d) => {
+        if (cancelled) return;
+        const map: Record<string, { shift: string; propertyName: string }[]> = {};
+        for (const row of d.items) {
+          const list = map[row.employeeId] ?? [];
+          list.push({ shift: row.shift, propertyName: row.propertyName });
+          map[row.employeeId] = list;
+        }
+        setBooked(map);
+        setBookedLoadedFor(key);
+      })
+      .catch(() => { if (!cancelled) setBookedLoadedFor(key); });
+    return () => { cancelled = true; };
+  }, [open, step, date, selected]);
+
   const property = useMemo(() => properties.find((p) => p.id === propertyId) ?? null, [properties, propertyId]);
 
   const selectedEmployees = useMemo(
@@ -1047,6 +1091,32 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
   );
 
   const rowShift = (id: string) => (rowState[id]?.shift ?? "DAY");
+
+  const bookedList = (id: string) => booked[id] ?? [];
+  /** Employee has no free half-day left (FULL booked, or both DAY and NIGHT taken). */
+  const fullyBooked = (id: string) => {
+    const list = bookedList(id);
+    return list.some((w) => w.shift === "FULL") ||
+      (list.some((w) => w.shift === "DAY") && list.some((w) => w.shift === "NIGHT"));
+  };
+  /** Same-day rows (any property) that overlap the given shift — FULL overlaps everything. */
+  const clashesFor = (id: string, shift: string) =>
+    bookedList(id).filter((w) => shift === "FULL" || w.shift === "FULL" || w.shift === shift);
+  /** Suggest the still-free half when the default DAY choice would clash. */
+  const smartShift = (id: string) => {
+    const list = bookedList(id);
+    const has = (s: string) => list.some((w) => w.shift === s);
+    if (has("DAY") && !has("NIGHT")) return "NIGHT";
+    if (has("NIGHT") && !has("DAY")) return "DAY";
+    return "DAY"; // fully booked or free — caller shows blocked state anyway
+  };
+
+  // Selected people whose currently-chosen shift overlaps an existing same-day
+  // booking (any property). Blocks the Deploy button until resolved.
+  const conflictingSelected = useMemo(
+    () => selectedEmployees.filter((e) => clashesFor(e.id, rowShift(e.id)).length > 0),
+    [selectedEmployees, rowState, booked]
+  );
   const rowBillingRate = (e: PickerEmployee) => {
     const o = rowState[e.id];
     if (o?.billingRate !== undefined && o?.billingRate !== "") return parseAmount(o.billingRate);
@@ -1109,8 +1179,9 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
         const dups = Array.isArray(e.extra?.duplicates) ? (e.extra.duplicates as string[]) : [];
-        setDuplicates(dups);
-        toast.error(e.message || "Some employees are already deployed on this date & shift");
+        const conflicts = Array.isArray(e.extra?.conflicts) ? (e.extra.conflicts as string[]) : [];
+        setDuplicates(conflicts.length > 0 ? conflicts : dups);
+        toast.error(e.message || "Some employees are already booked for overlapping shifts on this date");
       } else {
         toast.error(errMessage(e));
       }
@@ -1149,7 +1220,7 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
           {duplicates && duplicates.length > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs dark:border-amber-900 dark:bg-amber-950/40">
               <p className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300">
-                <AlertTriangle className="h-3.5 w-3.5" aria-hidden /> Already deployed
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden /> Already booked for this date
               </p>
               <ul className="mt-1.5 max-h-24 space-y-0.5 overflow-y-auto text-amber-800/90 dark:text-amber-300/90">
                 {duplicates.slice(0, 10).map((d, i) => <li key={i} className="truncate">• {d}</li>)}
@@ -1218,12 +1289,33 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
                     variant="ghost"
                     size="sm"
                     className="h-8 text-xs"
-                    onClick={() => setSelected(selected.length === employees.length ? [] : employees.map((e) => e.id))}
+                    onClick={() => {
+                      const selectable = employees.filter((e) => !fullyBooked(e.id)).map((e) => e.id);
+                      setSelected(selected.length === selectable.length ? [] : selectable);
+                    }}
                   >
-                    {selected.length === employees.length ? "Deselect all" : "Select all"}
+                    {selected.length === employees.filter((e) => !fullyBooked(e.id)).length ? "Deselect all" : "Select all"}
                   </Button>
                 </div>
-                <EmployeePicker employees={employees} value={selected} onChange={setSelected} height="max-h-[46vh]" />
+                {employees.some((e) => fullyBooked(e.id)) && (
+                  <p className="rounded-lg bg-amber-50 px-3 py-1.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                    Some employees are already fully booked for {fmtDay(date)} — they are marked and locked below.
+                  </p>
+                )}
+                <EmployeePicker
+                  employees={employees}
+                  value={selected}
+                  onChange={setSelected}
+                  height="max-h-[46vh]"
+                  unavailable={(e) => {
+                    if (!fullyBooked(e.id)) return null;
+                    const list = bookedList(e.id);
+                    const short = (n: string) => (n.length > 16 ? `${n.slice(0, 15)}…` : n);
+                    return list.some((w) => w.shift === "FULL")
+                      ? `Full day · ${short(list[0].propertyName)}`
+                      : `Day + Night · ${short(list[0].propertyName)}`;
+                  }}
+                />
               </>
             )
           )}
@@ -1240,11 +1332,15 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
                 {selectedEmployees.map((e) => {
                   const st = rowState[e.id] ?? {};
                   const shift = rowShift(e.id);
+                  const clashes = clashesFor(e.id, shift);
                   const units = SHIFT_UNITS[shift] ?? 1;
                   const bRate = rowBillingRate(e);
                   const pRate = rowPayoutRate(e);
                   return (
-                    <div key={e.id} className="rounded-xl border p-2.5">
+                    <div key={e.id} className={cn(
+                      "rounded-xl border p-2.5 transition-colors",
+                      clashes.length > 0 && "border-red-300 bg-red-50/70 dark:border-red-900 dark:bg-red-950/30"
+                    )}>
                       <div className="flex items-center justify-between gap-2">
                         <div className="min-w-0">
                           <p className="truncate text-xs font-medium">{e.fullName} <span className="text-muted-foreground">({e.code})</span></p>
@@ -1252,20 +1348,28 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
                         </div>
                         {/* Per-person shift segmented control */}
                         <div className="flex shrink-0 rounded-lg border bg-muted/50 p-0.5" role="group" aria-label={`Shift for ${e.fullName}`}>
-                          {SHIFT_OPTIONS.map((s) => (
-                            <button
-                              key={s.value}
-                              type="button"
-                              className={cn(
-                                "min-h-7 rounded-md px-2 text-[11px] font-medium transition-colors",
-                                shift === s.value ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                              )}
-                              aria-pressed={shift === s.value}
-                              onClick={() => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], shift: s.value } }))}
-                            >
-                              {s.value === "FULL" ? "Full" : s.label}
-                            </button>
-                          ))}
+                          {SHIFT_OPTIONS.map((s) => {
+                            const optionClashes = clashesFor(e.id, s.value).length > 0;
+                            return (
+                              <button
+                                key={s.value}
+                                type="button"
+                                className={cn(
+                                  "min-h-7 rounded-md px-2 text-[11px] font-medium transition-colors",
+                                  shift === s.value
+                                    ? optionClashes
+                                      ? "bg-red-600 text-white shadow-sm"
+                                      : "bg-primary text-primary-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground"
+                                )}
+                                aria-pressed={shift === s.value}
+                                title={optionClashes ? `Already booked for ${s.value.toLowerCase()} today` : undefined}
+                                onClick={() => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], shift: s.value } }))}
+                              >
+                                {s.value === "FULL" ? "Full" : s.label}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
@@ -1292,9 +1396,16 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
                           />
                         </div>
                       </div>
-                      <p className="mt-1.5 text-right text-[10px] tabular-nums text-muted-foreground">
-                        {units} unit{units > 1 ? "s" : ""} → bills <span className="font-semibold text-foreground">{formatINR(bRate * units)}</span> · pays <span className="font-semibold text-foreground">{formatINR(pRate * units)}</span>
-                      </p>
+                      {clashes.length > 0 ? (
+                        <p className="mt-1.5 flex items-start gap-1 text-[10px] font-semibold text-red-600 dark:text-red-400">
+                          <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />
+                          Already booked: {clashes.map((w) => `${w.shift} @ ${w.propertyName}`).join(", ")} — pick the free shift or go back
+                        </p>
+                      ) : (
+                        <p className="mt-1.5 text-right text-[10px] tabular-nums text-muted-foreground">
+                          {units} unit{units > 1 ? "s" : ""} → bills <span className="font-semibold text-foreground">{formatINR(bRate * units)}</span> · pays <span className="font-semibold text-foreground">{formatINR(pRate * units)}</span>
+                        </p>
+                      )}
                     </div>
                   );
                 })}
@@ -1305,6 +1416,11 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
         </div>
 
         <div className="border-t bg-card px-5 py-3">
+          {step === 3 && conflictingSelected.length > 0 && (
+            <p className="mb-2 rounded-lg bg-red-50 px-3 py-1.5 text-[11px] font-semibold text-red-600 dark:bg-red-950/40 dark:text-red-400">
+              {conflictingSelected.length} employee{conflictingSelected.length === 1 ? " is" : "s are"} already booked for the selected shift — change the red shift or go back.
+            </p>
+          )}
           {step === 3 && (
             <div className="mb-2.5 flex items-center justify-between rounded-lg bg-muted/60 px-3 py-2 text-xs font-medium tabular-nums">
               <span>Billing <span className="font-bold">{formatINR(totals.billing)}</span></span>
@@ -1323,11 +1439,35 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
               </Button>
             )}
             {step < 3 ? (
-              <Button className="min-h-10 gap-1.5" disabled={!canNext} onClick={() => setStep(step + 1)}>
+              <Button
+                className="min-h-10 gap-1.5"
+                disabled={!canNext}
+                onClick={() => {
+                  if (step === 2) {
+                    // Pre-pick the still-free half for people already booked today.
+                    setRowState((r) => {
+                      const next = { ...r };
+                      for (const id of selected) {
+                        const current = next[id]?.shift ?? "DAY";
+                        if (clashesFor(id, current).length > 0 && !fullyBooked(id)) {
+                          next[id] = { ...next[id], shift: smartShift(id) };
+                        }
+                      }
+                      return next;
+                    });
+                  }
+                  setStep(step + 1);
+                }}
+              >
                 Next<ArrowRight className="h-4 w-4" aria-hidden />
               </Button>
             ) : (
-              <Button className="min-h-10 gap-1.5" onClick={() => submit()} disabled={creating || selected.length === 0}>
+              <Button
+                className="min-h-10 gap-1.5"
+                onClick={() => submit()}
+                disabled={creating || selected.length === 0 || conflictingSelected.length > 0}
+                title={conflictingSelected.length > 0 ? "Resolve shift conflicts first" : undefined}
+              >
                 <Users className="h-4 w-4" aria-hidden />
                 {creating ? "Deploying…" : `Deploy ${selected.length} employee${selected.length === 1 ? "" : "s"}`}
               </Button>

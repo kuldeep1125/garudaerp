@@ -95,11 +95,11 @@ function SideNav({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onT
                           onClick={() => { navigate(v.id); onNavigate?.(); }}
                           aria-current={active ? "page" : undefined}
                           className={cn(
-                            "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-colors min-h-[40px]",
+                            "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors min-h-[40px]",
                             collapsed && "justify-center px-0",
                             active
-                              ? "bg-primary/10 text-primary"
-                              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                              ? "bg-primary/12 text-primary font-semibold"
+                              : "text-muted-foreground font-medium hover:bg-muted hover:text-foreground"
                           )}
                           title={collapsed ? viewLabel(lang, v.id, v.label) : undefined}
                         >

@@ -38,7 +38,7 @@ export function StatusBadge({ status, className }: { status: string; className?:
   const style = STYLES[key] ?? "bg-muted text-muted-foreground border-border";
   const label = key.replace(/_/g, " ");
   return (
-    <Badge variant="outline" className={cn("font-medium text-[11px] px-2 py-0.5 whitespace-nowrap", style, className)}>
+    <Badge variant="outline" className={cn("font-semibold text-[11px] px-2 py-0.5 whitespace-nowrap", style, className)}>
       {label}
     </Badge>
   );

@@ -1,0 +1,645 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→     4→import { api, qs } from "@/lib/api-client";
+     5→     5→import { formatINR, parseAmount } from "@/lib/money";
+     6→     6→import type { ViewProps } from "@/components/view-types";
+     7→     7→import { PageHeader } from "@/components/shared/page-header";
+     8→     8→import { DataTable, type Column } from "@/components/shared/data-table";
+     9→     9→import { RangeSelector, type RangeKey } from "@/components/shared/filters";
+    10→    10→import { Button } from "@/components/ui/button";
+    11→    11→import { Card, CardContent } from "@/components/ui/card";
+    12→    12→import {
+    13→    13→  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+    14→    14→} from "@/components/ui/dialog";
+    15→    15→import {
+    16→    16→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+    17→    17→  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+    18→    18→} from "@/components/ui/alert-dialog";
+    19→    19→import { Input } from "@/components/ui/input";
+    20→    20→import { Label } from "@/components/ui/label";
+    21→    21→import { Separator } from "@/components/ui/separator";
+    22→    22→import { Skeleton } from "@/components/ui/skeleton";
+    23→    23→import { StatusBadge } from "@/components/shared/status-badge";
+    24→    24→import { toast } from "sonner";
+    25→    25→import { cn } from "@/lib/utils";
+    26→    26→import { useLang, t } from "@/lib/i18n";
+    27→    27→import { CalendarCheck, Pencil, Trash2, CalendarDays, ChevronDown } from "lucide-react";
+    28→    28→import {
+    29→    29→  DeploymentRec, DeployWizard, ListResp, Option, PropertyRec, SelectInput, ShiftBadgeInline,
+    30→    30→  SHIFT_OPTIONS, SHIFT_UNITS, errMessage, fmtDateTime, fmtDay, todayStr, useAsync, useMutation,
+    31→    31→  undoRequest,
+    32→    32→} from "./_shared";
+    33→    33→
+    34→    34→const SHIFT_FILTER_OPTIONS: Option[] = [
+    35→    35→  { label: "All shifts", value: "" },
+    36→    36→  { label: "Day", value: "DAY" },
+    37→    37→  { label: "Night", value: "NIGHT" },
+    38→    38→  { label: "Full", value: "FULL" },
+    39→    39→];
+    40→    40→
+    41→    41→interface Totals { billing: number; payout: number; margin: number; count: number }
+    42→    42→
+    43→    43→// --- Attendance month grid (per-employee × per-day shift units) ---
+    44→    44→interface AttendanceCell { date: string; shifts: number }
+    45→    45→interface AttendanceRow {
+    46→    46→  employeeId: string; name: string; code: string; role?: string | null;
+    47→    47→  total: number; workedDays: number; cells: AttendanceCell[];
+    48→    48→}
+    49→    49→interface AttendanceResp { month: string; dates: string[]; rows: AttendanceRow[]; totalShifts: number }
+    50→    50→
+    51→    51→const ATT_HEAT = [
+    52→    52→  "bg-muted/50",
+    53→    53→  "bg-emerald-200/70 dark:bg-emerald-900/60",
+    54→    54→  "bg-emerald-400/80 dark:bg-emerald-800/80",
+    55→    55→  "bg-emerald-600 dark:bg-emerald-600",
+    56→    56→];
+    57→    57→
+    58→    58→function attClass(n: number): string {
+    59→    59→  if (n <= 0) return ATT_HEAT[0];
+    60→    60→  if (n === 1) return ATT_HEAT[1];
+    61→    61→  if (n === 2) return ATT_HEAT[2];
+    62→    62→  return ATT_HEAT[3];
+    63→    63→}
+    64→    64→
+    65→    65→const WD_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
+    66→    66→
+    67→    67→function monthLabel(month: string): string {
+    68→    68→  const [y, m] = month.split("-").map(Number);
+    69→    69→  return new Date(y, (m ?? 1) - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+    70→    70→}
+    71→    71→
+    72→    72→function shiftMonth(month: string, delta: number): string {
+    73→    73→  const [y, m] = month.split("-").map(Number);
+    74→    74→  const d = new Date(y, (m ?? 1) - 1 + delta, 1);
+    75→    75→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    76→    76→}
+    77→    77→
+    78→    78→function isWeekend(dateStr: string): boolean {
+    79→    79→  const [y, m, d] = dateStr.split("-").map(Number);
+    80→    80→  const wd = new Date(y, (m ?? 1) - 1, d ?? 1).getDay();
+    81→    81→  return wd === 0 || wd === 6;
+    82→    82→}
+    83→    83→
+    84→    84→function monthBounds(offset = 0): { from: string; to: string } {
+    85→    85→  const now = new Date();
+    86→    86→  const first = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    87→    87→  const last = new Date(now.getFullYear(), now.getMonth() + offset + 1, 0);
+    88→    88→  const f = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    89→    89→  return { from: f(first), to: f(last) };
+    90→    90→}
+    91→    91→
+    92→    92→export default function DeploymentsView({ params }: ViewProps) {
+    93→    93→  const { lang } = useLang();
+    94→    94→  const [date, setDate] = useState(params?.date ?? todayStr());
+    95→    95→  const [fromTo, setFromTo] = useState<{ from?: string; to?: string }>({});
+    96→    96→  const [rangeKey, setRangeKey] = useState<RangeKey | null>(params?.date ? null : "today");
+    97→    97→  const [propertyId, setPropertyId] = useState(params?.propertyId ?? "");
+    98→    98→  const [employeeId, setEmployeeId] = useState(params?.employeeId ?? "");
+    99→    99→  const [shift, setShift] = useState("");
+   100→   100→  const [wizardOpen, setWizardOpen] = useState(false);
+   101→   101→  const [detail, setDetail] = useState<DeploymentRec | null>(null);
+   102→   102→  const [editRates, setEditRates] = useState(false);
+   103→   103→  const [rateForm, setRateForm] = useState({ shift: "DAY", billingRate: "", payoutRate: "", adjustmentAmount: "", adjustmentNote: "", notes: "" });
+   104→   104→  const [confirmDelete, setConfirmDelete] = useState(false);
+   105→   105→  const { mutate, saving } = useMutation();
+   106→   106→
+   107→   107→  // Attendance month grid — fetched lazily, only while expanded.
+   108→   108→  const [attOpen, setAttOpen] = useState(false);
+   109→   109→  const [attMonth, setAttMonth] = useState(() => {
+   110→   110→    const n = new Date();
+   111→   111→    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+   112→   112→  });
+   113→   113→  const { data: att, loading: attLoading } = useAsync<AttendanceResp | null>(
+   114→   114→    () => (attOpen ? api.get<AttendanceResp>(`/api/deployments/attendance?month=${attMonth}`) : Promise.resolve(null)),
+   115→   115→    [attOpen, attMonth]
+   116→   116→  );
+   117→   117→
+   118→   118→  // Property options for filter.
+   119→   119→  const [properties, setProperties] = useState<PropertyRec[]>([]);
+   120→   120→  useEffect(() => {
+   121→   121→    let cancelled = false;
+   122→   122→    api.get<ListResp<PropertyRec>>("/api/properties" + qs({ pageSize: 200 }))
+   123→   123→      .then((d) => { if (!cancelled) setProperties(d.items); })
+   124→   124→      .catch(() => {});
+   125→   125→    return () => { cancelled = true; };
+   126→   126→  }, []);
+   127→   127→
+   128→   128→  // Employee options for filter (active only).
+   129→   129→  const [employees, setEmployees] = useState<{ id: string; fullName: string; code: string }[]>([]);
+   130→   130→  useEffect(() => {
+   131→   131→    let cancelled = false;
+   132→   132→    api.get<ListResp<{ id: string; fullName: string; code: string }>>("/api/employees" + qs({ status: "ACTIVE", pageSize: 200 }))
+   133→   133→      .then((d) => { if (!cancelled) setEmployees(d.items); })
+   134→   134→      .catch(() => {});
+   135→   135→    return () => { cancelled = true; };
+   136→   136→  }, []);
+   137→   137→
+   138→   138→  const onRange = (r: RangeKey) => {
+   139→   139→    setRangeKey(r);
+   140→   140→    if (r === "today") { setDate(todayStr()); setFromTo({}); }
+   141→   141→    else if (r === "yesterday") { setDate(todayStr(-1)); setFromTo({}); }
+   142→   142→    else if (r === "week") { setDate(""); setFromTo({ from: todayStr(-6), to: todayStr() }); }
+   143→   143→    else if (r === "lastweek") { setDate(""); setFromTo({ from: todayStr(-13), to: todayStr(-7) }); }
+   144→   144→    else if (r === "month") { setDate(""); setFromTo({ ...monthBounds(0), to: todayStr() }); }
+   145→   145→    else { setDate(""); setFromTo(monthBounds(-1)); }
+   146→   146→  };
+   147→   147→
+   148→   148→  const onDateChange = (d: string) => {
+   149→   149→    setDate(d);
+   150→   150→    setRangeKey(null);
+   151→   151→    setFromTo({});
+   152→   152→  };
+   153→   153→
+   154→   154→  const [data, setData] = useState<ListResp<DeploymentRec> & { totals?: Totals } | null>(null);
+   155→   155→  const [loading, setLoading] = useState(true);
+   156→   156→  const [error, setError] = useState<string | null>(null);
+   157→   157→
+   158→   158→  const load = useCallback(async () => {
+   159→   159→    setLoading(true);
+   160→   160→    try {
+   161→   161→      const query = qs({
+   162→   162→        date: date || undefined,
+   163→   163→        from: fromTo.from,
+   164→   164→        to: fromTo.to,
+   165→   165→        propertyId: propertyId || undefined,
+   166→   166→        employeeId: employeeId || undefined,
+   167→   167→        shift: shift || undefined,
+   168→   168→        pageSize: 200,
+   169→   169→      });
+   170→   170→      const d = await api.get<ListResp<DeploymentRec> & { totals?: Totals }>("/api/deployments" + query);
+   171→   171→      setData(d);
+   172→   172→      setError(null);
+   173→   173→    } catch (e) {
+   174→   174→      setError(errMessage(e));
+   175→   175→      toast.error(errMessage(e));
+   176→   176→    } finally {
+   177→   177→      setLoading(false);
+   178→   178→    }
+   179→   179→  }, [date, fromTo, propertyId, employeeId, shift]);
+   180→   180→
+   181→   181→  useEffect(() => { void load(); }, [load]);
+   182→   182→
+   183→   183→  const rows = useMemo(() => data?.items ?? [], [data]);
+   184→   184→  const totals = data?.totals;
+   185→   185→
+   186→   186→  const openDetail = (d: DeploymentRec) => {
+   187→   187→    setDetail(d);
+   188→   188→    setEditRates(false);
+   189→   189→    setRateForm({
+   190→   190→      shift: d.shift,
+   191→   191→      billingRate: String(d.billingRate ?? 0),
+   192→   192→      payoutRate: String(d.payoutRate ?? 0),
+   193→   193→      adjustmentAmount: d.adjustmentAmount ? String(d.adjustmentAmount) : "",
+   194→   194→      adjustmentNote: d.adjustmentNote ?? "",
+   195→   195→      notes: d.notes ?? "",
+   196→   196→    });
+   197→   197→  };
+   198→   198→
+   199→   199→  const saveRates = async () => {
+   200→   200→    if (!detail) return;
+   201→   201→    const res = await mutate(
+   202→   202→      () => api.put(`/api/deployments/${detail.id}`, {
+   203→   203→        shift: rateForm.shift,
+   204→   204→        billingRate: parseAmount(rateForm.billingRate),
+   205→   205→        payoutRate: parseAmount(rateForm.payoutRate),
+   206→   206→        adjustmentAmount: rateForm.adjustmentAmount ? parseAmount(rateForm.adjustmentAmount) : 0,
+   207→   207→        adjustmentNote: rateForm.adjustmentNote || undefined,
+   208→   208→        notes: rateForm.notes || undefined,
+   209→   209→      }),
+   210→   210→      "Deployment updated",
+   211→   211→      () => ({ module: "DEPLOYMENT", recordId: detail.id, onUndo: () => void load() })
+   212→   212→    );
+   213→   213→    if (res.ok) { setDetail(null); void load(); }
+   214→   214→  };
+   215→   215→
+   216→   216→  const deleteDeployment = async () => {
+   217→   217→    if (!detail) return;
+   218→   218→    const res = await mutate(
+   219→   219→      () => api.del(`/api/deployments/${detail.id}`),
+   220→   220→      "Deployment removed",
+   221→   221→      () => ({ module: "DEPLOYMENT", recordId: detail.id, onUndo: () => void load() })
+   222→   222→    );
+   223→   223→    setConfirmDelete(false);
+   224→   224→    if (res.ok) { setDetail(null); void load(); }
+   225→   225→  };
+   226→   226→
+   227→   227→  const columns: Column<DeploymentRec>[] = [
+   228→   228→    { key: "date", label: t(lang, "col.date"), value: (r) => fmtDay(r.date), hideOnMobile: true },
+   229→   229→    {
+   230→   230→      key: "employee", label: t(lang, "col.employee"), primary: true,
+   231→   231→      render: (r) => (
+   232→   232→        <div className="min-w-0">
+   233→   233→          <p className="truncate font-medium">{r.employeeName}</p>
+   234→   234→          <p className="truncate text-[11px] text-muted-foreground">{r.employeeCode} · {r.propertyName}</p>
+   235→   235→        </div>
+   236→   236→      ),
+   237→   237→      value: (r) => r.employeeName,
+   238→   238→    },
+   239→   239→    { key: "property", label: t(lang, "col.property"), value: (r) => r.propertyName, hideOnMobile: true },
+   240→   240→    { key: "shift", label: t(lang, "col.shift"), render: (r) => <ShiftBadgeInline shift={r.shift} />, value: (r) => r.shift },
+   241→   241→    {
+   242→   242→      key: "billingAmount", label: t(lang, "col.billing"), className: "text-right",
+   243→   243→      render: (r) => <span className="tabular-nums">{formatINR(r.billingAmount ?? 0)}</span>,
+   244→   244→      value: (r) => formatINR(r.billingAmount ?? 0),
+   245→   245→    },
+   246→   246→    {
+   247→   247→      key: "payoutAmount", label: t(lang, "col.payout"), className: "text-right",
+   248→   248→      render: (r) => <span className="tabular-nums">{formatINR(r.payoutAmount ?? 0)}</span>,
+   249→   249→      value: (r) => formatINR(r.payoutAmount ?? 0),
+   250→   250→      hideOnMobile: true,
+   251→   251→    },
+   252→   252→    {
+   253→   253→      key: "paidStatus", label: t(lang, "col.paid"), render: (r) => <StatusBadge status={r.paidStatus ?? "UNPAID"} />, value: (r) => r.paidStatus ?? "UNPAID",
+   254→   254→      hideOnMobile: true,
+   255→   255→    },
+   256→   256→  ];
+   257→   257→
+   258→   258→  const detailUnits = detail ? SHIFT_UNITS[detail.shift] ?? 1 : 1;
+   259→   259→
+   260→   260→  return (
+   261→   261→    <div className="space-y-4">
+   262→   262→      <PageHeader
+   263→   263→        title={t(lang, "page.deployments")}
+   264→   264→        subtitle={t(lang, "page.deployments.sub")}
+   265→   265→        actions={
+   266→   266→          <Button size="sm" className="h-9 gap-1.5" onClick={() => setWizardOpen(true)}>
+   267→   267→            <CalendarCheck className="h-4 w-4" aria-hidden />Deploy Employees
+   268→   268→          </Button>
+   269→   269→        }
+   270→   270→      />
+   271→   271→
+   272→   272→      {/* Attendance month grid (collapsible) */}
+   273→   273→      <Card>
+   274→   274→        <button
+   275→   275→          type="button"
+   276→   276→          className="flex w-full items-center gap-2.5 p-4 text-left"
+   277→   277→          aria-expanded={attOpen}
+   278→   278→          onClick={() => setAttOpen((v) => !v)}
+   279→   279→        >
+   280→   280→          <span className="rounded-lg bg-emerald-100 p-1.5 dark:bg-emerald-950" aria-hidden>
+   281→   281→            <CalendarDays className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+   282→   282→          </span>
+   283→   283→          <span className="min-w-0 flex-1">
+   284→   284→            <span className="block text-sm font-semibold">Attendance — {monthLabel(attMonth)}</span>
+   285→   285→            <span className="block text-xs text-muted-foreground">
+   286→   286→              {att ? `${att.totalShifts.toLocaleString("en-IN")} shift units across ${att.rows.length} employees · click a cell to inspect` : "Per-employee daily shift grid (Full = 2 units)"}
+   287→   287→            </span>
+   288→   288→          </span>
+   289→   289→          <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", attOpen && "rotate-180")} aria-hidden />
+   290→   290→        </button>
+   291→   291→        {attOpen && (
+   292→   292→          <CardContent className="border-t pt-3">
+   293→   293→            <div className="mb-3 flex items-center justify-between gap-2">
+   294→   294→              <div className="flex items-center gap-1">
+   295→   295→                <Button variant="outline" size="sm" className="h-7 w-7 p-0" aria-label="Previous month" onClick={() => setAttMonth((m) => shiftMonth(m, -1))}>
+   296→   296→                  ‹
+   297→   297→                </Button>
+   298→   298→                <Button
+   299→   299→                  variant="outline"
+   300→   300→                  size="sm"
+   301→   301→                  className="h-7 px-2.5 text-xs"
+   302→   302→                  onClick={() => {
+   303→   303→                    const n = new Date();
+   304→   304→                    setAttMonth(`${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`);
+   305→   305→                  }}
+   306→   306→                >
+   307→   307→                  This month
+   308→   308→                </Button>
+   309→   309→                <Button variant="outline" size="sm" className="h-7 w-7 p-0" aria-label="Next month" onClick={() => setAttMonth((m) => shiftMonth(m, 1))}>
+   310→   310→                  ›
+   311→   311→                </Button>
+   312→   312→              </div>
+   313→   313→              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground" aria-hidden>
+   314→   314→                <span>Less</span>
+   315→   315→                {ATT_HEAT.map((c) => <span key={c} className={cn("h-3 w-3 rounded-[3px]", c)} />)}
+   316→   316→                <span>More</span>
+   317→   317→              </div>
+   318→   318→            </div>
+   319→   319→
+   320→   320→            {attLoading && !att ? (
+   321→   321→              <div className="space-y-2">
+   322→   322→                {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-6 w-full" />)}
+   323→   323→              </div>
+   324→   324→            ) : att && att.rows.length > 0 ? (
+   325→   325→              <div className="overflow-x-auto pb-1">
+   326→   326→                <div className="min-w-[640px]">
+   327→   327→                  {/* Header: name + day numbers + totals */}
+   328→   328→                  <div
+   329→   329→                    className="sticky top-0 z-20 grid items-end gap-px border-b bg-card pb-1"
+   330→   330→                    style={{ gridTemplateColumns: `minmax(8.5rem, 11rem) repeat(${att.dates.length}, minmax(14px, 1fr)) 2.6rem 2.6rem` }}
+   331→   331→                  >
+   332→   332→                    <div className="sticky left-0 z-30 bg-card pr-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Employee</div>
+   333→   333→                    {att.dates.map((d, i) => {
+   334→   334→                      const day = Number(d.slice(8));
+   335→   335→                      const wd = WD_LETTERS[new Date(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, day).getDay()];
+   336→   336→                      const isToday = d === todayStr();
+   337→   337→                      return (
+   338→   338→                        <div key={d} className={cn("text-center text-[9px] leading-tight", isWeekend(d) ? "text-muted-foreground/60" : "text-muted-foreground", isToday && "font-bold text-primary")}>
+   339→   339→                          <div className={cn(isToday && "rounded-sm bg-primary/10")}>{day}</div>
+   340→   340→                          <div className="opacity-70">{wd}</div>
+   341→   341→                        </div>
+   342→   342→                      );
+   343→   343→                    })}
+   344→   344→                    <div className="text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Units</div>
+   345→   345→                    <div className="text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Days</div>
+   346→   346→                  </div>
+   347→   347→
+   348→   348→                  <div className="max-h-[46vh] overflow-y-auto">
+   349→   349→                    {att.rows.map((r) => (
+   350→   350→                      <div
+   351→   351→                        key={r.employeeId}
+   352→   352→                        className="grid items-center gap-px border-b border-border/40 py-1"
+   353→   353→                        style={{ gridTemplateColumns: `minmax(8.5rem, 11rem) repeat(${att.dates.length}, minmax(14px, 1fr)) 2.6rem 2.6rem` }}
+   354→   354→                      >
+   355→   355→                        <div className="sticky left-0 z-10 bg-card pr-2">
+   356→   356→                          <p className="truncate text-xs font-medium" title={`${r.name} (${r.code})`}>{r.name}</p>
+   357→   357→                          <p className="truncate text-[10px] text-muted-foreground">{r.code}</p>
+   358→   358→                        </div>
+   359→   359→                        {r.cells.map((c) => {
+   360→   360→                          const active = c.shifts > 0;
+   361→   361→                          return (
+   362→   362→                            <button
+   363→   363→                              key={c.date}
+   364→   364→                              type="button"
+   365→   365→                              disabled={!active}
+   366→   366→                              className={cn(
+   367→   367→                                "mx-auto flex h-4 w-4 items-center justify-center rounded-[3px] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+   368→   368→                                active && "cursor-pointer hover:scale-125 hover:ring-1 hover:ring-primary/40",
+   369→   369→                                !active && "cursor-default",
+   370→   370→                                attClass(c.shifts),
+   371→   371→                                isWeekend(c.date) && c.shifts === 0 && "opacity-50",
+   372→   372→                                c.date === todayStr() && "ring-1 ring-primary ring-offset-1 ring-offset-background"
+   373→   373→                              )}
+   374→   374→                              role="img"
+   375→   375→                              aria-label={
+   376→   376→                                active
+   377→   377→                                  ? `${r.name}: ${c.shifts} shift unit(s) on ${c.date} — filter deployments`
+   378→   378→                                  : `${r.name}: no shifts on ${c.date}`
+   379→   379→                              }
+   380→   380→                              title={
+   381→   381→                                active
+   382→   382→                                  ? `${fmtDay(c.date)} · ${r.name} · ${c.shifts} unit${c.shifts === 1 ? "" : "s"} — click to inspect`
+   383→   383→                                  : `${fmtDay(c.date)} · ${r.name} · no shifts`
+   384→   384→                              }
+   385→   385→                              onClick={
+   386→   386→                                active
+   387→   387→                                  ? () => {
+   388→   388→                                      // Drill down: filter the table below to this employee + day.
+   389→   389→                                      setEmployeeId(r.employeeId);
+   390→   390→                                      setPropertyId("");
+   391→   391→                                      onDateChange(c.date);
+   392→   392→                                      setAttOpen(false);
+   393→   393→                                      toast.info(`Showing ${r.name} — ${fmtDay(c.date)}`);
+   394→   394→                                    }
+   395→   395→                                  : undefined
+   396→   396→                              }
+   397→   397→                            />
+   398→   398→                          );
+   399→   399→                        })}
+   400→   400→                        <div className="text-right text-xs font-bold tabular-nums">{r.total}</div>
+   401→   401→                        <div className="text-right text-xs tabular-nums text-muted-foreground">{r.workedDays}</div>
+   402→   402→                      </div>
+   403→   403→                    ))}
+   404→   404→                  </div>
+   405→   405→                </div>
+   406→   406→              </div>
+   407→   407→            ) : (
+   408→   408→              <p className="py-6 text-center text-xs text-muted-foreground">No active employees found.</p>
+   409→   409→            )}
+   410→   410→          </CardContent>
+   411→   411→        )}
+   412→   412→      </Card>
+   413→   413→
+   414→   414→      {/* Filters */}
+   415→   415→      <Card>
+   416→   416→        <CardContent className="space-y-3 p-3 sm:p-4">
+   417→   417→          <RangeSelector
+   418→   418→            value={(rangeKey ?? "today") as RangeKey}
+   419→   419→            onChange={onRange}
+   420→   420→          />
+   421→   421→          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+   422→   422→            <div>
+   423→   423→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Date</Label>
+   424→   424→              <Input type="date" value={date} onChange={(e) => onDateChange(e.target.value)} className="h-10" aria-label="Filter by date" />
+   425→   425→            </div>
+   426→   426→            <div>
+   427→   427→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Property</Label>
+   428→   428→              <SelectInput
+   429→   429→                value={propertyId}
+   430→   430→                onChange={setPropertyId}
+   431→   431→                options={[{ label: "All properties", value: "" }, ...properties.map((p) => ({ label: p.name, value: p.id }))]}
+   432→   432→                placeholder="All properties"
+   433→   433→              />
+   434→   434→            </div>
+   435→   435→            <div>
+   436→   436→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Employee</Label>
+   437→   437→              <SelectInput
+   438→   438→                value={employeeId}
+   439→   439→                onChange={setEmployeeId}
+   440→   440→                options={[{ label: "All employees", value: "" }, ...employees.map((e) => ({ label: `${e.fullName} (${e.code})`, value: e.id }))]}
+   441→   441→                placeholder="All employees"
+   442→   442→              />
+   443→   443→            </div>
+   444→   444→            <div>
+   445→   445→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Shift</Label>
+   446→   446→              <SelectInput value={shift} onChange={setShift} options={SHIFT_FILTER_OPTIONS} placeholder="All shifts" />
+   447→   447→            </div>
+   448→   448→          </div>
+   449→   449→        </CardContent>
+   450→   450→      </Card>
+   451→   451→
+   452→   452→      {/* Totals */}
+   453→   453→      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+   454→   454→        {loading ? (
+   455→   455→          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)
+   456→   456→        ) : (
+   457→   457→          <>
+   458→   458→            <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+   459→   459→              <p className="text-[11px] sm:text-xs text-muted-foreground">Deployments</p>
+   460→   460→              <p className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{totals?.count ?? rows.length}</p>
+   461→   461→            </CardContent></Card>
+   462→   462→            <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+   463→   463→              <p className="text-[11px] sm:text-xs text-muted-foreground">Billing</p>
+   464→   464→              <p className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{formatINR(totals?.billing ?? 0, { compact: true })}</p>
+   465→   465→            </CardContent></Card>
+   466→   466→            <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+   467→   467→              <p className="text-[11px] sm:text-xs text-muted-foreground">Payout</p>
+   468→   468→              <p className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{formatINR(totals?.payout ?? 0, { compact: true })}</p>
+   469→   469→            </CardContent></Card>
+   470→   470→            <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+   471→   471→              <p className="text-[11px] sm:text-xs text-muted-foreground">Margin</p>
+   472→   472→              <p className={cn("mt-1 text-lg sm:text-xl font-bold tabular-nums", (totals?.margin ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+   473→   473→                {formatINR(totals?.margin ?? 0, { compact: true })}
+   474→   474→              </p>
+   475→   475→            </CardContent></Card>
+   476→   476→          </>
+   477→   477→        )}
+   478→   478→      </div>
+   479→   479→
+   480→   480→      {error && (
+   481→   481→        <div className="rounded-xl border border-red-200 bg-red-50/60 p-4 text-center dark:border-red-900 dark:bg-red-950/30">
+   482→   482→          <p className="text-xs text-red-700 dark:text-red-300">{error}</p>
+   483→   483→          <Button variant="outline" size="sm" className="mt-2 h-8" onClick={() => void load()}>Retry</Button>
+   484→   484→        </div>
+   485→   485→      )}
+   486→   486→
+   487→   487→      {!error && (
+   488→   488→        <Card>
+   489→   489→          <CardContent className="p-3 sm:p-4">
+   490→   490→            <DataTable
+   491→   491→              columns={columns}
+   492→   492→              rows={rows}
+   493→   493→              rowKey={(r) => r.id}
+   494→   494→              onRowClick={openDetail}
+   495→   495→              exportName="deployments"
+   496→   496→              loading={loading}
+   497→   497→              emptyIcon={CalendarCheck}
+   498→   498→              emptyTitle="No deployments for this filter"
+   499→   499→              emptyDescription="Use the Deploy Employees button to create today's roster."
+   500→   500→            />
+   501→   501→          </CardContent>
+   502→   502→        </Card>
+   503→   503→      )}
+   504→   504→
+   505→   505→      <DeployWizard open={wizardOpen} onOpenChange={setWizardOpen} defaultDate={date || undefined} defaultPropertyId={propertyId || undefined} onDone={load} />
+   506→   506→
+   507→   507→      {/* Detail dialog */}
+   508→   508→      <Dialog open={Boolean(detail)} onOpenChange={(v) => !v && setDetail(null)}>
+   509→   509→        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+   510→   510→          {detail && (
+   511→   511→            <>
+   512→   512→              <DialogHeader>
+   513→   513→                <DialogTitle className="flex flex-wrap items-center gap-2">
+   514→   514→                  {detail.employeeName}
+   515→   515→                  <StatusBadge status={detail.paidStatus ?? "UNPAID"} />
+   516→   516→                </DialogTitle>
+   517→   517→                <DialogDescription>
+   518→   518→                  {fmtDay(detail.date)} · {detail.propertyName} · {detail.shift === "FULL" ? "Full (day + night)" : detail.shift} shift
+   519→   519→                </DialogDescription>
+   520→   520→              </DialogHeader>
+   521→   521→
+   522→   522→              <div className="grid grid-cols-3 gap-2 text-center">
+   523→   523→                <div className="rounded-xl bg-muted/60 p-2.5">
+   524→   524→                  <p className="text-[10px] uppercase text-muted-foreground">Billing</p>
+   525→   525→                  <p className="text-sm font-bold tabular-nums">{formatINR(detail.billingAmount ?? 0)}</p>
+   526→   526→                  <p className="text-[10px] text-muted-foreground tabular-nums">{formatINR(detail.billingRate ?? 0)} × {detailUnits}</p>
+   527→   527→                </div>
+   528→   528→                <div className="rounded-xl bg-muted/60 p-2.5">
+   529→   529→                  <p className="text-[10px] uppercase text-muted-foreground">Payout</p>
+   530→   530→                  <p className="text-sm font-bold tabular-nums">{formatINR(detail.payoutAmount ?? 0)}</p>
+   531→   531→                  <p className="text-[10px] text-muted-foreground tabular-nums">{formatINR(detail.payoutRate ?? 0)} × {detailUnits}</p>
+   532→   532→                </div>
+   533→   533→                <div className="rounded-xl bg-muted/60 p-2.5">
+   534→   534→                  <p className="text-[10px] uppercase text-muted-foreground">Margin</p>
+   535→   535→                  <p className={cn("text-sm font-bold tabular-nums", (detail.billingAmount ?? 0) - (detail.payoutAmount ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+   536→   536→                    {formatINR((detail.billingAmount ?? 0) - (detail.payoutAmount ?? 0))}
+   537→   537→                  </p>
+   538→   538→                  <p className="text-[10px] text-muted-foreground">this record</p>
+   539→   539→                </div>
+   540→   540→              </div>
+   541→   541→
+   542→   542→              {(detail.adjustmentAmount ?? 0) !== 0 && (
+   543→   543→                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+   544→   544→                  Adjustment {formatINR(detail.adjustmentAmount ?? 0)}{detail.adjustmentNote ? ` — ${detail.adjustmentNote}` : ""}
+   545→   545→                </p>
+   546→   546→              )}
+   547→   547→              {detail.notes && <p className="text-xs text-muted-foreground">Notes: {detail.notes}</p>}
+   548→   548→
+   549→   549→              <Separator />
+   550→   550→
+   551→   551→              {editRates ? (
+   552→   552→                <div className="space-y-3">
+   553→   553→                  <div className="space-y-1.5">
+   554→   554→                    <Label className="text-xs">Shift</Label>
+   555→   555→                    <div className="flex rounded-lg border bg-muted/50 p-1" role="group" aria-label="Shift">
+   556→   556→                      {SHIFT_OPTIONS.map((s) => (
+   557→   557→                        <button
+   558→   558→                          key={s.value}
+   559→   559→                          type="button"
+   560→   560→                          className={cn(
+   561→   561→                            "min-h-9 flex-1 rounded-md text-xs font-medium transition-colors",
+   562→   562→                            rateForm.shift === s.value ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+   563→   563→                          )}
+   564→   564→                          aria-pressed={rateForm.shift === s.value}
+   565→   565→                          onClick={() => setRateForm((f) => ({ ...f, shift: s.value }))}
+   566→   566→                        >
+   567→   567→                          {s.label}
+   568→   568→                        </button>
+   569→   569→                      ))}
+   570→   570→                    </div>
+   571→   571→                  </div>
+   572→   572→                  <div className="grid gap-3 sm:grid-cols-2">
+   573→   573→                    <div className="space-y-1.5">
+   574→   574→                      <Label className="text-xs">Billing rate (₹/shift)</Label>
+   575→   575→                      <Input type="number" inputMode="numeric" className="h-9" value={rateForm.billingRate} onChange={(e) => setRateForm((f) => ({ ...f, billingRate: e.target.value }))} />
+   576→   576→                    </div>
+   577→   577→                    <div className="space-y-1.5">
+   578→   578→                      <Label className="text-xs">Payout rate (₹/shift)</Label>
+   579→   579→                      <Input type="number" inputMode="numeric" className="h-9" value={rateForm.payoutRate} onChange={(e) => setRateForm((f) => ({ ...f, payoutRate: e.target.value }))} />
+   580→   580→                    </div>
+   581→   581→                    <div className="space-y-1.5">
+   582→   582→                      <Label className="text-xs">Adjustment amount (± ₹)</Label>
+   583→   583→                      <Input type="number" inputMode="numeric" className="h-9" value={rateForm.adjustmentAmount} onChange={(e) => setRateForm((f) => ({ ...f, adjustmentAmount: e.target.value }))} placeholder="e.g. -100 or 250" />
+   584→   584→                    </div>
+   585→   585→                    <div className="space-y-1.5">
+   586→   586→                      <Label className="text-xs">Adjustment note</Label>
+   587→   587→                      <Input className="h-9" value={rateForm.adjustmentNote} onChange={(e) => setRateForm((f) => ({ ...f, adjustmentNote: e.target.value }))} />
+   588→   588→                    </div>
+   589→   589→                    <div className="space-y-1.5 sm:col-span-2">
+   590→   590→                      <Label className="text-xs">Notes</Label>
+   591→   591→                      <Input className="h-9" value={rateForm.notes} onChange={(e) => setRateForm((f) => ({ ...f, notes: e.target.value }))} />
+   592→   592→                    </div>
+   593→   593→                  </div>
+   594→   594→                  <p className="text-[11px] text-muted-foreground">Amounts recompute as rate × shift units (Full = 2) + adjustment.</p>
+   595→   595→                  <div className="flex gap-2">
+   596→   596→                    <Button variant="outline" className="min-h-10 flex-1" onClick={() => setEditRates(false)}>Cancel</Button>
+   597→   597→                    <Button className="min-h-10 flex-1" onClick={saveRates} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+   598→   598→                  </div>
+   599→   599→                </div>
+   600→   600→              ) : (
+   601→   601→                <div className="space-y-2.5">
+   602→   602→                  <div className="flex items-center justify-between gap-2">
+   603→   603→                    <p className="text-[11px] text-muted-foreground">
+   604→   604→                      By {detail.createdByName ?? "—"} · {fmtDateTime(detail.createdAt)}
+   605→   605→                    </p>
+   606→   606→                    <div className="flex gap-1.5">
+   607→   607→                      <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setEditRates(true)}>
+   608→   608→                        <Pencil className="h-3 w-3" aria-hidden />Edit
+   609→   609→                      </Button>
+   610→   610→                      <Button variant="outline" size="sm" className="h-8 gap-1.5 border-red-200 text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950" onClick={() => setConfirmDelete(true)}>
+   611→   611→                        <Trash2 className="h-3 w-3" aria-hidden />Remove
+   612→   612→                      </Button>
+   613→   613→                    </div>
+   614→   614→                  </div>
+   615→   615→                  <p className="rounded-lg bg-muted/60 px-3 py-2 text-[11px] text-muted-foreground">
+   616→   616→                    Removed by mistake? The toast Undo (or Audit Log) restores it exactly — amounts, allocation and totals included.
+   617→   617→                  </p>
+   618→   618→                </div>
+   619→   619→              )}
+   620→   620→            </>
+   621→   621→          )}
+   622→   622→        </DialogContent>
+   623→   623→      </Dialog>
+   624→   624→
+   625→   625→      {/* Delete confirmation */}
+   626→   626→      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+   627→   627→        <AlertDialogContent>
+   628→   628→          <AlertDialogHeader>
+   629→   629→            <AlertDialogTitle>Remove this deployment?</AlertDialogTitle>
+   630→   630→            <AlertDialogDescription>
+   631→   631→              {detail && `${detail.employeeName} — ${fmtDay(detail.date)} · ${detail.propertyName} · ${detail.shift} shift (${formatINR(detail.billingAmount ?? 0)} billing).`} The entry is snapshotted, so Undo restores it with zero mismatch.
+   632→   632→            </AlertDialogDescription>
+   633→   633→          </AlertDialogHeader>
+   634→   634→          <AlertDialogFooter>
+   635→   635→            <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
+   636→   636→            <AlertDialogAction className="min-h-10 bg-red-600 text-white hover:bg-red-700" onClick={() => void deleteDeployment()}>
+   637→   637→              {saving ? "Removing…" : "Remove entry"}
+   638→   638→            </AlertDialogAction>
+   639→   639→          </AlertDialogFooter>
+   640→   640→        </AlertDialogContent>
+   641→   641→      </AlertDialog>
+   642→   642→    </div>
+   643→   643→  );
+   644→   644→}
+   645→   645→
