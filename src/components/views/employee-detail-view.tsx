@@ -70,7 +70,8 @@ function AddAdjustmentDialog({ open, onOpenChange, employeeId, onDone }: {
     const signed = type === "DEDUCTION" || type === "PENALTY" ? -amt : amt;
     const res = await mutate(
       () => api.post("/api/adjustments", { employeeId, date, type, amount: signed, reason: reason || undefined }),
-      "Adjustment recorded"
+      "Adjustment recorded",
+      (data) => ({ module: "ADJUSTMENT", recordId: (data as { id: string }).id, onUndo: onDone })
     );
     if (res.ok) { onOpenChange(false); onDone(); }
   };

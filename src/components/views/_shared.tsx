@@ -291,14 +291,55 @@ export function useAsync<T>(loader: () => Promise<T>, deps: React.DependencyList
   return { data, loading, error, reload: load, setData };
 }
 
-/** Mutation wrapper: consistent error toasts, optional success toast. */
+/** Mutation wrapper: consistent error toasts, optional success toast.
+ *  Pass an `undo` resolver to attach an "Undo" action to the success toast —
+ *  it reverses the entry server-side (zero mismatch) and calls onUndo. */
+export interface UndoSpec {
+  module: string; // PAYMENT / ADVANCE / EXPENSE / DEPLOYMENT / TRIP / EMI / MAINTENANCE / ADJUSTMENT
+  recordId?: string;
+  onUndo?: () => void;
+}
+
+export async function undoRequest(spec: {
+  auditLogId?: string;
+  module?: string;
+  recordId?: string;
+  onUndo?: () => void;
+}): Promise<boolean> {
+  try {
+    await api.post("/api/undo", {
+      ...(spec.auditLogId ? { auditLogId: spec.auditLogId } : { module: spec.module, recordId: spec.recordId }),
+    });
+    toast.success("Entry reversed — everything is back to how it was", { icon: "↩️" });
+    spec.onUndo?.();
+    return true;
+  } catch (e) {
+    toast.error(errMessage(e));
+    return false;
+  }
+}
+
 export function useMutation() {
   const [saving, setSaving] = useState(false);
-  const mutate = useCallback(async (fn: () => Promise<unknown>, success?: string) => {
+  const mutate = useCallback(async (
+    fn: () => Promise<unknown>,
+    success?: string,
+    undo?: (data: unknown) => UndoSpec | null | undefined
+  ) => {
     setSaving(true);
     try {
       const data = await fn();
-      if (success) toast.success(success);
+      if (success) {
+        const spec = undo?.(data);
+        if (spec?.module && spec.recordId) {
+          toast.success(success, {
+            duration: 8000,
+            action: { label: "Undo", onClick: () => void undoRequest(spec) },
+          });
+        } else {
+          toast.success(success);
+        }
+      }
       return { ok: true as const, data };
     } catch (e) {
       toast.error(errMessage(e));
@@ -462,17 +503,26 @@ export function InitialAvatar({ name, className, tone = "emerald" }: { name?: st
 // Charts (recharts wrappers — responsive, theme-aware)
 // ---------------------------------------------------------------------------
 
-export const CHART_COLORS = { emerald: "#059669", amber: "#d97706", teal: "#0d9488", red: "#dc2626" } as const;
+// Chart palette — CSS variables so every series re-tunes itself per theme
+// (light: deep ledger tones on white; dark: luminous on deep cards).
+export const CHART_COLORS = {
+  emerald: "var(--chart-1)",
+  amber: "var(--chart-2)",
+  teal: "var(--chart-3)",
+  red: "var(--chart-4)",
+  plum: "var(--chart-5)",
+} as const;
 
 export interface SeriesDef { key: string; label: string; color: string }
 
-const AXIS_TICK = { fontSize: 11, fill: "hsl(var(--muted-foreground))" };
+const AXIS_TICK = { fontSize: 11, fill: "var(--muted-foreground)" };
 const TOOLTIP_STYLE = {
   borderRadius: 10,
-  border: "1px solid hsl(var(--border))",
-  background: "hsl(var(--card))",
-  color: "hsl(var(--foreground))",
+  border: "1px solid var(--border)",
+  background: "var(--card)",
+  color: "var(--foreground)",
   fontSize: 12,
+  boxShadow: "0 8px 24px -12px rgb(0 0 0 / 0.35)",
 } as const;
 
 export function AreaTrend({ data, xKey, series, height = 220 }: {
@@ -490,10 +540,10 @@ export function AreaTrend({ data, xKey, series, height = 220 }: {
               </linearGradient>
             ))}
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
           <XAxis dataKey={xKey} tick={AXIS_TICK} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={24} />
           <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={56} tickFormatter={(v) => formatINR(Number(v), { compact: true })} />
-          <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} cursor={{ stroke: "hsl(var(--border))" }} />
+          <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} cursor={{ stroke: "var(--border)" }} />
           {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />}
           {series.map((s) => (
             <Area
@@ -521,10 +571,10 @@ export function BarsCompare({ data, xKey, series, height = 220 }: {
     <div className="w-full overflow-hidden" style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 8, left: -14, bottom: 0 }} barCategoryGap="24%">
-          <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
           <XAxis dataKey={xKey} tick={AXIS_TICK} tickLine={false} axisLine={false} minTickGap={16} />
           <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={56} tickFormatter={(v) => formatINR(Number(v), { compact: true })} />
-          <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} cursor={{ fill: "hsl(var(--muted))", opacity: 0.5 }} />
+          <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} cursor={{ fill: "var(--muted)", opacity: 0.5 }} />
           {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />}
           {series.map((s) => (
             <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} radius={[4, 4, 4, 4]} maxBarSize={30} />
@@ -719,7 +769,8 @@ export function GiveAdvanceDialog({ open, onOpenChange, defaultEmployeeId, emplo
     if (amt <= 0) { toast.error("Enter a valid amount"); return; }
     const res = await mutate(
       () => api.post("/api/advances", { employeeId, date, amount: amt, reason: reason || undefined, method: method || undefined }),
-      "Advance recorded"
+      "Advance recorded",
+      (data) => ({ module: "ADVANCE", recordId: (data as { id: string }).id, onUndo: onDone })
     );
     if (res.ok) { onOpenChange(false); onDone(); }
   };
@@ -853,7 +904,8 @@ export function RecordPaymentDialog({ open, onOpenChange, propertyId, properties
     if (amt <= 0) { toast.error("Enter a valid amount"); return; }
     const res = await mutate(
       () => api.post("/api/payments", { propertyId: selected, date, amount: amt, method: method || undefined, reference: reference || undefined, notes: notes || undefined }),
-      `Payment of ${formatINR(amt)} recorded`
+      `Payment of ${formatINR(amt)} recorded`,
+      (data) => ({ module: "PAYMENT", recordId: (data as { id: string }).id, onUndo: onDone })
     );
     if (res.ok) { onOpenChange(false); onDone(); }
   };

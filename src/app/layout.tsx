@@ -1,18 +1,24 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { SwRegister } from "@/components/sw-register";
 
-const geistSans = Geist({
+// Professional finance-grade typography: Inter for UI (tabular-numeral friendly,
+// superb at small sizes) + JetBrains Mono for codes, amounts and kbd accents.
+// Variable names kept as --font-geist-sans/mono so the Tailwind theme mapping
+// in globals.css needs no changes.
+const appSans = Inter({
   variable: "--font-geist-sans",
   subsets: ["latin"],
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
+const appMono = JetBrains_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -37,7 +43,10 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   viewportFit: "cover",
-  themeColor: "#059669",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#0f766e" },
+    { media: "(prefers-color-scheme: dark)", color: "#132420" },
+  ],
 };
 
 export default function RootLayout({
@@ -48,7 +57,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
+        className={`${appSans.variable} ${appMono.variable} antialiased bg-background text-foreground`}
       >
         {children}
         <Toaster />

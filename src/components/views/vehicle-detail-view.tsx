@@ -290,7 +290,8 @@ export default function VehicleDetailView({ params, navigate }: ViewProps) {
   const markEmiPaid = async (emi: EmiRec) => {
     const res = await mutate(
       () => api.put(`/api/emis/${emi.id}/pay`, { paidDate: todayStr() }),
-      "EMI recorded & expense created"
+      "EMI recorded & expense created",
+      () => ({ module: "EMI", recordId: emi.id, onUndo: () => void reload() })
     );
     if (res.ok) void reload();
   };
@@ -309,7 +310,7 @@ export default function VehicleDetailView({ params, navigate }: ViewProps) {
   };
 
   const markMaintenanceDone = async (m: MaintenanceRec) => {
-    const res = await mutate(() => api.put(`/api/maintenance/${m.id}`, { status: "DONE" }), "Maintenance marked done — expense created");
+    const res = await mutate(() => api.put(`/api/maintenance/${m.id}`, { status: "DONE" }), "Maintenance marked done — expense created", () => ({ module: "MAINTENANCE", recordId: m.id, onUndo: () => void reload() }));
     if (res.ok) void reload();
   };
 

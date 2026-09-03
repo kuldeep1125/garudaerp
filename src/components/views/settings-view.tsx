@@ -9,9 +9,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import {
-  Building2, Check, Crown, Database, Download, History, Languages, Loader2, Receipt, ReceiptText, Settings, Smartphone, Sparkles, Truck, Users,
+  AlertTriangle, Building2, Check, Crown, Database, Download, History, Languages, Loader2, Receipt,
+  ReceiptText, RefreshCw, Settings, ShieldCheck, Smartphone, Sparkles, Truck, Users,
 } from "lucide-react";
 import { errMessage, Field, todayStr, useAsync, useMutation } from "./_shared";
 import { usePwaInstall } from "@/components/shared/pwa-install";
@@ -88,6 +93,192 @@ function BackupCard() {
           {exporting ? t(lang, "settings.backupWorking") : t(lang, "settings.backupAction")}
         </Button>
         <p className="text-xs leading-relaxed text-muted-foreground">{t(lang, "settings.backupNote")}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Data integrity — zero-mismatch health checks (GET/POST /api/settings/integrity)
+// ---------------------------------------------------------------------------
+
+interface IntegrityResp {
+  ok: boolean;
+  checks: { id: string; label: string; detail: string; count: number; status: "ok" | "warn" }[];
+  totals: { trips: number; settlements: number };
+}
+
+function IntegrityCard() {
+  const { data, loading, error, reload } = useAsync<IntegrityResp>(() => api.get("/api/settings/integrity"), []);
+  const [repairing, setRepairing] = useState(false);
+
+  const repair = async () => {
+    setRepairing(true);
+    try {
+      const r = await api.post<{ repaired: { properties: number; cancelledCleaned: number } }>("/api/settings/integrity");
+      toast.success(`Repaired — allocations re-checked across ${r.repaired.properties} property(ies)`);
+      void reload();
+    } catch (e) {
+      toast.error(errMessage(e));
+    } finally {
+      setRepairing(false);
+    }
+  };
+
+  const issues = data?.checks.reduce((s, c) => s + c.count, 0) ?? 0;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <ShieldCheck className="h-4 w-4 text-primary" aria-hidden />
+          Data integrity
+        </CardTitle>
+        <CardDescription>
+          Continuous zero-mismatch audit — derived numbers are re-checked against their source records.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {loading ? (
+          <div className="space-y-2" aria-busy="true">
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+          </div>
+        ) : error ? (
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
+            <Button variant="outline" size="sm" className="h-8" onClick={() => void reload()}>Retry</Button>
+          </div>
+        ) : data ? (
+          <>
+            <div
+              className={cn(
+                "flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium",
+                data.ok
+                  ? "border-emerald-200 bg-emerald-50/70 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"
+                  : "border-amber-300 bg-amber-50/70 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"
+              )}
+              role="status"
+            >
+              {data.ok ? <Check className="h-4 w-4 shrink-0" aria-hidden /> : <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />}
+              {data.ok
+                ? "All checks passed — books are consistent"
+                : `${issues} issue${issues === 1 ? "" : "s"} found — auto-repair can fix allocation drift`}
+            </div>
+            <ul className="space-y-1.5">
+              {data.checks.map((c) => (
+                <li key={c.id} className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold">{c.label}</p>
+                    <p className="truncate text-[10px] text-muted-foreground">{c.detail}</p>
+                  </div>
+                  <span
+                    className={cn(
+                      "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold",
+                      c.count === 0
+                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                        : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                    )}
+                  >
+                    {c.count === 0 ? "OK" : c.count}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => void reload()} disabled={loading}>
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+                Re-run checks
+              </Button>
+              {issues > 0 && (
+                <Button size="sm" className="h-9 gap-1.5" onClick={() => void repair()} disabled={repairing}>
+                  {repairing ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <ShieldCheck className="h-3.5 w-3.5" aria-hidden />}
+                  Auto-repair
+                </Button>
+              )}
+            </div>
+          </>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Danger zone — reset all business data (POST /api/settings/reset)
+// ---------------------------------------------------------------------------
+
+function DangerZoneCard() {
+  const [confirmText, setConfirmText] = useState("");
+  const [resetting, setResetting] = useState(false);
+
+  const doReset = async () => {
+    setResetting(true);
+    try {
+      await api.post("/api/settings/reset", { confirm: confirmText });
+      toast.success("All business data wiped — clean slate ready. Master data and your login were kept.");
+      setConfirmText("");
+      window.location.reload();
+    } catch (e) {
+      toast.error(errMessage(e));
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  return (
+    <Card className="border-red-200 dark:border-red-900/60">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base text-red-700 dark:text-red-400">
+          <AlertTriangle className="h-4 w-4" aria-hidden />
+          Danger zone
+        </CardTitle>
+        <CardDescription>
+          Start over: wipe every employee, property, vehicle, trip, payment and expense. Your login and
+          master lists (shifts, categories) are kept.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="destructive" className="min-h-10 gap-1.5">
+              <AlertTriangle className="h-4 w-4" aria-hidden />
+              Reset all business data
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Wipe all business data?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently deletes every employee, property, contract, deployment, payment,
+                advance, expense, vehicle, client, trip and settlement. Type <span className="font-mono font-bold">RESET</span> below
+                to confirm. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <Input
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder="Type RESET"
+              aria-label="Type RESET to confirm"
+              className="h-10 font-mono"
+            />
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-white hover:bg-destructive/90"
+                disabled={confirmText.trim().toUpperCase() !== "RESET" || resetting}
+                onClick={(e) => {
+                  e.preventDefault();
+                  void doReset();
+                }}
+              >
+                {resetting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <AlertTriangle className="h-4 w-4" aria-hidden />}
+                Yes, wipe everything
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </CardContent>
     </Card>
   );
@@ -314,6 +505,12 @@ export default function SettingsView({ navigate }: ViewProps) {
 
         {/* 4 — Data & backup */}
         <BackupCard />
+
+        {/* 4b — Data integrity (zero-mismatch audit) */}
+        <IntegrityCard />
+
+        {/* 4c — Danger zone (reset business data) */}
+        <DangerZoneCard />
 
         {/* 5 — System shortcuts */}
         <Card>

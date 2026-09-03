@@ -39,12 +39,13 @@ model AuditLog {
   id            String   @id @default(cuid())
   ownerId       String?
   ownerName     String
-  action        String // CREATE / UPDATE / DELETE / STATUS / LOGIN / FINALIZE / PAYMENT / GENERATE
+  action        String // CREATE / UPDATE / DELETE / STATUS / LOGIN / FINALIZE / PAYMENT / GENERATE / UNDO
   module        String // EMPLOYEE / PROPERTY / CONTRACT / DEPLOYMENT / PAYMENT / ADVANCE / SETTLEMENT / EXPENSE / VEHICLE / CLIENT / TRIP / EMI / MAINTENANCE / OWNER / SETTINGS / AUTH
   recordId      String?
   recordLabel   String?
   previousValue String?
   newValue      String?
+  undoneAt      DateTime?
   createdAt     DateTime @default(now())
 
   @@index([createdAt])

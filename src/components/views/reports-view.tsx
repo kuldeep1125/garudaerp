@@ -15,8 +15,8 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  BarChart3, Building2, CalendarCheck, CarFront, Crown, Download, Info, Play, Printer, Receipt,
-  ReceiptText, Route, TrendingUp, Users, Wallet, type LucideIcon,
+  BarChart3, Building2, CalendarCheck, CarFront, Crown, Download, Info, MapPin, Play, Printer,
+  Receipt, ReceiptText, Route, TrendingUp, Users, Wallet, type LucideIcon,
 } from "lucide-react";
 import {
   BarsCompare, CHART_COLORS, ErrorState, Field, Option, SelectInput, todayStr, useAsync,
@@ -72,7 +72,14 @@ interface ReportResp {
   meta?: unknown;
   note?: string;
   chart?: { label: string; revenue: number; cost: number; profit: number; marginPct: number }[] | null;
+  // Drill-down extras (employee-earnings with employeeId)
+  employee?: { id: string; fullName: string; code: string; designation: string | null; status: string } | null;
+  days?: { date: string; propertyName: string; shift: string; status: string; payoutRate: number; earnings: number }[];
+  dayTotals?: { daysWorked: number; shifts: number; earnings: number };
+  propertySummary?: { propertyName: string; shifts?: number; employees?: number; dayShifts: number; nightShifts: number; earnings?: number; billing?: number; payout?: number }[];
 }
+
+interface PickerItem { id: string; name?: string; fullName?: string; code?: string }
 
 // ---------------------------------------------------------------------------
 // Local helpers (not added to _shared.tsx by policy)
@@ -152,6 +159,21 @@ function fmtTotal(v: unknown, cols: ReportColumn[], key: string): string {
   return String(v ?? "—");
 }
 
+/** Small shift badge — sun for DAY, moon for NIGHT. */
+function ShiftPill({ shift }: { shift: string }) {
+  const isNight = shift.toUpperCase().includes("NIGHT");
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+        isNight ? "bg-secondary text-secondary-foreground" : "bg-accent text-accent-foreground"
+      )}
+    >
+      {isNight ? "NIGHT" : shift.toUpperCase().includes("DAY") ? "DAY" : shift.toUpperCase()}
+    </span>
+  );
+}
+
 function metaText(meta: unknown): string | null {
   if (meta === null || meta === undefined) return null;
   if (typeof meta === "string") return meta;
@@ -179,18 +201,31 @@ export default function ReportsView(_props: ViewProps) {
   const [business, setBusiness] = useState("");
   const [date, setDate] = useState(todayStr());
   const [month, setMonth] = useState(toMonth());
+  const [employeeId, setEmployeeId] = useState("");
+  const [propertyId, setPropertyId] = useState("");
 
   const def = REPORTS.find((r) => r.type === type) ?? null;
 
+  // Picker options — loaded only for the report that needs them
+  const employees = useAsync<{ items: PickerItem[] }>(
+    () => (def?.type === "employee-earnings" ? api.get("/api/employees?pageSize=200") : Promise.resolve({ items: [] })),
+    [def?.type]
+  );
+  const properties = useAsync<{ items: PickerItem[] }>(
+    () => (def?.type === "daily-operations" ? api.get("/api/properties?pageSize=200") : Promise.resolve({ items: [] })),
+    [def?.type]
+  );
+
   const params = useMemo<Record<string, string>>(() => {
     if (!def) return {};
-    if (def.config === "date") return { date };
+    if (def.config === "date") return { date, ...(propertyId ? { propertyId } : {}) };
     if (def.config === "month") return { month };
     const { from, to } = computeRange(custom ? "custom" : range, customFrom, customTo);
     const p: Record<string, string> = { from, to };
     if (def.config === "range-business" && business) p.business = business;
+    if (def.type === "employee-earnings" && employeeId) p.employeeId = employeeId;
     return p;
-  }, [def, range, custom, customFrom, customTo, business, date, month]);
+  }, [def, range, custom, customFrom, customTo, business, date, month, employeeId, propertyId]);
 
   const { data, loading, error, reload } = useAsync<ReportResp | null>(
     () => (def ? api.get<ReportResp>(`/api/reports/${def.type}${qs(params)}`) : Promise.resolve(null)),
@@ -213,6 +248,19 @@ export default function ReportsView(_props: ViewProps) {
         value: (row: Record<string, unknown>) => fmtCellText(row[c.key], c.type),
       })),
     [data]
+  );
+
+  // Day-by-day sheet columns for the employee drill-down card
+  const dayColumns = useMemo<Column<Record<string, unknown>>[]>(
+    () => [
+      { key: "date", label: "Date", primary: true, render: (r) => fmtDayText(String(r.date)), value: (r) => String(r.date) },
+      { key: "propertyName", label: "Property", render: (r) => <span className="flex items-center gap-1"><MapPin className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />{String(r.propertyName)}</span>, value: (r) => String(r.propertyName) },
+      { key: "shift", label: "Shift", render: (r) => <ShiftPill shift={String(r.shift)} />, value: (r) => String(r.shift) },
+      { key: "status", label: "Status", hideOnMobile: true, render: (r) => String(r.status), value: (r) => String(r.status) },
+      { key: "payoutRate", label: "Rate", hideOnMobile: true, className: "text-right", render: (r) => formatINR(Number(r.payoutRate)), value: (r) => String(r.payoutRate) },
+      { key: "earnings", label: "Earned", className: "text-right", render: (r) => <span className="font-semibold tabular-nums">{formatINR(Number(r.earnings))}</span>, value: (r) => String(r.earnings) },
+    ],
+    []
   );
 
   const caption = metaText(data?.meta);
@@ -261,7 +309,11 @@ export default function ReportsView(_props: ViewProps) {
               key={r.type}
               type="button"
               aria-pressed={active}
-              onClick={() => setType(r.type)}
+              onClick={() => {
+                setType(r.type);
+                setEmployeeId("");
+                setPropertyId("");
+              }}
               className={cn(
                 "flex min-h-10 flex-col items-start gap-1.5 rounded-xl border bg-card p-3 text-left transition-all",
                 "hover:border-primary/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -362,6 +414,43 @@ export default function ReportsView(_props: ViewProps) {
                 </Field>
               )}
 
+              {def.type === "employee-earnings" && (
+                <Field label="Employee detail (optional)">
+                  <SelectInput
+                    value={employeeId}
+                    onChange={setEmployeeId}
+                    options={[
+                      { label: "All employees", value: "" },
+                      ...employees.data?.items.map((e) => ({
+                        label: `${e.fullName}${e.code ? ` (${e.code})` : ""}`,
+                        value: e.id,
+                      })) ?? [],
+                    ]}
+                    placeholder="All employees"
+                  />
+                  <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+                    Pick one employee to see every day: which property, which shift, how much earned.
+                  </p>
+                </Field>
+              )}
+
+              {def.type === "daily-operations" && (
+                <Field label="Property detail (optional)">
+                  <SelectInput
+                    value={propertyId}
+                    onChange={setPropertyId}
+                    options={[
+                      { label: "All properties", value: "" },
+                      ...properties.data?.items.map((p) => ({ label: p.name ?? p.id, value: p.id })) ?? [],
+                    ]}
+                    placeholder="All properties"
+                  />
+                  <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+                    Pick one property to focus the day sheet on it.
+                  </p>
+                </Field>
+              )}
+
               <div className="grid grid-cols-2 gap-2 pt-1">
                 <Button className="min-h-10 gap-1.5" onClick={() => void reload()} disabled={loading}>
                   <Play className="h-4 w-4" aria-hidden />
@@ -416,6 +505,100 @@ export default function ReportsView(_props: ViewProps) {
                     <span>{data.note}</span>
                   </div>
                 )}
+                {/* Employee day-by-day drill-down — Employee Earnings report */}
+                {def.type === "employee-earnings" && data?.employee && (
+                  <Card className="overflow-hidden print:break-inside-avoid">
+                    <div className="h-0.5 w-full bg-gradient-to-r from-emerald-500/70 via-amber-500/70 to-emerald-500/70" aria-hidden />
+                    <CardHeader className="pb-0">
+                      <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                        <Users className="h-4 w-4 text-primary" aria-hidden />
+                        <span>{data.employee.fullName}</span>
+                        {data.employee.code && (
+                          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] tracking-tight text-muted-foreground">{data.employee.code}</span>
+                        )}
+                        {data.employee.designation && (
+                          <span className="text-xs font-normal text-muted-foreground">· {data.employee.designation}</span>
+                        )}
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        Day-by-day movement — where the employee worked, which shift, what they earned
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3 pt-2">
+                      {data.dayTotals && (
+                        <div className="grid grid-cols-3 gap-2">
+                          {[
+                            { label: "Days worked", value: String(data.dayTotals.daysWorked) },
+                            { label: "Shifts", value: String(data.dayTotals.shifts) },
+                            { label: "Earnings", value: formatINR(data.dayTotals.earnings) },
+                          ].map((s) => (
+                            <div key={s.label} className="rounded-lg border bg-muted/40 px-2.5 py-2 text-center">
+                              <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{s.label}</p>
+                              <p className="mt-0.5 text-sm font-bold tabular-nums">{s.value}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <DataTable
+                        columns={dayColumns}
+                        rows={(data.days ?? []).map((d, i) => ({ __idx: i, ...d }))}
+                        rowKey={(r) => String(r.__idx)}
+                        emptyIcon={CalendarCheck}
+                        emptyTitle="No shifts in this period"
+                        emptyDescription="This employee has no confirmed deployments in the selected range."
+                        className="max-h-72 overflow-y-auto"
+                      />
+                      {data.propertySummary && data.propertySummary.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5" aria-label="Per-property summary">
+                          {data.propertySummary.map((p) => (
+                            <span
+                              key={p.propertyName}
+                              className="inline-flex items-center gap-1 rounded-full border bg-muted/50 px-2.5 py-1 text-[11px]"
+                            >
+                              <MapPin className="h-3 w-3 text-primary" aria-hidden />
+                              <span className="font-medium">{p.propertyName}</span>
+                              <span className="text-muted-foreground">
+                                {p.shifts} shift{p.shifts === 1 ? "" : "s"} · {formatINR(p.earnings ?? 0)}
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Property focus summary — Daily Operations report */}
+                {def.type === "daily-operations" && propertyId && data?.totals && (
+                  <Card className="overflow-hidden print:break-inside-avoid">
+                    <div className="h-0.5 w-full bg-gradient-to-r from-teal-500/70 via-emerald-500/70 to-amber-500/70" aria-hidden />
+                    <CardHeader className="pb-0">
+                      <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                        <Building2 className="h-4 w-4 text-primary" aria-hidden />
+                        Day sheet — {String((data.meta as Record<string, unknown>)?.property ?? "property")}
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        Every employee who attended, their shift and the day's money at a glance
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="pt-2">
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {[
+                          { label: "Deployments", value: String(data.totals.deployments ?? 0) },
+                          { label: "Employees", value: String(data.totals.employees ?? 0) },
+                          { label: "Billing", value: formatINR(Number(data.totals.billing ?? 0)) },
+                          { label: "Payout", value: formatINR(Number(data.totals.payout ?? 0)) },
+                        ].map((s) => (
+                          <div key={s.label} className="rounded-lg border bg-muted/40 px-2.5 py-2 text-center">
+                            <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{s.label}</p>
+                            <p className="mt-0.5 text-sm font-bold tabular-nums">{s.value}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
                 {/* Trip-profit chart — only for the Trip Profitability report */}
                 {def.type === "trip-profit" && data?.chart && data.chart.length > 0 && (
                   <Card className="overflow-hidden print:break-inside-avoid">

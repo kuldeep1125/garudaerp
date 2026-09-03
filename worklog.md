@@ -320,3 +320,41 @@ Stage Summary:
 - Backup: 22 collections, no sessions; audit capped at 1,000. Restore/import is NOT implemented (documented Phase-2 candidate — needs conflict strategy).
 - agent-browser gotchas confirmed again: (1) sidebar refs go stale after each navigation — snapshot+grep+click in ONE shell call; (2) "More menu"/bottom-nav labels only exist at mobile viewport; Notifications VIEW reachable via Ctrl+K palette → "Notifications" option (TopBar bell opens the panel, not the view); (3) after server restart, wait ~4s before eval (page rehydrate).
 - Next-step candidates: palette per-entity quick actions (employee row → "Give advance"); backup RESTORE/import UI (danger zone, merge strategy); Hindi for status badges + filter OPTIONS + report titles (REPORTS array is module-level EN by design); trips-view trip-detail dialog with per-trip payment records; notification-arrival E2E automation script (Task 11's visibilitychange-dispatch trick remains reusable).
+
+---
+Task ID: 14
+Agent: main (orchestrator)
+Task: User mega-request round — remove fake data/seeder; UNDO system for wrong entries with zero mismatch; chart visibility fix (dark+light); professional Indian theme/fonts/icons; detailed reports (property day-sheet + employee day-by-day); mobile+laptop ease; data integrity checker; settings danger-zone reset.
+
+Work Log:
+- ENV: dev server was up (200). One mid-session restart was REQUIRED after Prisma client regeneration (`pkill -f "next dev"` + setsid one-liner) — the running server kept the pre-schema client and threw `Unknown argument 'undoneAt'` on first undo attempt. Remember: any `db:generate` needs a dev-server restart.
+- FAKER DATA REMOVED: `scripts/seed.ts` DELETED. New `scripts/reset.ts` wipes all business data, KEEPS master data (shifts DAY/NIGHT, expense categories, app settings) + creates single login admin/admin123 (name "Owner"). DB reset to pristine (1 owner, 0 business records) TWICE (mid-QA + final) — user gets a clean manual-testing slate.
+- SCHEMA: AuditLog gained `undoneAt DateTime?` + fixed corrupted `@@index(odule, createdAt])` → `@@index([module, createdAt])` + new `@@index([recordId])`. db:push OK.
+- UNDO SYSTEM (flagship):
+  - `POST /api/undo` {auditLogId} OR {module, recordId}: resolves latest non-undone audit entry (actions CREATE/PAYMENT/STATUS/UPDATE/DELETE), reverses inside ONE transaction, marks `undoneAt`, writes UNDO audit entry (prev/newValue swapped).
+  - Reversal matrix: PAYMENT:PAYMENT/CREATE → delete payment + recomputeDeploymentPaid (FIFO re-alloc); EMI:PAYMENT → restore status+paidDate=null + delete expense ref EMI-<id>; ADVANCE:CREATE → guard settlementId; TRIP:CREATE → guard paidAmount>0; TRIP:PAYMENT → restore paidAmount/paymentStatus; MAINTENANCE UPDATE→status≠DONE → delete expense ref MNT-<id>; DEPLOYMENT:STATUS/UPDATE → restore + recompute; generic UPDATE/STATUS → restore previousValue fields (EMI paidDate special-case); DELETE → recreate from previousValue via DMMF `pickColumns` (strips non-columns, REJECTS snapshots missing required fields — no half-records).
+  - `_shared.tsx`: `useMutation().mutate(fn, success, undoResolver)` — resolver returns {module, recordId, onUndo}; success toast gains 8s Undo action → `undoRequest()` helper (accepts auditLogId for exact reversal).
+  - Wired: GiveAdvanceDialog, RecordPaymentDialog (_shared), trips (create/payment/cancel), expenses (create/update/delete), deployments (status), vehicle-detail (EMI pay + maintenance done), employee-detail (adjustment).
+  - audit-view: per-row Undo button for undoable entries + violet "Reversed" chip for undoneAt entries; UNDO/PAYMENT/STATUS badge tones added.
+- CHARTS/THEME (both-mode visibility):
+  - ROOT CAUSE: charts used `hsl(var(--border))` etc. but vars are complete oklch values → invalid CSS → default fallbacks; plus fixed hex CHART_COLORS invisible-ish on dark.
+  - Fixed 12 `hsl(var(--…))` occurrences (_shared, dashboard-view, sidebar.tsx shadow). CHART_COLORS now `var(--chart-1..5)`. AXIS_TICK/TOOLTIP/CartesianGrid/cursors → var(--*) with tooltip shadow. globals.css: global `.recharts-text`/`.recharts-legend-item-text`/`.recharts-pie-label-text` theme-following fills.
+  - Palette (Indian professional): light = warm ivory bg `oklch(0.982 0.006 95)` + deep emerald primary `0.5 0.11 165` + saffron accent `0.945 0.035 80`; dark = deep green-charcoal `0.165 0.012 165` + luminous emerald `0.755` + saffron-brown accent; chart-1..5 tuned per mode (light deep 0.5-0.62 L, dark luminous 0.72-0.82 L). Scrollbar thumb uses foreground-mix.
+- FONTS: Geist → Inter (UI, tnum-friendly) + JetBrains Mono (codes/kbd). next/font var names kept `--font-geist-sans/mono` = zero downstream changes. themeColor viewport now light/dark pair.
+- REPORTS DETAIL (user's explicit ask):
+  - `employee-earnings?employeeId=` → adds `employee` header + `days[]` (date/property/shift/status/rate/earnings) + `propertySummary[]` + `dayTotals`.
+  - `daily-operations?propertyId=` → filters + `totals.employees` + `propertySummary[]` rollup; meta now `{date, property}` (cuid stripped after QA nit).
+  - reports-view: employee Select (label `Name (code)`) → drill-down card (gradient hairline, stat chips, day-by-day DataTable with ShiftPill DAY/NIGHT, property chips); property Select → day-sheet card (4 stat chips). Selectors reset on report switch. Both cards inside `.print-area` (print/PDF included). Mobile: DataTable auto card-mode.
+- INTEGRITY + RESET (zero-mismatch trust):
+  - `GET /api/settings/integrity` → 6 checks (allocation-drift, paid-cancelled, orphan-payments, trip-overcollect, settlement-drift via netPayable identity, missing category links); `POST` → auto-repair (zero paid on CANCELLED + recomputeDeploymentPaid for ALL properties in one tx). NEVER touches source records.
+  - `POST /api/settings/reset` {confirm:"RESET"} → wipes business tables (keeps owners/sessions/master data) + audit entry.
+  - settings-view: IntegrityCard (status banner, per-check OK/count pills, Re-run + conditional Auto-repair) + DangerZoneCard (AlertDialog with typed-RESET confirm, destructive styling).
+- QA (agent-browser): login admin/admin123 ✓; theme sweep light+dark @1280 (dash stat chips, area chart legend luminous in dark, drill-down cards) ✓; mobile 375 (bottom nav, settings/reports stacking, day-table card-mode) ✓; E2E: employee EMP-001 create → advance ₹500 (Undo toast visible) → advance ₹500 again → audit-view Undo → outstanding 1000→500 EXACTLY ✓; property + contract (₹600/₹450) + deploy SCHEDULED → CONFIRMED (undo toast) ✓; daily-operations day-sheet (1 dep/1 emp/₹600/₹450) ✓; employee-earnings drill-down (1 day, DAY pill, ₹450, net −₹50 honest math) ✓; API payment-undo: create ₹250 → PARTIAL 250 → undo → UNPAID 0 → integrity all OK ✓; console: zero errors, 1 pre-existing DialogContent aria warning.
+
+Stage Summary:
+- CREDENTIALS FOR USER: username `admin` / password `admin123` (single owner, no demo accounts).
+- Undo contract: modules PAYMENT/ADVANCE/ADJUSTMENT/EXPENSE/DEPLOYMENT/TRIP/EMI/MAINTENANCE/EMPLOYEE/PROPERTY/CLIENT/VEHICLE/CONTRACT × actions CREATE/PAYMENT/STATUS/UPDATE/DELETE. FINALIZE/GENERATE/LOGIN deliberately NOT undoable (locked financial events). DELETE-restore requires full-snapshot previousValue (DMMF-validated) — only expense DELETE currently snapshots partial fields, so its restore will 409 politely until snapshots are widened.
+- Any new chart must use `var(--chart-N)` / `var(--border)` etc. — NEVER `hsl(var(--…))` (vars are complete oklch values) and never raw hex.
+- useMutation 3rd arg (undo resolver) is optional — old call sites unaffected; wire it into any NEW financial mutation.
+- Integrity repair is derived-only by design; if trip payment records ever move to a separate table, extend repair accordingly.
+- Next-step candidates: widen DELETE audit snapshots to full rows (enables true restore); settlement draft GENERATE undo; per-employee PDF payslip from drill-down card; Hindi coverage for report titles/filters; backup RESTORE import UI; notification-arrival E2E automation.

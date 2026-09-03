@@ -8,10 +8,10 @@ import { DataTable, type Column } from "@/components/shared/data-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ChevronLeft, ChevronRight, History } from "lucide-react";
+import { ChevronLeft, ChevronRight, History, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  ListResp, Option, SelectInput, errMessage, fmtDay, useAsync,
+  ListResp, Option, SelectInput, errMessage, fmtDay, undoRequest, useAsync,
 } from "./_shared";
 
 // ---------------------------------------------------------------------------
@@ -27,6 +27,7 @@ interface AuditRec {
   recordLabel?: string | null;
   previousValue?: unknown;
   newValue?: unknown;
+  undoneAt?: string | null;
   createdAt: string;
 }
 
@@ -36,7 +37,14 @@ const MODULES = [
   "MAINTENANCE", "OWNER", "SETTINGS",
 ];
 
-const ACTIONS = ["CREATE", "UPDATE", "DELETE", "STATUS", "LOGIN", "LOGOUT", "FINALIZE", "PAYMENT", "GENERATE", "TOGGLE"];
+const ACTIONS = ["CREATE", "UPDATE", "DELETE", "STATUS", "LOGIN", "LOGOUT", "FINALIZE", "PAYMENT", "GENERATE", "TOGGLE", "UNDO"];
+
+const UNDOABLE_ACTIONS = new Set(["CREATE", "UPDATE", "DELETE", "STATUS", "PAYMENT"]);
+const UNDOABLE_MODULES = new Set(["PAYMENT", "ADVANCE", "ADJUSTMENT", "EXPENSE", "DEPLOYMENT", "TRIP", "EMI", "MAINTENANCE", "EMPLOYEE", "PROPERTY", "CLIENT", "VEHICLE", "CONTRACT"]);
+
+function canUndo(r: AuditRec): boolean {
+  return UNDOABLE_ACTIONS.has(r.action) && UNDOABLE_MODULES.has(r.module) && !r.undoneAt;
+}
 
 const MODULE_OPTIONS: Option[] = [{ label: "All modules", value: "" }, ...MODULES.map((m) => ({ label: m, value: m }))];
 const ACTION_OPTIONS: Option[] = [{ label: "All actions", value: "" }, ...ACTIONS.map((a) => ({ label: a, value: a }))];
@@ -51,6 +59,9 @@ const ACTION_TONES: Record<string, string> = {
   CREATE: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
   UPDATE: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
   DELETE: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  UNDO: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
+  PAYMENT: "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
+  STATUS: "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
 };
 
 function ActionBadge({ action }: { action: string }) {
@@ -164,6 +175,10 @@ export default function AuditView(_props: ViewProps) {
   const pageSize = data?.pageSize ?? PAGE_SIZE;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
+  const undoRow = async (r: AuditRec) => {
+    await undoRequest({ auditLogId: r.id, onUndo: () => void reload() });
+  };
+
   const columns: Column<AuditRec>[] = [
     {
       key: "createdAt",
@@ -204,6 +219,30 @@ export default function AuditView(_props: ViewProps) {
           <span className="text-muted-foreground">—</span>
         ),
       value: (r) => `${jsonBrief(r.previousValue)} → ${jsonBrief(r.newValue)}`,
+      hideOnMobile: true,
+    },
+    {
+      key: "undo",
+      label: "",
+      render: (r) =>
+        canUndo(r) ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="min-h-8 gap-1 px-2 text-[11px]"
+            onClick={() => void undoRow(r)}
+            aria-label={`Undo ${r.action.toLowerCase()} on ${r.module}`}
+          >
+            <Undo2 className="h-3 w-3" aria-hidden />
+            Undo
+          </Button>
+        ) : r.undoneAt ? (
+          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-violet-600 dark:text-violet-400" title={fmtDay(r.undoneAt)}>
+            <Undo2 className="h-3 w-3" aria-hidden />
+            Reversed
+          </span>
+        ) : null,
+      value: () => "",
     },
   ];
 

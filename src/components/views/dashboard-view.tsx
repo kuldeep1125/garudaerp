@@ -93,9 +93,9 @@ const ACTION_BADGE: Record<string, string> = {
 
 const TOOLTIP_STYLE = {
   borderRadius: 10,
-  border: "1px solid hsl(var(--border))",
-  background: "hsl(var(--card))",
-  color: "hsl(var(--foreground))",
+  border: "1px solid var(--border)",
+  background: "var(--card)",
+  color: "var(--foreground)",
   fontSize: 12,
 } as const;
 

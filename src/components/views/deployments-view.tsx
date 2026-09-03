@@ -211,7 +211,7 @@ export default function DeploymentsView({ params }: ViewProps) {
   };
 
   const changeStatus = async (d: DeploymentRec, next: string) => {
-    const res = await mutate(() => api.put(`/api/deployments/${d.id}/status`, { status: next }), `Marked ${next.replace("_", " ").toLowerCase()}`);
+    const res = await mutate(() => api.put(`/api/deployments/${d.id}/status`, { status: next }), `Marked ${next.replace("_", " ").toLowerCase()}`, () => ({ module: "DEPLOYMENT", recordId: d.id, onUndo: () => void load() }));
     if (res.ok) { setDetail(null); void load(); }
   };
 

@@ -1,21 +1,31 @@
 import { db } from "@/lib/db";
-import { handleRoute, parseDate, endOfDay } from "@/lib/api-helpers";
+import { handleRoute, parseDate, endOfDay, HttpError } from "@/lib/api-helpers";
 import { round2 } from "@/lib/money";
 import { dayKey } from "@/app/api/_lib/engine";
 
-// GET /api/reports/daily-operations?date=YYYY-MM-DD (default today)
+// GET /api/reports/daily-operations?date=YYYY-MM-DD[&propertyId=]
 // Every deployment of the day (all statuses) for the operations sheet.
+// With propertyId: filtered to one property + a property header + per-property
+// summary rows (who came, which shift, rates, billing vs payout).
 export const GET = handleRoute(async ({ req }) => {
   const sp = new URL(req.url).searchParams;
   const date = sp.get("date") ? parseDate(sp.get("date")) : new Date();
   const from = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const to = endOfDay(date);
+  const propertyId = sp.get("propertyId");
+
+  let propertyName: string | null = null;
+  if (propertyId) {
+    const prop = await db.property.findUnique({ where: { id: propertyId }, select: { name: true } });
+    if (!prop) throw new HttpError(404, "Property not found");
+    propertyName = prop.name;
+  }
 
   const deps = await db.deployment.findMany({
-    where: { date: { gte: from, lte: to } },
+    where: { date: { gte: from, lte: to }, ...(propertyId ? { propertyId } : {}) },
     orderBy: [{ property: { name: "asc" } }, { shift: "asc" }, { employee: { fullName: "asc" } }],
     include: {
-      employee: { select: { fullName: true, code: true } },
+      employee: { select: { fullName: true, code: true, designation: true } },
       property: { select: { name: true } },
     },
   });
@@ -25,6 +35,7 @@ export const GET = handleRoute(async ({ req }) => {
     propertyName: d.property.name,
     employeeName: d.employee.fullName,
     employeeCode: d.employee.code,
+    designation: d.employee.designation,
     shift: d.shift,
     status: d.status,
     billingRate: round2(d.billingRate),
@@ -36,23 +47,51 @@ export const GET = handleRoute(async ({ req }) => {
   const active = rows.filter((r) => r.status !== "CANCELLED");
   const totals = {
     deployments: rows.length,
+    employees: new Set(active.map((r) => r.employeeCode)).size,
     billing: round2(active.reduce((s, r) => s + r.billing, 0)),
     payout: round2(active.reduce((s, r) => s + r.payout, 0)),
   };
 
-  return {
-    columns: [
-      { key: "propertyName", label: "Property", type: "string" },
-      { key: "employeeName", label: "Employee", type: "string" },
-      { key: "shift", label: "Shift", type: "string" },
-      { key: "status", label: "Status", type: "string" },
-      { key: "billingRate", label: "Billing Rate", type: "currency" },
-      { key: "payoutRate", label: "Payout Rate", type: "currency" },
-      { key: "billing", label: "Billing", type: "currency" },
-      { key: "payout", label: "Payout", type: "currency" },
-    ],
+  // Per-property rollup — how many employees & shifts per property that day
+  const propMap = new Map<string, { propertyName: string; employees: number; dayShifts: number; nightShifts: number; billing: number; payout: number }>();
+  const empSeen = new Map<string, Set<string>>();
+  for (const r of active) {
+    const p = propMap.get(r.propertyName) ?? {
+      propertyName: r.propertyName, employees: 0, dayShifts: 0, nightShifts: 0, billing: 0, payout: 0,
+    };
+    const seen = empSeen.get(r.propertyName) ?? new Set<string>();
+    if (!seen.has(r.employeeCode)) {
+      seen.add(r.employeeCode);
+      p.employees++;
+      empSeen.set(r.propertyName, seen);
+    }
+    if (r.shift.toUpperCase().includes("DAY")) p.dayShifts++;
+    if (r.shift.toUpperCase().includes("NIGHT")) p.nightShifts++;
+    p.billing = round2(p.billing + r.billing);
+    p.payout = round2(p.payout + r.payout);
+    propMap.set(r.propertyName, p);
+  }
+
+  const columns = [
+    { key: "propertyName", label: "Property", type: "string" },
+    { key: "employeeName", label: "Employee", type: "string" },
+    { key: "employeeCode", label: "Code", type: "string" },
+    { key: "shift", label: "Shift", type: "string" },
+    { key: "status", label: "Status", type: "string" },
+    { key: "billingRate", label: "Billing Rate", type: "currency" },
+    { key: "payoutRate", label: "Payout Rate", type: "currency" },
+    { key: "billing", label: "Billing", type: "currency" },
+    { key: "payout", label: "Payout", type: "currency" },
+  ];
+
+  const payload: Record<string, unknown> = {
+    columns: propertyId
+      ? columns.filter((c) => c.key !== "propertyName")
+      : columns,
     rows,
     totals,
-    meta: { date: dayKey(date) },
+    meta: { date: dayKey(date), ...(propertyId && propertyName ? { property: propertyName } : {}) },
+    propertySummary: [...propMap.values()].sort((a, b) => b.billing - a.billing),
   };
+  return payload;
 });

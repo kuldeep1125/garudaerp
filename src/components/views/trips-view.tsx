@@ -146,7 +146,8 @@ function NewTripDialog({ open, onOpenChange, vehicles, clients, onDone }: {
         advanceReceived: form.advanceReceived ? parseAmount(form.advanceReceived) : undefined,
         notes: form.notes || undefined,
       }),
-      "Rental created — vehicle marked as engaged"
+      "Rental created — vehicle marked as engaged",
+      (data) => ({ module: "TRIP", recordId: (data as { id: string }).id, onUndo: onDone })
     );
     if (res.ok) { onOpenChange(false); onDone(); }
   };
@@ -308,14 +309,15 @@ export default function TripsView({ params, navigate }: ViewProps) {
     if (amt <= 0) { toast.error("Enter a valid amount"); return; }
     const res = await mutate(
       () => api.post(`/api/trips/${payFor}/payment`, { amount: amt, method: payForm.method || undefined }),
-      `Payment of ${formatINR(amt)} recorded`
+      `Payment of ${formatINR(amt)} recorded`,
+      () => ({ module: "TRIP", recordId: payFor, onUndo: () => void trips.reload() })
     );
     if (res.ok) { setPayFor(null); void trips.reload(); }
   };
 
   const cancelTrip = async () => {
     if (!cancelFor) return;
-    const res = await mutate(() => api.put(`/api/trips/${cancelFor}`, { status: "CANCELLED" }), "Trip cancelled");
+    const res = await mutate(() => api.put(`/api/trips/${cancelFor}`, { status: "CANCELLED" }), "Trip cancelled", () => ({ module: "TRIP", recordId: cancelFor, onUndo: () => void trips.reload() }));
     if (res.ok) { setCancelFor(null); setDetailId(null); void trips.reload(); }
   };
 

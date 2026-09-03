@@ -151,8 +151,8 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
       vehicleId: form.business === "TRANSPORT" && form.vehicleId ? form.vehicleId : undefined,
     };
     const res = editing
-      ? await mutate(() => api.put(`/api/expenses/${expense!.id}`, body), "Expense updated")
-      : await mutate(() => api.post("/api/expenses", body), "Expense recorded");
+      ? await mutate(() => api.put(`/api/expenses/${expense!.id}`, body), "Expense updated", () => ({ module: "EXPENSE", recordId: expense!.id, onUndo: onDone }))
+      : await mutate(() => api.post("/api/expenses", body), "Expense recorded", (data) => ({ module: "EXPENSE", recordId: (data as { id: string }).id, onUndo: onDone }));
     if (res.ok) { onOpenChange(false); onDone(); }
   };
 
@@ -401,7 +401,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
 
   const removeExpense = async () => {
     if (!deleteTarget) return;
-    const res = await mutate(() => api.del(`/api/expenses/${deleteTarget.id}`), "Expense deleted");
+    const res = await mutate(() => api.del(`/api/expenses/${deleteTarget.id}`), "Expense deleted", () => ({ module: "EXPENSE", recordId: deleteTarget.id, onUndo: () => void expenses.reload() }));
     if (res.ok) void expenses.reload();
     setDeleteTarget(null);
   };
