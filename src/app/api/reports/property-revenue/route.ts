@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { handleRoute } from "@/lib/api-helpers";
 import { round2 } from "@/lib/money";
-import { BILLABLE, dayKey, reportRange } from "@/app/api/_lib/engine";
+import { dayKey, reportRange } from "@/app/api/_lib/engine";
 
 // GET /api/reports/property-revenue?from=&to=
 // Per-property billing vs collections in the range (received = payments dated in range).
@@ -11,7 +11,7 @@ export const GET = handleRoute(async ({ req }) => {
 
   const [deps, payAgg] = await Promise.all([
     db.deployment.findMany({
-      where: { date: { gte: from, lte: to }, status: { in: [...BILLABLE] } },
+      where: { date: { gte: from, lte: to } },
       select: {
         propertyId: true,
         property: { select: { name: true } },

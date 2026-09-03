@@ -7,8 +7,7 @@ export const GET = handleRoute(async ({ params }) => {
   const { id } = params;
   const property = await db.property.findUnique({ where: { id } });
   if (!property) throw new HttpError(404, "Property not found");
-  const [contracts, ledger, deployments, payments] = await Promise.all([
-    db.contract.findMany({ where: { propertyId: id }, orderBy: { startDate: "desc" } }),
+  const [ledger, deployments, payments] = await Promise.all([
     loadPropertyLedger(id),
     db.deployment.findMany({
       where: { propertyId: id },
@@ -20,7 +19,6 @@ export const GET = handleRoute(async ({ params }) => {
   ]);
   return {
     property,
-    contracts,
     ledger: { billed: ledger.billed, received: ledger.received, outstanding: ledger.outstanding },
     deployments: deployments.map(serializeDeployment),
     payments,
@@ -49,6 +47,13 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
   }
   if (body.status !== undefined) data.status = String(body.status).toUpperCase();
   if (body.startDate !== undefined) data.startDate = body.startDate ? new Date(String(body.startDate)) : null;
+  // Rate change: applies to FUTURE deployments only — historical rows keep their
+  // snapshotted rates, so past profit/billing numbers can never change.
+  if (body.billingRate !== undefined) {
+    const rate = Math.round(Number(body.billingRate) * 100) / 100;
+    if (!Number.isFinite(rate) || rate < 0) throw new HttpError(400, "Invalid billing rate");
+    data.billingRate = rate;
+  }
 
   for (const key of Object.keys(data)) {
     previous[key] = (existing as unknown as Record<string, unknown>)[key];

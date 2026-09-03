@@ -1,8 +1,8 @@
 import { db } from "@/lib/db";
 import { handleRoute, readBody, requireFields, parsePage, HttpError } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
-import { loadAllLedgers } from "@/app/api/_lib/engine";
-import { startOfDay } from "@/app/api/_lib/engine";
+import { round2 } from "@/lib/money";
+import { loadAllLedgers, startOfDay } from "@/app/api/_lib/engine";
 
 export const GET = handleRoute(async ({ req }) => {
   const sp = new URL(req.url).searchParams;
@@ -15,25 +15,15 @@ export const GET = handleRoute(async ({ req }) => {
   }
   if (status) where.status = status.toUpperCase();
 
-  const [rows, total, ledgers, activeContracts] = await Promise.all([
+  const [rows, total, ledgers] = await Promise.all([
     db.property.findMany({ where, orderBy: { name: "asc" }, skip, take: pageSize }),
     db.property.count({ where }),
     loadAllLedgers(),
-    db.contract.findMany({
-      where: { status: "ACTIVE" },
-      orderBy: { startDate: "desc" },
-      select: { propertyId: true, name: true },
-    }),
   ]);
-  const activeByProp = new Map<string, string>();
-  for (const c of activeContracts) {
-    if (!activeByProp.has(c.propertyId)) activeByProp.set(c.propertyId, c.name);
-  }
   const items = rows.map((p) => {
     const led = ledgers.map.get(p.id);
     return {
       ...p,
-      activeContractName: activeByProp.get(p.id) ?? null,
       totalBilled: led?.billed ?? 0,
       totalReceived: led?.received ?? 0,
       totalOutstanding: led?.outstanding ?? 0,
@@ -47,6 +37,8 @@ export const POST = handleRoute(async ({ owner, req }) => {
   requireFields(body, ["name"]);
   const name = String(body.name).trim();
   if (!name) throw new HttpError(400, "name cannot be empty");
+  const billingRate = round2(Number(body.billingRate ?? 0) || 0);
+  if (billingRate <= 0) throw new HttpError(400, "Set the billing rate (₹ per shift) — it is used to bill every deployment automatically.");
   const property = await db.property.create({
     data: {
       name,
@@ -58,6 +50,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
       whatsapp: body.whatsapp ? String(body.whatsapp) : null,
       email: body.email ? String(body.email) : null,
       startDate: body.startDate ? new Date(String(body.startDate)) : startOfDay(new Date()),
+      billingRate,
       status: body.status ? String(body.status).toUpperCase() : "ACTIVE",
       notes: body.notes ? String(body.notes) : null,
     },
@@ -68,7 +61,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
     module: "PROPERTY",
     recordId: property.id,
     recordLabel: property.name,
-    newValue: { name: property.name, status: property.status },
+    newValue: { name: property.name, status: property.status, billingRate },
   });
-  return { ...property, activeContractName: null, totalBilled: 0, totalReceived: 0, totalOutstanding: 0 };
+  return { ...property, totalBilled: 0, totalReceived: 0, totalOutstanding: 0 };
 });

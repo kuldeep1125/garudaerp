@@ -4,7 +4,6 @@ import { db } from "@/lib/db";
 import { round2 } from "@/lib/money";
 import { endOfDay } from "@/lib/api-helpers";
 import {
-  BILLABLE,
   EPS,
   dayKey,
   tripTarget,
@@ -50,14 +49,11 @@ export interface CollectionsBlock {
   byProperty: { propertyId: string; propertyName: string; outstanding: number }[];
 }
 
-const DAY_SHIFT_RE = /DAY/i;
-const NIGHT_SHIFT_RE = /NIGHT/i;
-
 /** Manpower KPI block for [from, to]. Pending = all-time FIFO outstanding. */
 export async function manpowerBlock(from: Date, to: Date): Promise<ManpowerBlock> {
   const [deps, payAgg, advAgg, expAgg, ledgers] = await Promise.all([
     db.deployment.findMany({
-      where: { date: { gte: from, lte: to }, status: { in: [...BILLABLE] } },
+      where: { date: { gte: from, lte: to } },
       select: { employeeId: true, propertyId: true, shift: true, billingAmount: true, payoutAmount: true },
     }),
     db.propertyPayment.aggregate({ where: { date: { gte: from, lte: to } }, _sum: { amount: true } }),
@@ -76,8 +72,10 @@ export async function manpowerBlock(from: Date, to: Date): Promise<ManpowerBlock
     propertyIds.add(d.propertyId);
     billing += d.billingAmount;
     payout += d.payoutAmount;
-    if (DAY_SHIFT_RE.test(d.shift)) dayShifts++;
-    if (NIGHT_SHIFT_RE.test(d.shift)) nightShifts++;
+    // FULL covers both halves of the day → counts in day AND night coverage.
+    const s = d.shift.toUpperCase();
+    if (s === "DAY" || s === "FULL") dayShifts++;
+    if (s === "NIGHT" || s === "FULL") nightShifts++;
   }
   let pending = 0;
   for (const led of ledgers.map.values()) pending += led.outstanding;
@@ -186,7 +184,7 @@ export type TrendPoint = { date: string; billing: number; payout: number; margin
 export async function manpowerTrend(): Promise<{ trend: TrendPoint[] }> {
   const { from, to, keys } = lastNDays(14);
   const deps = await db.deployment.findMany({
-    where: { date: { gte: from, lte: to }, status: { in: [...BILLABLE] } },
+    where: { date: { gte: from, lte: to } },
     select: { date: true, billingAmount: true, payoutAmount: true },
   });
   const byDay = new Map<string, { billing: number; payout: number }>();

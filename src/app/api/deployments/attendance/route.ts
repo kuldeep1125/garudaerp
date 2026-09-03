@@ -1,11 +1,11 @@
 import { db } from "@/lib/db";
 import { handleRoute } from "@/lib/api-helpers";
-import { BILLABLE } from "@/app/api/_lib/engine";
+import { SHIFT_UNITS } from "@/app/api/_lib/engine";
 
 // GET /api/deployments/attendance?month=YYYY-MM
-// Attendance-style month grid: per-employee BILLABLE shift counts for every
-// day of the month. Rows are all active employees (worked days still visible),
-// cells carry the number of shifts worked that day (0..n, day+night combine).
+// Attendance-style month grid: per-employee shift-unit counts for every day of
+// the month (DAY/NIGHT = 1 unit, FULL = 2 units — day + night). Rows are all
+// active employees, cells carry the number of shift units worked that day.
 export const GET = handleRoute(async ({ req }) => {
   const sp = new URL(req.url).searchParams;
   const now = new Date();
@@ -36,8 +36,8 @@ export const GET = handleRoute(async ({ req }) => {
       orderBy: { fullName: "asc" },
     }),
     db.deployment.findMany({
-      where: { date: { gte: from, lte: to }, status: { in: [...BILLABLE] } },
-      select: { employeeId: true, date: true },
+      where: { date: { gte: from, lte: to } },
+      select: { employeeId: true, date: true, shift: true },
     }),
   ]);
 
@@ -46,8 +46,9 @@ export const GET = handleRoute(async ({ req }) => {
   for (const d of deps) {
     const dk = d.date;
     const dateStr = `${dk.getFullYear()}-${String(dk.getMonth() + 1).padStart(2, "0")}-${String(dk.getDate()).padStart(2, "0")}`;
-    cell.set(`${d.employeeId}|${dateStr}`, (cell.get(`${d.employeeId}|${dateStr}`) ?? 0) + 1);
-    totalBy.set(d.employeeId, (totalBy.get(d.employeeId) ?? 0) + 1);
+    const units = SHIFT_UNITS[String(d.shift).toUpperCase()] ?? 1;
+    cell.set(`${d.employeeId}|${dateStr}`, (cell.get(`${d.employeeId}|${dateStr}`) ?? 0) + units);
+    totalBy.set(d.employeeId, (totalBy.get(d.employeeId) ?? 0) + units);
   }
 
   const rows = employees.map((e) => ({
@@ -65,6 +66,6 @@ export const GET = handleRoute(async ({ req }) => {
     month: `${year}-${String(month + 1).padStart(2, "0")}`,
     dates,
     rows,
-    totalShifts: deps.length,
+    totalShifts: deps.reduce((s, d) => s + (SHIFT_UNITS[String(d.shift).toUpperCase()] ?? 1), 0),
   };
 });

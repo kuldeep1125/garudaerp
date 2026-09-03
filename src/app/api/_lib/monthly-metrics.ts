@@ -1,12 +1,12 @@
 import { db } from "@/lib/db";
 import { round2 } from "@/lib/money";
-import { BILLABLE } from "./engine";
+import {} from "./engine";
 
 // Shared month-metrics engine — used by:
 //   - GET /api/dashboard/monthly-summary   (dashboard card)
 //   - GET/POST /api/owners/monthly-email   (owner monthly summary email mock)
 // Money semantics (kept consistent across both consumers):
-//   - manpowerBilling / payout: BILLABLE deployments dated in the month
+//   - manpowerBilling / payout: deployments dated in the month
 //   - collections: property payments received in the month (may settle earlier billing)
 //   - transportRevenue: trips STARTING in the month, billing basis (finalAmount ?? agreed+extra)
 //   - transportCollected: paidAmount of those same trips (cumulative field — approximation)
@@ -59,7 +59,7 @@ export async function metricsFor(month: string): Promise<MonthMetrics> {
   const { from, to } = boundsOf(month);
   const [deps, payAgg, advAgg, trips, expenses] = await Promise.all([
     db.deployment.aggregate({
-      where: { date: { gte: from, lte: to }, status: { in: [...BILLABLE] } },
+      where: { date: { gte: from, lte: to } },
       _sum: { billingAmount: true, payoutAmount: true },
       _count: true,
     }),

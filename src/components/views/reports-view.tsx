@@ -74,7 +74,7 @@ interface ReportResp {
   chart?: { label: string; revenue: number; cost: number; profit: number; marginPct: number }[] | null;
   // Drill-down extras (employee-earnings with employeeId)
   employee?: { id: string; fullName: string; code: string; designation: string | null; status: string } | null;
-  days?: { date: string; propertyName: string; shift: string; status: string; payoutRate: number; earnings: number }[];
+  days?: { date: string; propertyName: string; shift: string; payoutRate: number; earnings: number }[];
   dayTotals?: { daysWorked: number; shifts: number; earnings: number };
   propertySummary?: { propertyName: string; shifts?: number; employees?: number; dayShifts: number; nightShifts: number; earnings?: number; billing?: number; payout?: number }[];
 }
@@ -159,17 +159,18 @@ function fmtTotal(v: unknown, cols: ReportColumn[], key: string): string {
   return String(v ?? "—");
 }
 
-/** Small shift badge — sun for DAY, moon for NIGHT. */
+/** Small shift badge — sun for DAY, moon for NIGHT, dual for FULL. */
 function ShiftPill({ shift }: { shift: string }) {
-  const isNight = shift.toUpperCase().includes("NIGHT");
+  const s = shift.toUpperCase();
+  const isNight = s === "NIGHT";
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
-        isNight ? "bg-secondary text-secondary-foreground" : "bg-accent text-accent-foreground"
+        s === "FULL" ? "bg-primary text-primary-foreground" : isNight ? "bg-secondary text-secondary-foreground" : "bg-accent text-accent-foreground"
       )}
     >
-      {isNight ? "NIGHT" : shift.toUpperCase().includes("DAY") ? "DAY" : shift.toUpperCase()}
+      {s === "DAY" ? "DAY" : s === "NIGHT" ? "NIGHT" : "FULL (D+N)"}
     </span>
   );
 }
@@ -256,7 +257,6 @@ export default function ReportsView(_props: ViewProps) {
       { key: "date", label: "Date", primary: true, render: (r) => fmtDayText(String(r.date)), value: (r) => String(r.date) },
       { key: "propertyName", label: "Property", render: (r) => <span className="flex items-center gap-1"><MapPin className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />{String(r.propertyName)}</span>, value: (r) => String(r.propertyName) },
       { key: "shift", label: "Shift", render: (r) => <ShiftPill shift={String(r.shift)} />, value: (r) => String(r.shift) },
-      { key: "status", label: "Status", hideOnMobile: true, render: (r) => String(r.status), value: (r) => String(r.status) },
       { key: "payoutRate", label: "Rate", hideOnMobile: true, className: "text-right", render: (r) => formatINR(Number(r.payoutRate)), value: (r) => String(r.payoutRate) },
       { key: "earnings", label: "Earned", className: "text-right", render: (r) => <span className="font-semibold tabular-nums">{formatINR(Number(r.earnings))}</span>, value: (r) => String(r.earnings) },
     ],

@@ -2,13 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { formatINR } from "@/lib/money";
+import { formatINR, parseAmount } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
 import { useNav } from "@/components/providers";
 import { PageHeader } from "@/components/shared/page-header";
 import { DataTable, type Column } from "@/components/shared/data-table";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -19,16 +18,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { toast } from "sonner";
 import {
-  Building, Pencil, Plus, Phone, MessageCircle, Mail, MapPin, Wallet, ScrollText, CalendarCheck,
+  Building, Pencil, Phone, MessageCircle, Mail, MapPin, Wallet, CalendarCheck, IndianRupee,
 } from "lucide-react";
 import {
-  BarsCompare, CHART_COLORS, ContractFormDialog, ContractRec, DeploymentRec, Field, PaymentRec,
+  BarsCompare, CHART_COLORS, DeploymentRec, Field, PaymentRec,
   PropertyRec, ShiftBadgeInline, errMessage, fmtDay, useMutation,
 } from "./_shared";
 
 interface Detail {
   property: PropertyRec;
-  contracts: ContractRec[];
   ledger: { billed: number; received: number; outstanding: number };
   deployments: DeploymentRec[];
   payments: PaymentRec[];
@@ -42,8 +40,10 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
-  const [contractOpen, setContractOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", brandName: "", type: "", contactPerson: "", contactNumber: "", whatsapp: "", email: "", address: "", notes: "" });
+  const [form, setForm] = useState({
+    name: "", brandName: "", type: "", billingRate: "", contactPerson: "", contactNumber: "",
+    whatsapp: "", email: "", address: "", notes: "",
+  });
   const { mutate, saving } = useMutation();
 
   const load = useCallback(async () => {
@@ -65,6 +65,7 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
     const p = data?.property;
     setForm({
       name: p?.name ?? "", brandName: p?.brandName ?? "", type: p?.type ?? "",
+      billingRate: p?.billingRate ? String(p.billingRate) : "",
       contactPerson: p?.contactPerson ?? "", contactNumber: p?.contactNumber ?? "",
       whatsapp: p?.whatsapp ?? "", email: p?.email ?? "", address: p?.address ?? "", notes: p?.notes ?? "",
     });
@@ -73,32 +74,17 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
 
   const submitEdit = async () => {
     if (!form.name.trim()) { toast.error("Name is required"); return; }
+    const rate = parseAmount(form.billingRate);
+    if (rate <= 0) { toast.error("Billing rate (₹ per shift) is required"); return; }
     const res = await mutate(() => api.put(`/api/properties/${id}`, {
       name: form.name.trim(), brandName: form.brandName || undefined, type: form.type || undefined,
+      billingRate: rate,
       contactPerson: form.contactPerson || undefined, contactNumber: form.contactNumber || undefined,
       whatsapp: form.whatsapp || undefined, email: form.email || undefined, address: form.address || undefined,
       notes: form.notes || undefined,
-    }), "Property updated");
+    }), "Property updated — new rate applies to future deployments only");
     if (res.ok) { setEditOpen(false); void load(); }
   };
-
-  const contractColumns: Column<ContractRec>[] = [
-    {
-      key: "name", label: "Contract", primary: true,
-      render: (r) => (
-        <div className="min-w-0">
-          <p className="truncate font-medium">{r.name}</p>
-          <p className="text-[11px] text-muted-foreground">{fmtDay(r.startDate)} → {r.endDate ? fmtDay(r.endDate) : "open"}</p>
-        </div>
-      ),
-      value: (r) => r.name,
-    },
-    { key: "billing", label: "Billing", className: "text-right", value: (r) => formatINR(r.billingRate) },
-    { key: "payout", label: "Payout", className: "text-right", value: (r) => formatINR(r.payoutRate), hideOnMobile: true },
-    { key: "margin", label: "Margin", className: "text-right", value: (r) => formatINR(r.billingRate - r.payoutRate), hideOnMobile: true },
-    { key: "shift", label: "Shift", render: (r) => <ShiftBadgeInline shift={r.shift ?? "ALL"} />, value: (r) => r.shift ?? "ALL", hideOnMobile: true },
-    { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
-  ];
 
   const deployColumns: Column<DeploymentRec>[] = [
     { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
@@ -115,7 +101,7 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
     { key: "shift", label: "Shift", render: (r) => <ShiftBadgeInline shift={r.shift} />, value: (r) => r.shift },
     { key: "billingAmount", label: "Billing", className: "text-right", value: (r) => formatINR(r.billingAmount ?? 0) },
     { key: "payoutAmount", label: "Payout", className: "text-right", value: (r) => formatINR(r.payoutAmount ?? 0), hideOnMobile: true },
-    { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+    { key: "paid", label: "Paid", render: (r) => <StatusBadge status={r.paidStatus ?? "UNPAID"} />, value: (r) => r.paidStatus ?? "UNPAID", hideOnMobile: true },
   ];
 
   const payColumns: Column<PaymentRec>[] = [
@@ -158,14 +144,9 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
         subtitle={[p.type, p.brandName].filter(Boolean).join(" · ") || undefined}
         onBack={back}
         actions={
-          <>
-            <Button size="sm" className="h-9 gap-1.5" onClick={() => setContractOpen(true)}>
-              <Plus className="h-4 w-4" aria-hidden />Contract
-            </Button>
-            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={openEdit}>
-              <Pencil className="h-3.5 w-3.5" aria-hidden /><span className="hidden sm:inline">Edit</span>
-            </Button>
-          </>
+          <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={openEdit}>
+            <Pencil className="h-3.5 w-3.5" aria-hidden /><span className="hidden sm:inline">Edit</span>
+          </Button>
         }
       />
 
@@ -208,7 +189,15 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
       </Card>
 
       {/* Ledger stats */}
-      <div className="grid grid-cols-3 gap-2.5">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+          <p className="text-[11px] sm:text-xs font-medium text-muted-foreground">Billing rate</p>
+          <p className="mt-1.5 flex items-baseline gap-1 text-lg sm:text-xl font-bold tabular-nums text-primary">
+            <IndianRupee className="h-4 w-4 self-center" aria-hidden />
+            {formatINR(p.billingRate ?? 0)}
+            <span className="text-[10px] font-medium text-muted-foreground">/shift</span>
+          </p>
+        </CardContent></Card>
         <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
           <p className="text-[11px] sm:text-xs font-medium text-muted-foreground">Total Billed</p>
           <p className="mt-1.5 text-lg sm:text-xl font-bold tabular-nums">{formatINR(data.ledger.billed, { compact: true })}</p>
@@ -227,21 +216,14 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
         </Card>
       </div>
 
-      <Tabs defaultValue="contracts">
+      <Tabs defaultValue="deployments">
         <div className="overflow-x-auto no-scrollbar">
           <TabsList className="w-max min-w-full sm:min-w-0">
-            <TabsTrigger value="contracts">Contracts</TabsTrigger>
             <TabsTrigger value="deployments">Deployments</TabsTrigger>
             <TabsTrigger value="payments">Payments</TabsTrigger>
             <TabsTrigger value="monthly">Monthly</TabsTrigger>
           </TabsList>
         </div>
-
-        <TabsContent value="contracts" className="mt-3 space-y-3">
-          <p className="text-xs text-muted-foreground">Activating a new contract automatically ends the previous one.</p>
-          <DataTable columns={contractColumns} rows={data.contracts} rowKey={(r) => r.id} emptyIcon={ScrollText}
-            emptyTitle="No contracts" emptyDescription="Use the Add Contract button above to set billing & payout rates." />
-        </TabsContent>
 
         <TabsContent value="deployments" className="mt-3">
           <DataTable columns={deployColumns} rows={data.deployments ?? []} rowKey={(r) => r.id}
@@ -273,22 +255,22 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
         </TabsContent>
       </Tabs>
 
-      <ContractFormDialog
-        open={contractOpen}
-        onOpenChange={setContractOpen}
-        defaultPropertyId={id}
-        properties={[{ id, name: p.name }]}
-        onDone={load}
-      />
-
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Edit property</DialogTitle>
-            <DialogDescription>Update contact and address details.</DialogDescription>
+            <DialogDescription>Update details and the billing rate.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Name" required className="sm:col-span-2"><Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="h-10" /></Field>
+            <Field
+              label="Billing rate (₹/shift)"
+              required
+              className="sm:col-span-2"
+              hint="Applies to future deployments only — every past record keeps its original rate, so history and profit never change."
+            >
+              <Input type="number" inputMode="numeric" value={form.billingRate} onChange={(e) => setForm((f) => ({ ...f, billingRate: e.target.value }))} className="h-10" />
+            </Field>
             <Field label="Brand name"><Input value={form.brandName} onChange={(e) => setForm((f) => ({ ...f, brandName: e.target.value }))} className="h-10" /></Field>
             <Field label="Type"><Input value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} className="h-10" /></Field>
             <Field label="Contact person"><Input value={form.contactPerson} onChange={(e) => setForm((f) => ({ ...f, contactPerson: e.target.value }))} className="h-10" /></Field>

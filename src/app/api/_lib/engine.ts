@@ -14,10 +14,10 @@ export { handleRoute, readBody, requireFields, parseDate, parsePage, parseRange,
 export { logAudit } from "@/lib/audit";
 export { db } from "@/lib/db";
 
-/** Deployment statuses that count as billable work. */
-export const BILLABLE = ["CONFIRMED", "COMPLETED", "PARTIAL"] as const;
-export const EMPLOYEE_STATUSES = ["ACTIVE", "INACTIVE", "SUSPENDED", "LEFT"] as const;
-export const DEPLOYMENT_STATUSES = ["SCHEDULED", "CONFIRMED", "COMPLETED", "PARTIAL", "CANCELLED", "NO_SHOW"] as const;
+/** Shift units: FULL = day + night = 2 paid/billed shift units. */
+export const SHIFT_UNITS: Record<string, number> = { DAY: 1, NIGHT: 1, FULL: 2 };
+export const SHIFTS = ["DAY", "NIGHT", "FULL"] as const;
+export const EMPLOYEE_STATUSES = ["ACTIVE", "INACTIVE"] as const;
 export const ADJUSTMENT_TYPES = ["BONUS", "OVERTIME", "DEDUCTION", "PENALTY", "OTHER"] as const;
 export const BUSINESSES = ["MANPOWER", "TRANSPORT"] as const;
 export const TRIP_STATUSES = ["CONFIRMED", "ACTIVE", "COMPLETED", "CANCELLED"] as const;
@@ -153,7 +153,6 @@ export async function loadAllLedgers(): Promise<{
   const [properties, deps, pays] = await Promise.all([
     db.property.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
     db.deployment.findMany({
-      where: { status: { in: [...BILLABLE] } },
       select: { propertyId: true, date: true, billingAmount: true },
       orderBy: { date: "asc" },
     }),
@@ -184,7 +183,7 @@ export async function loadAllLedgers(): Promise<{
 export async function loadPropertyLedger(propertyId: string): Promise<PropertyLedger> {
   const [deps, pays] = await Promise.all([
     db.deployment.findMany({
-      where: { propertyId, status: { in: [...BILLABLE] } },
+      where: { propertyId },
       select: { date: true, billingAmount: true },
       orderBy: { date: "asc" },
     }),
@@ -204,7 +203,7 @@ export async function loadPropertyLedger(propertyId: string): Promise<PropertyLe
 export async function recomputeDeploymentPaid(tx: Tx, propertyId: string): Promise<void> {
   const [deps, pays] = await Promise.all([
     tx.deployment.findMany({
-      where: { propertyId, status: { in: [...BILLABLE] } },
+      where: { propertyId },
       select: { id: true, paidAmount: true, date: true, billingAmount: true },
       orderBy: [{ date: "asc" }, { createdAt: "asc" }],
     }),
@@ -224,11 +223,10 @@ export async function recomputeDeploymentPaid(tx: Tx, propertyId: string): Promi
   }
 }
 
-export function derivePaidStatus(status: string, billingAmount: number, paidAmount: number): "UNPAID" | "PARTIAL" | "PAID" {
-  if (paidAmount <= EPS && (billingAmount <= EPS || !BILLABLE.includes(status as (typeof BILLABLE)[number]))) return "UNPAID";
+export function derivePaidStatus(billingAmount: number, paidAmount: number): "UNPAID" | "PARTIAL" | "PAID" {
+  if (paidAmount <= EPS) return "UNPAID";
   if (paidAmount + EPS >= billingAmount && billingAmount > EPS) return "PAID";
-  if (paidAmount > EPS) return "PARTIAL";
-  return "UNPAID";
+  return "PARTIAL";
 }
 
 /** API contract shape for a serialized deployment (dynamic passthrough fields + computed). */
@@ -250,7 +248,8 @@ export function serializeDeployment(d: {
     employeeName: employee?.fullName ?? null,
     employeeCode: employee?.code ?? null,
     propertyName: property?.name ?? null,
-    paidStatus: derivePaidStatus(String(rest.status), Number(rest.billingAmount), Number(rest.paidAmount)),
+    paidStatus: derivePaidStatus(Number(rest.billingAmount), Number(rest.paidAmount)),
+    shiftUnits: SHIFT_UNITS[String(rest.shift).toUpperCase()] ?? 1,
   };
 }
 
@@ -284,26 +283,6 @@ export async function advanceBalanceMap(employeeIds?: string[]): Promise<Map<str
     map.set(row.employeeId, cur);
   }
   return map;
-}
-
-// ---------- contract resolution ----------
-
-/** Active contract on a date; falls back to latest contract started on/before date; else null. */
-export async function resolveContract(propertyId: string, date: Date) {
-  const active = await db.contract.findFirst({
-    where: {
-      propertyId,
-      status: "ACTIVE",
-      startDate: { lte: endOfDay(date) },
-      OR: [{ endDate: null }, { endDate: { gte: startOfDay(date) } }],
-    },
-    orderBy: { startDate: "desc" },
-  });
-  if (active) return active;
-  return db.contract.findFirst({
-    where: { propertyId, startDate: { lte: endOfDay(date) } },
-    orderBy: { startDate: "desc" },
-  });
 }
 
 // ---------- trips ----------
@@ -556,24 +535,7 @@ export async function computeNotifications(): Promise<AppNotification[]> {
     });
   }
 
-  // 7) Active contracts ending within 30 days
-  const contracts = await db.contract.findMany({
-    where: { status: "ACTIVE", endDate: { not: null, lte: in30 } },
-    include: { property: { select: { name: true } } },
-    orderBy: { endDate: "asc" },
-  });
-  for (const c of contracts) {
-    list.push({
-      key: `contract-${c.id}`,
-      severity: "WARNING",
-      title: `Contract ending — ${c.property.name}`,
-      message: `"${c.name}" ends on ${dayKey(c.endDate as Date)}. Renew to avoid deployment gaps.`,
-      view: "contracts",
-      params: { propertyId: c.propertyId, contractId: c.id },
-    });
-  }
-
-  // 8) Trips with pending payments
+  // 7) Trips with pending payments
   const trips = await db.trip.findMany({
     where: { status: { not: "CANCELLED" }, paymentStatus: { in: ["PENDING", "PARTIAL"] } },
     include: { vehicle: { select: { name: true } }, client: { select: { name: true } } },

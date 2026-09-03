@@ -1,0 +1,1481 @@
+     1→"use client";
+     2→
+     3→// Shared view-level building blocks used by multiple views in components/views/.
+     4→// Owns: data hooks, form fields, charts, pickers, and the three cross-view dialogs
+     5→// (DeployWizard, RecordPaymentDialog, GiveAdvanceDialog). Do not import outside views/.
+     6→
+     7→import { useCallback, useEffect, useMemo, useState } from "react";
+     8→import { api, ApiError, qs } from "@/lib/api-client";
+     9→import { formatINR, parseAmount } from "@/lib/money";
+    10→import { toast } from "sonner";
+    11→import { cn } from "@/lib/utils";
+    12→import { Input } from "@/components/ui/input";
+    13→import { Label } from "@/components/ui/label";
+    14→import { Textarea } from "@/components/ui/textarea";
+    15→import { Button } from "@/components/ui/button";
+    16→import { Skeleton } from "@/components/ui/skeleton";
+    17→import { Checkbox } from "@/components/ui/checkbox";
+    18→import {
+    19→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    20→} from "@/components/ui/dialog";
+    21→import {
+    22→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    23→} from "@/components/ui/select";
+    24→import {
+    25→  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+    26→  BarChart, Bar,
+    27→} from "recharts";
+    28→import {
+    29→  AlertTriangle, AlertCircle, ArrowRight, Check, ChevronLeft, RefreshCw, Search, Users,
+    30→} from "lucide-react";
+    31→
+    32→// ---------------------------------------------------------------------------
+    33→// API record shapes (subset of contract fields used by views)
+    34→// ---------------------------------------------------------------------------
+    35→
+    36→export interface EmployeeRec {
+    37→  id: string;
+    38→  code: string;
+    39→  fullName: string;
+    40→  photoUrl?: string | null;
+    41→  gender?: string | null;
+    42→  mobile?: string | null;
+    43→  whatsapp?: string | null;
+    44→  address?: string | null;
+    45→  city?: string | null;
+    46→  joiningDate?: string | null;
+    47→  designation?: string | null;
+    48→  skills?: string | null;
+    49→  standardRate?: number | null;
+    50→  rateType?: string | null;
+    51→  status: string;
+    52→  bankDetails?: string | null;
+    53→  upiId?: string | null;
+    54→  preferredPaymentMethod?: string | null;
+    55→  notes?: string | null;
+    56→  advanceBalance?: number;
+    57→}
+    58→
+    59→export interface DeploymentRec {
+    60→  id: string;
+    61→  date: string;
+    62→  employeeId: string;
+    63→  employeeName: string;
+    64→  employeeCode?: string;
+    65→  propertyId: string;
+    66→  propertyName: string;
+    67→  shift: string;
+    68→  workCategory?: string | null;
+    69→  billingRate?: number;
+    70→  payoutRate?: number;
+    71→  billingAmount?: number;
+    72→  payoutAmount?: number;
+    73→  adjustmentAmount?: number | null;
+    74→  adjustmentNote?: string | null;
+    75→  status: string;
+    76→  paidStatus?: string;
+    77→  paidAmount?: number | null;
+    78→  notes?: string | null;
+    79→  createdByName?: string;
+    80→  createdAt?: string;
+    81→}
+    82→
+    83→export interface PropertyRec {
+    84→  id: string;
+    85→  name: string;
+    86→  brandName?: string | null;
+    87→  type?: string | null;
+    88→  address?: string | null;
+    89→  contactPerson?: string | null;
+    90→  contactNumber?: string | null;
+    91→  whatsapp?: string | null;
+    92→  email?: string | null;
+    93→  startDate?: string | null;
+    94→  status: string;
+    95→  notes?: string | null;
+    96→  activeContractName?: string | null;
+    97→  totalBilled?: number;
+    98→  totalReceived?: number;
+    99→  totalOutstanding?: number;
+   100→}
+   101→
+   102→export interface ContractRec {
+   103→  id: string;
+   104→  propertyId: string;
+   105→  propertyName?: string;
+   106→  name: string;
+   107→  startDate: string;
+   108→  endDate?: string | null;
+   109→  billingRate: number;
+   110→  payoutRate: number;
+   111→  shift?: string | null;
+   112→  category?: string | null;
+   113→  maxEmployees?: number | null;
+   114→  paymentTerms?: string | null;
+   115→  notes?: string | null;
+   116→  status: string;
+   117→}
+   118→
+   119→export interface PaymentRec {
+   120→  id: string;
+   121→  propertyId: string;
+   122→  propertyName?: string;
+   123→  date: string;
+   124→  amount: number;
+   125→  method?: string | null;
+   126→  reference?: string | null;
+   127→  notes?: string | null;
+   128→  receivedByName?: string | null;
+   129→}
+   130→
+   131→export interface AdvanceRec {
+   132→  id: string;
+   133→  employeeId: string;
+   134→  employeeName?: string;
+   135→  employeeCode?: string;
+   136→  date: string;
+   137→  amount: number;
+   138→  reason?: string | null;
+   139→  method?: string | null;
+   140→  givenByName?: string | null;
+   141→}
+   142→
+   143→export interface SettlementLineRec {
+   144→  date: string;
+   145→  propertyName: string;
+   146→  shift: string;
+   147→  rate: number;
+   148→  amount: number;
+   149→}
+   150→
+   151→export interface SettlementRec {
+   152→  id: string;
+   153→  employeeId: string;
+   154→  employeeName: string;
+   155→  employeeCode?: string;
+   156→  month: string;
+   157→  totalDays?: number;
+   158→  dayShifts?: number;
+   159→  nightShifts?: number;
+   160→  grossEarnings?: number;
+   161→  additions?: number;
+   162→  advanceDeducted?: number;
+   163→  otherDeductions?: number;
+   164→  netPayable?: number;
+   165→  advanceCarryForward?: number | null;
+   166→  status: string;
+   167→  notes?: string | null;
+   168→  lines?: SettlementLineRec[];
+   169→}
+   170→
+   171→export interface ExpenseRec {
+   172→  id: string;
+   173→  date: string;
+   174→  business: string;
+   175→  categoryId?: string | null;
+   176→  categoryName?: string | null;
+   177→  amount: number;
+   178→  method?: string | null;
+   179→  description?: string | null;
+   180→  notes?: string | null;
+   181→  vehicleId?: string | null;
+   182→  vehicleName?: string | null;
+   183→  spentByName?: string | null;
+   184→}
+   185→
+   186→export interface VehicleRec {
+   187→  id: string;
+   188→  code: string;
+   189→  registrationNumber: string;
+   190→  name: string;
+   191→  make?: string | null;
+   192→  model?: string | null;
+   193→  variant?: string | null;
+   194→  year?: number | null;
+   195→  purchaseDate?: string | null;
+   196→  purchasePrice?: number | null;
+   197→  status: string;
+   198→  insuranceCompany?: string | null;
+   199→  insuranceNumber?: string | null;
+   200→  insuranceExpiry?: string | null;
+   201→  permitInfo?: string | null;
+   202→  fitnessExpiry?: string | null;
+   203→  notes?: string | null;
+   204→  loanAmount?: number | null;
+   205→  monthlyEmi?: number | null;
+   206→  emiStartDate?: string | null;
+   207→  emiEndDate?: string | null;
+   208→  stats?: {
+   209→    monthRevenue: number;
+   210→    monthExpense: number;
+   211→    monthEmi: number;
+   212→    monthNet: number;
+   213→    revenue: number;
+   214→    expense: number;
+   215→    net: number;
+   216→  };
+   217→}
+   218→
+   219→export interface ClientRec {
+   220→  id: string;
+   221→  name: string;
+   222→  company?: string | null;
+   223→  phone?: string | null;
+   224→  whatsapp?: string | null;
+   225→  email?: string | null;
+   226→  address?: string | null;
+   227→  billingDetails?: string | null;
+   228→  notes?: string | null;
+   229→  tripCount?: number;
+   230→  totalBusiness?: number;
+   231→}
+   232→
+   233→export interface TripRec {
+   234→  id: string;
+   235→  vehicleId: string;
+   236→  vehicleName?: string;
+   237→  vehicleReg?: string;
+   238→  clientId: string;
+   239→  clientName?: string;
+   240→  startAt: string;
+   241→  endAt?: string | null;
+   242→  tripType: string;
+   243→  rentalType?: string | null;
+   244→  pickup?: string | null;
+   245→  destination?: string | null;
+   246→  driver?: string | null;
+   247→  agreedAmount: number;
+   248→  advanceReceived?: number;
+   249→  extraCharges?: number;
+   250→  finalAmount?: number | null;
+   251→  paymentStatus: string;
+   252→  status: string;
+   253→  fuelResponsibility?: string | null;
+   254→  notes?: string | null;
+   255→  paidAmount?: number;
+   256→  createdByName?: string;
+   257→}
+   258→
+   259→export interface ListResp<T> { items: T[]; total: number; page?: number; pageSize?: number }
+   260→
+   261→// ---------------------------------------------------------------------------
+   262→// Hooks & small utils
+   263→// ---------------------------------------------------------------------------
+   264→
+   265→export function errMessage(e: unknown): string {
+   266→  if (e instanceof ApiError) return e.message;
+   267→  if (e instanceof Error) return e.message;
+   268→  return "Something went wrong";
+   269→}
+   270→
+   271→/** Fetch-on-mount hook with loading/error/reload. Toasts load failures. */
+   272→export function useAsync<T>(loader: () => Promise<T>, deps: React.DependencyList) {
+   273→  const [data, setData] = useState<T | null>(null);
+   274→  const [loading, setLoading] = useState(true);
+   275→  const [error, setError] = useState<string | null>(null);
+   276→  const load = useCallback(async () => {
+   277→    setLoading(true);
+   278→    try {
+   279→      const d = await loader();
+   280→      setData(d);
+   281→      setError(null);
+   282→    } catch (e) {
+   283→      const msg = errMessage(e);
+   284→      setError(msg);
+   285→      toast.error(msg);
+   286→    } finally {
+   287→      setLoading(false);
+   288→    }
+   289→  }, deps);
+   290→  useEffect(() => { void load(); }, [load]);
+   291→  return { data, loading, error, reload: load, setData };
+   292→}
+   293→
+   294→/** Mutation wrapper: consistent error toasts, optional success toast.
+   295→ *  Pass an `undo` resolver to attach an "Undo" action to the success toast —
+   296→ *  it reverses the entry server-side (zero mismatch) and calls onUndo. */
+   297→export interface UndoSpec {
+   298→  module: string; // PAYMENT / ADVANCE / EXPENSE / DEPLOYMENT / TRIP / EMI / MAINTENANCE / ADJUSTMENT
+   299→  recordId?: string;
+   300→  onUndo?: () => void;
+   301→}
+   302→
+   303→export async function undoRequest(spec: {
+   304→  auditLogId?: string;
+   305→  module?: string;
+   306→  recordId?: string;
+   307→  onUndo?: () => void;
+   308→}): Promise<boolean> {
+   309→  try {
+   310→    await api.post("/api/undo", {
+   311→      ...(spec.auditLogId ? { auditLogId: spec.auditLogId } : { module: spec.module, recordId: spec.recordId }),
+   312→    });
+   313→    toast.success("Entry reversed — everything is back to how it was", { icon: "↩️" });
+   314→    spec.onUndo?.();
+   315→    return true;
+   316→  } catch (e) {
+   317→    toast.error(errMessage(e));
+   318→    return false;
+   319→  }
+   320→}
+   321→
+   322→export function useMutation() {
+   323→  const [saving, setSaving] = useState(false);
+   324→  const mutate = useCallback(async (
+   325→    fn: () => Promise<unknown>,
+   326→    success?: string,
+   327→    undo?: (data: unknown) => UndoSpec | null | undefined
+   328→  ) => {
+   329→    setSaving(true);
+   330→    try {
+   331→      const data = await fn();
+   332→      if (success) {
+   333→        const spec = undo?.(data);
+   334→        if (spec?.module && spec.recordId) {
+   335→          toast.success(success, {
+   336→            duration: 8000,
+   337→            action: { label: "Undo", onClick: () => void undoRequest(spec) },
+   338→          });
+   339→        } else {
+   340→          toast.success(success);
+   341→        }
+   342→      }
+   343→      return { ok: true as const, data };
+   344→    } catch (e) {
+   345→      toast.error(errMessage(e));
+   346→      return { ok: false as const, error: e };
+   347→    } finally {
+   348→      setSaving(false);
+   349→    }
+   350→  }, []);
+   351→  return { mutate, saving };
+   352→}
+   353→
+   354→export function useDebounced<T>(value: T, delay = 300): T {
+   355→  const [v, setV] = useState(value);
+   356→  useEffect(() => {
+   357→    const t = setTimeout(() => setV(value), delay);
+   358→    return () => clearTimeout(t);
+   359→  }, [value, delay]);
+   360→  return v;
+   361→}
+   362→
+   363→export function todayStr(offsetDays = 0): string {
+   364→  const d = new Date();
+   365→  d.setDate(d.getDate() + offsetDays);
+   366→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+   367→}
+   368→
+   369→export function fmtDay(s?: string | null): string {
+   370→  if (!s) return "—";
+   371→  const d = new Date(s.length === 10 ? `${s}T00:00:00` : s);
+   372→  if (Number.isNaN(d.getTime())) return s;
+   373→  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+   374→}
+   375→
+   376→export function fmtDateTime(s?: string | null): string {
+   377→  if (!s) return "—";
+   378→  const d = new Date(s);
+   379→  if (Number.isNaN(d.getTime())) return s;
+   380→  return d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+   381→}
+   382→
+   383→export function initials(name?: string | null): string {
+   384→  if (!name) return "?";
+   385→  const parts = name.trim().split(/\s+/).slice(0, 2);
+   386→  return parts.map((p) => p[0]?.toUpperCase() ?? "").join("") || "?";
+   387→}
+   388→
+   389→export function moneyCls(v: number | null | undefined): string {
+   390→  return (v ?? 0) < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400";
+   391→}
+   392→
+   393→// ---------------------------------------------------------------------------
+   394→// Form fields
+   395→// ---------------------------------------------------------------------------
+   396→
+   397→export function Field({ label, required, hint, className, children }: {
+   398→  label: string; required?: boolean; hint?: string; className?: string; children: React.ReactNode;
+   399→}) {
+   400→  return (
+   401→    <div className={cn("space-y-1.5 min-w-0", className)}>
+   402→      <Label className="text-xs font-medium text-foreground">
+   403→        {label}
+   404→        {required && <span className="ml-0.5 text-red-500" aria-hidden>*</span>}
+   405→      </Label>
+   406→      {children}
+   407→      {hint && <p className="text-[11px] leading-snug text-muted-foreground">{hint}</p>}
+   408→    </div>
+   409→  );
+   410→}
+   411→
+   412→export interface Option { label: string; value: string }
+   413→
+   414→// Sentinel for "no selection" options (Radix Select forbids empty-string values).
+   415→export const EMPTY_SENTINEL = "__all__";
+   416→
+   417→export function SelectInput({ value, onChange, options, placeholder = "Select…", className, disabled }: {
+   418→  value: string;
+   419→  onChange: (v: string) => void;
+   420→  options: Option[];
+   421→  placeholder?: string;
+   422→  className?: string;
+   423→  disabled?: boolean;
+   424→}) {
+   425→  return (
+   426→    <Select
+   427→      // Always controlled: `value || sentinel` keeps Radix from flipping
+   428→      // between uncontrolled (undefined) and controlled when value is "".
+   429→      // A non-matching sentinel still renders the placeholder visually.
+   430→      value={value || EMPTY_SENTINEL}
+   431→      onValueChange={(v) => onChange(v === EMPTY_SENTINEL ? "" : v)}
+   432→      disabled={disabled}
+   433→    >
+   434→      <SelectTrigger className={cn("h-10 w-full", className)} aria-label={placeholder}>
+   435→        <SelectValue placeholder={placeholder} />
+   436→      </SelectTrigger>
+   437→      <SelectContent position="popper" className="max-h-72">
+   438→        {/* Radix forbids empty-string item values — map them to a sentinel. */}
+   439→        {options.map((o) => (
+   440→          <SelectItem key={o.value || EMPTY_SENTINEL} value={o.value || EMPTY_SENTINEL} className="text-sm">{o.label}</SelectItem>
+   441→        ))}
+   442→      </SelectContent>
+   443→    </Select>
+   444→  );
+   445→}
+   446→
+   447→// ---------------------------------------------------------------------------
+   448→// States & misc UI
+   449→// ---------------------------------------------------------------------------
+   450→
+   451→export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
+   452→  return (
+   453→    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-red-200 bg-red-50/50 py-10 px-6 text-center dark:border-red-900 dark:bg-red-950/20">
+   454→      <div className="rounded-full bg-red-100 p-3 dark:bg-red-950">
+   455→        <AlertCircle className="h-6 w-6 text-red-600 dark:text-red-400" aria-hidden />
+   456→      </div>
+   457→      <p className="mt-3 text-sm font-semibold">Couldn&apos;t load data</p>
+   458→      <p className="mt-1 max-w-sm text-xs text-muted-foreground">{message}</p>
+   459→      {onRetry && (
+   460→        <Button size="sm" variant="outline" className="mt-4 h-9 gap-1.5" onClick={onRetry}>
+   461→          <RefreshCw className="h-3.5 w-3.5" aria-hidden />Retry
+   462→        </Button>
+   463→      )}
+   464→    </div>
+   465→  );
+   466→}
+   467→
+   468→export function ListSkeleton({ rows = 5 }: { rows?: number }) {
+   469→  return (
+   470→    <div className="space-y-2">
+   471→      {Array.from({ length: rows }).map((_, i) => (
+   472→        <Skeleton key={i} className="h-14 w-full rounded-xl" />
+   473→      ))}
+   474→    </div>
+   475→  );
+   476→}
+   477→
+   478→/** Label/value row used inside summary cards. */
+   479→export function KV({ label, value, className }: { label: string; value: React.ReactNode; className?: string }) {
+   480→  return (
+   481→    <div className="flex items-center justify-between gap-3 py-1.5">
+   482→      <span className="text-xs text-muted-foreground">{label}</span>
+   483→      <span className={cn("text-sm font-semibold tabular-nums", className)}>{value}</span>
+   484→    </div>
+   485→  );
+   486→}
+   487→
+   488→/** Rounded initials avatar block. */
+   489→export function InitialAvatar({ name, className, tone = "emerald" }: { name?: string | null; className?: string; tone?: "emerald" | "amber" | "zinc" }) {
+   490→  const tones = {
+   491→    emerald: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+   492→    amber: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+   493→    zinc: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
+   494→  } as const;
+   495→  return (
+   496→    <div className={cn("flex shrink-0 items-center justify-center rounded-full font-bold", tones[tone], className ?? "h-10 w-10 text-sm")} aria-hidden>
+   497→      {initials(name)}
+   498→    </div>
+   499→  );
+   500→}
+   501→
+   502→// ---------------------------------------------------------------------------
+   503→// Charts (recharts wrappers — responsive, theme-aware)
+   504→// ---------------------------------------------------------------------------
+   505→
+   506→// Chart palette — CSS variables so every series re-tunes itself per theme
+   507→// (light: deep ledger tones on white; dark: luminous on deep cards).
+   508→export const CHART_COLORS = {
+   509→  emerald: "var(--chart-1)",
+   510→  amber: "var(--chart-2)",
+   511→  teal: "var(--chart-3)",
+   512→  red: "var(--chart-4)",
+   513→  plum: "var(--chart-5)",
+   514→} as const;
+   515→
+   516→export interface SeriesDef { key: string; label: string; color: string }
+   517→
+   518→const AXIS_TICK = { fontSize: 11, fill: "var(--muted-foreground)" };
+   519→const TOOLTIP_STYLE = {
+   520→  borderRadius: 10,
+   521→  border: "1px solid var(--border)",
+   522→  background: "var(--card)",
+   523→  color: "var(--foreground)",
+   524→  fontSize: 12,
+   525→  boxShadow: "0 8px 24px -12px rgb(0 0 0 / 0.35)",
+   526→} as const;
+   527→
+   528→export function AreaTrend({ data, xKey, series, height = 220 }: {
+   529→  data: Record<string, unknown>[]; xKey: string; series: SeriesDef[]; height?: number;
+   530→}) {
+   531→  return (
+   532→    <div className="w-full overflow-hidden" style={{ height }}>
+   533→      <ResponsiveContainer width="100%" height="100%">
+   534→        <AreaChart data={data} margin={{ top: 8, right: 8, left: -14, bottom: 0 }}>
+   535→          <defs>
+   536→            {series.map((s) => (
+   537→              <linearGradient key={s.key} id={`grad-${s.key.replace(/[^a-z0-9]/gi, "")}`} x1="0" y1="0" x2="0" y2="1">
+   538→                <stop offset="5%" stopColor={s.color} stopOpacity={0.28} />
+   539→                <stop offset="95%" stopColor={s.color} stopOpacity={0.02} />
+   540→              </linearGradient>
+   541→            ))}
+   542→          </defs>
+   543→          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+   544→          <XAxis dataKey={xKey} tick={AXIS_TICK} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={24} />
+   545→          <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={56} tickFormatter={(v) => formatINR(Number(v), { compact: true })} />
+   546→          <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} cursor={{ stroke: "var(--border)" }} />
+   547→          {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />}
+   548→          {series.map((s) => (
+   549→            <Area
+   550→              key={s.key}
+   551→              type="monotone"
+   552→              dataKey={s.key}
+   553→              name={s.label}
+   554→              stroke={s.color}
+   555→              fill={`url(#grad-${s.key.replace(/[^a-z0-9]/gi, "")})`}
+   556→              strokeWidth={2}
+   557→              dot={false}
+   558→              activeDot={{ r: 3 }}
+   559→            />
+   560→          ))}
+   561→        </AreaChart>
+   562→      </ResponsiveContainer>
+   563→    </div>
+   564→  );
+   565→}
+   566→
+   567→export function BarsCompare({ data, xKey, series, height = 220 }: {
+   568→  data: Record<string, unknown>[]; xKey: string; series: SeriesDef[]; height?: number;
+   569→}) {
+   570→  return (
+   571→    <div className="w-full overflow-hidden" style={{ height }}>
+   572→      <ResponsiveContainer width="100%" height="100%">
+   573→        <BarChart data={data} margin={{ top: 8, right: 8, left: -14, bottom: 0 }} barCategoryGap="24%">
+   574→          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+   575→          <XAxis dataKey={xKey} tick={AXIS_TICK} tickLine={false} axisLine={false} minTickGap={16} />
+   576→          <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={56} tickFormatter={(v) => formatINR(Number(v), { compact: true })} />
+   577→          <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} cursor={{ fill: "var(--muted)", opacity: 0.5 }} />
+   578→          {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />}
+   579→          {series.map((s) => (
+   580→            <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} radius={[4, 4, 4, 4]} maxBarSize={30} />
+   581→          ))}
+   582→        </BarChart>
+   583→      </ResponsiveContainer>
+   584→    </div>
+   585→  );
+   586→}
+   587→
+   588→/** Div-based horizontal bar list (category breakdown etc). */
+   589→export function MiniBars({ rows }: { rows: { label: string; value: number; color?: string }[] }) {
+   590→  const max = Math.max(1, ...rows.map((r) => r.value));
+   591→  if (rows.length === 0) return <p className="py-4 text-center text-xs text-muted-foreground">No data</p>;
+   592→  return (
+   593→    <div className="space-y-2.5">
+   594→      {rows.map((r) => (
+   595→        <div key={r.label}>
+   596→          <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+   597→            <span className="min-w-0 truncate font-medium">{r.label}</span>
+   598→            <span className="shrink-0 tabular-nums text-muted-foreground">{formatINR(r.value)}</span>
+   599→          </div>
+   600→          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+   601→            <div
+   602→              className="h-full rounded-full transition-all"
+   603→              style={{ width: `${Math.max(3, (r.value / max) * 100)}%`, background: r.color ?? CHART_COLORS.emerald }}
+   604→            />
+   605→          </div>
+   606→        </div>
+   607→      ))}
+   608→    </div>
+   609→  );
+   610→}
+   611→
+   612→// ---------------------------------------------------------------------------
+   613→// Employee picker (searchable checkbox list)
+   614→// ---------------------------------------------------------------------------
+   615→
+   616→export interface PickerEmployee {
+   617→  id: string;
+   618→  fullName: string;
+   619→  code?: string | null;
+   620→  standardRate?: number | null;
+   621→  advanceBalance?: number | null;
+   622→}
+   623→
+   624→export function EmployeePicker({ employees, value, onChange, multi = true, height = "max-h-60" }: {
+   625→  employees: PickerEmployee[];
+   626→  value: string[];
+   627→  onChange: (ids: string[]) => void;
+   628→  multi?: boolean;
+   629→  height?: string;
+   630→}) {
+   631→  const [search, setSearch] = useState("");
+   632→  const filtered = useMemo(() => {
+   633→    const q = search.trim().toLowerCase();
+   634→    if (!q) return employees;
+   635→    return employees.filter((e) => `${e.fullName} ${e.code ?? ""}`.toLowerCase().includes(q));
+   636→  }, [employees, search]);
+   637→
+   638→  const toggle = (id: string) => {
+   639→    if (!multi) { onChange([id]); return; }
+   640→    onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
+   641→  };
+   642→
+   643→  return (
+   644→    <div className="space-y-2">
+   645→      <div className="relative">
+   646→        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+   647→        <Input
+   648→          value={search}
+   649→          onChange={(e) => setSearch(e.target.value)}
+   650→          placeholder="Search employees…"
+   651→          className="h-9 rounded-xl bg-card pl-9"
+   652→          aria-label="Search employees"
+   653→        />
+   654→      </div>
+   655→      {multi && value.length > 0 && (
+   656→        <div className="flex items-center justify-between text-xs text-muted-foreground">
+   657→          <span>{value.length} selected</span>
+   658→          <button type="button" className="font-medium text-primary hover:underline" onClick={() => onChange([])}>
+   659→            Clear all
+   660→          </button>
+   661→        </div>
+   662→      )}
+   663→      <div className={cn("overflow-y-auto rounded-xl border", height)} role="listbox" aria-multiselectable={multi}>
+   664→        {filtered.length === 0 && (
+   665→          <p className="p-6 text-center text-xs text-muted-foreground">No employees found</p>
+   666→        )}
+   667→        {filtered.map((e) => {
+   668→          const on = value.includes(e.id);
+   669→          return (
+   670→            <div
+   671→              key={e.id}
+   672→              role="option"
+   673→              aria-selected={on}
+   674→              tabIndex={0}
+   675→              onClick={() => toggle(e.id)}
+   676→              onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(e.id); } }}
+   677→              className={cn(
+   678→                "flex cursor-pointer items-center gap-2.5 border-b px-3 py-2.5 transition-colors last:border-b-0 hover:bg-muted/60",
+   679→                on && "bg-primary/5"
+   680→              )}
+   681→            >
+   682→              {multi ? (
+   683→                <span className={cn(
+   684→                  "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+   685→                  on ? "border-primary bg-primary text-primary-foreground" : "border-input bg-background"
+   686→                )} aria-hidden>
+   687→                  {on && <Check className="h-3 w-3" />}
+   688→                </span>
+   689→              ) : (
+   690→                <span className={cn(
+   691→                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors",
+   692→                  on ? "border-primary" : "border-input"
+   693→                )} aria-hidden>
+   694→                  {on && <span className="h-2 w-2 rounded-full bg-primary" />}
+   695→                </span>
+   696→              )}
+   697→              <div className="min-w-0 flex-1">
+   698→                <p className="truncate text-sm font-medium">{e.fullName}</p>
+   699→                <p className="text-[11px] text-muted-foreground">
+   700→                  {e.code ?? ""}{e.standardRate ? ` · ${formatINR(e.standardRate)}/day` : ""}
+   701→                </p>
+   702→              </div>
+   703→              {(e.advanceBalance ?? 0) > 0 && (
+   704→                <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium tabular-nums text-red-600 dark:bg-red-950 dark:text-red-400">
+   705→                  Adv {formatINR(e.advanceBalance ?? 0, { compact: true })}
+   706→                </span>
+   707→              )}
+   708→            </div>
+   709→          );
+   710→        })}
+   711→      </div>
+   712→    </div>
+   713→  );
+   714→}
+   715→
+   716→/** Fetch ACTIVE employees for pickers. */
+   717→export function useActiveEmployees(enabled: boolean) {
+   718→  const [employees, setEmployees] = useState<PickerEmployee[]>([]);
+   719→  const [loaded, setLoaded] = useState(false);
+   720→  useEffect(() => {
+   721→    if (!enabled || loaded) return;
+   722→    let cancelled = false;
+   723→    api.get<ListResp<EmployeeRec>>("/api/employees" + qs({ status: "ACTIVE", pageSize: 200 }))
+   724→      .then((d) => { if (!cancelled) { setEmployees(d.items); setLoaded(true); } })
+   725→      .catch((e) => { if (!cancelled) { setLoaded(true); toast.error(errMessage(e)); } });
+   726→    return () => { cancelled = true; };
+   727→  }, [enabled, loaded]);
+   728→  return { employees, loading: enabled && !loaded };
+   729→}
+   730→
+   731→// ---------------------------------------------------------------------------
+   732→// Give Advance dialog (advances-view + employee-detail-view)
+   733→// ---------------------------------------------------------------------------
+   734→
+   735→export function GiveAdvanceDialog({ open, onOpenChange, defaultEmployeeId, employees: employeesProp, onDone }: {
+   736→  open: boolean;
+   737→  onOpenChange: (v: boolean) => void;
+   738→  defaultEmployeeId?: string;
+   739→  employees?: PickerEmployee[];
+   740→  onDone: () => void;
+   741→}) {
+   742→  const { employees: fetched, loading: loadingEmps } = useActiveEmployees(open && !employeesProp);
+   743→  const employees = employeesProp ?? fetched;
+   744→  const [employeeId, setEmployeeId] = useState("");
+   745→  const [date, setDate] = useState(todayStr());
+   746→  const [amount, setAmount] = useState("");
+   747→  const [reason, setReason] = useState("");
+   748→  const [method, setMethod] = useState("UPI");
+   749→  const { mutate, saving } = useMutation();
+   750→
+   751→  // Reset form each time the dialog opens (render-time state adjustment).
+   752→  const [prevOpen, setPrevOpen] = useState(open);
+   753→  if (open !== prevOpen) {
+   754→    setPrevOpen(open);
+   755→    if (open) {
+   756→      setEmployeeId(defaultEmployeeId ?? "");
+   757→      setDate(todayStr());
+   758→      setAmount("");
+   759→      setReason("");
+   760→      setMethod("UPI");
+   761→    }
+   762→  }
+   763→
+   764→  const selected = employees.find((e) => e.id === employeeId);
+   765→
+   766→  const submit = async () => {
+   767→    if (!employeeId) { toast.error("Select an employee"); return; }
+   768→    const amt = parseAmount(amount);
+   769→    if (amt <= 0) { toast.error("Enter a valid amount"); return; }
+   770→    const res = await mutate(
+   771→      () => api.post("/api/advances", { employeeId, date, amount: amt, reason: reason || undefined, method: method || undefined }),
+   772→      "Advance recorded",
+   773→      (data) => ({ module: "ADVANCE", recordId: (data as { id: string }).id, onUndo: onDone })
+   774→    );
+   775→    if (res.ok) { onOpenChange(false); onDone(); }
+   776→  };
+   777→
+   778→  return (
+   779→    <Dialog open={open} onOpenChange={onOpenChange}>
+   780→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+   781→        <DialogHeader>
+   782→          <DialogTitle>Give Advance</DialogTitle>
+   783→          <DialogDescription>Record a cash/UPI advance given to an employee. Auto-deducted at settlement.</DialogDescription>
+   784→        </DialogHeader>
+   785→        <div className="space-y-3">
+   786→          {!defaultEmployeeId && (
+   787→            loadingEmps ? <Skeleton className="h-40 w-full rounded-xl" /> : (
+   788→              <Field label="Employee" required>
+   789→                <EmployeePicker
+   790→                  employees={employees}
+   791→                  value={employeeId ? [employeeId] : []}
+   792→                  onChange={(ids) => setEmployeeId(ids[0] ?? "")}
+   793→                  multi={false}
+   794→                  height="max-h-44"
+   795→                />
+   796→              </Field>
+   797→            )
+   798→          )}
+   799→          {defaultEmployeeId && selected && (
+   800→            <div className="rounded-xl border bg-muted/40 px-3 py-2 text-sm">
+   801→              <span className="font-medium">{selected.fullName}</span>
+   802→              <span className="ml-2 text-xs text-muted-foreground">{selected.code}</span>
+   803→            </div>
+   804→          )}
+   805→          <div className="grid gap-3 sm:grid-cols-2">
+   806→            <Field label="Amount (₹)" required>
+   807→              <Input type="number" inputMode="numeric" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" className="h-10" />
+   808→            </Field>
+   809→            <Field label="Date" required>
+   810→              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
+   811→            </Field>
+   812→          </div>
+   813→          <div className="grid gap-3 sm:grid-cols-2">
+   814→            <Field label="Method">
+   815→              <SelectInput
+   816→                value={method}
+   817→                onChange={setMethod}
+   818→                options={["UPI", "Bank", "Cash", "Cheque", "Other"].map((m) => ({ label: m, value: m }))}
+   819→              />
+   820→            </Field>
+   821→            <Field label="Reason">
+   822→              <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Festival, family emergency…" className="h-10" />
+   823→            </Field>
+   824→          </div>
+   825→        </div>
+   826→        <DialogFooter className="gap-2">
+   827→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   828→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>
+   829→            {saving ? "Saving…" : "Give Advance"}
+   830→          </Button>
+   831→        </DialogFooter>
+   832→      </DialogContent>
+   833→    </Dialog>
+   834→  );
+   835→}
+   836→
+   837→// ---------------------------------------------------------------------------
+   838→// Record Payment dialog (payments-view; also property ledger)
+   839→// ---------------------------------------------------------------------------
+   840→
+   841→interface LedgerDay { date: string; billed: number; paid: number; outstanding: number; status: string }
+   842→interface PropertyLedger { ledger: { billed: number; received: number; outstanding: number }; days: LedgerDay[] }
+   843→
+   844→export function RecordPaymentDialog({ open, onOpenChange, propertyId, properties: propertiesProp, onDone }: {
+   845→  open: boolean;
+   846→  onOpenChange: (v: boolean) => void;
+   847→  propertyId?: string;
+   848→  properties?: { id: string; name: string; outstanding?: number }[];
+   849→  onDone: () => void;
+   850→}) {
+   851→  const [properties, setProperties] = useState(propertiesProp ?? []);
+   852→  const [selected, setSelected] = useState(propertyId ?? "");
+   853→  const [data, setData] = useState<PropertyLedger | null>(null);
+   854→  const [amount, setAmount] = useState("");
+   855→  const [date, setDate] = useState(todayStr());
+   856→  const [method, setMethod] = useState("UPI");
+   857→  const [reference, setReference] = useState("");
+   858→  const [notes, setNotes] = useState("");
+   859→  const { mutate, saving } = useMutation();
+   860→
+   861→  // Load property options if caller didn't pass any.
+   862→  useEffect(() => {
+   863→    if (!open || propertiesProp || propertyId) return;
+   864→    let cancelled = false;
+   865→    api.get<{ items: { propertyId: string; propertyName: string; outstanding: number }[] }>("/api/payments/pending")
+   866→      .then((d) => { if (!cancelled) setProperties(d.items.map((i) => ({ id: i.propertyId, name: i.propertyName, outstanding: i.outstanding }))); })
+   867→      .catch(() => {});
+   868→    return () => { cancelled = true; };
+   869→  }, [open, propertiesProp, propertyId]);
+   870→
+   871→  // Reset form each time the dialog opens (render-time state adjustment).
+   872→  const [prevOpen, setPrevOpen] = useState(open);
+   873→  if (open !== prevOpen) {
+   874→    setPrevOpen(open);
+   875→    if (open) {
+   876→      setSelected(propertyId ?? "");
+   877→      setAmount("");
+   878→      setDate(todayStr());
+   879→      setMethod("UPI");
+   880→      setReference("");
+   881→      setNotes("");
+   882→    }
+   883→  }
+   884→
+   885→  const [loadedFor, setLoadedFor] = useState("");
+   886→  const loading = Boolean(open && selected && loadedFor !== selected);
+   887→  useEffect(() => {
+   888→    if (!open || !selected) return;
+   889→    let cancelled = false;
+   890→    api.get<PropertyLedger>(`/api/payments/property/${selected}`)
+   891→      .then((d) => {
+   892→        if (cancelled) return;
+   893→        setData(d);
+   894→        setLoadedFor(selected);
+   895→        setAmount((prev) => (prev ? prev : String(d.ledger.outstanding ?? 0)));
+   896→      })
+   897→      .catch((e) => { if (!cancelled) toast.error(errMessage(e)); });
+   898→    return () => { cancelled = true; };
+   899→  }, [open, selected]);
+   900→
+   901→  const submit = async () => {
+   902→    if (!selected) { toast.error("Select a property"); return; }
+   903→    const amt = parseAmount(amount);
+   904→    if (amt <= 0) { toast.error("Enter a valid amount"); return; }
+   905→    const res = await mutate(
+   906→      () => api.post("/api/payments", { propertyId: selected, date, amount: amt, method: method || undefined, reference: reference || undefined, notes: notes || undefined }),
+   907→      `Payment of ${formatINR(amt)} recorded`,
+   908→      (data) => ({ module: "PAYMENT", recordId: (data as { id: string }).id, onUndo: onDone })
+   909→    );
+   910→    if (res.ok) { onOpenChange(false); onDone(); }
+   911→  };
+   912→
+   913→  return (
+   914→    <Dialog open={open} onOpenChange={onOpenChange}>
+   915→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+   916→        <DialogHeader>
+   917→          <DialogTitle>Record Payment</DialogTitle>
+   918→          <DialogDescription>Received amount is allocated FIFO against oldest unpaid deployments.</DialogDescription>
+   919→        </DialogHeader>
+   920→        <div className="space-y-3">
+   921→          {!propertyId && (
+   922→            <Field label="Property" required>
+   923→              <SelectInput
+   924→                value={selected}
+   925→                onChange={setSelected}
+   926→                placeholder="Select property…"
+   927→                options={properties.map((p) => ({ label: p.outstanding !== undefined ? `${p.name} · ${formatINR(p.outstanding, { compact: true })} due` : p.name, value: p.id }))}
+   928→              />
+   929→            </Field>
+   930→          )}
+   931→
+   932→          {loading && <Skeleton className="h-24 w-full rounded-xl" />}
+   933→
+   934→          {!loading && data && (
+   935→            <div className="rounded-xl border">
+   936→              <div className="grid grid-cols-3 divide-x border-b text-center">
+   937→                <div className="px-2 py-2.5">
+   938→                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Billed</p>
+   939→                  <p className="text-sm font-bold tabular-nums">{formatINR(data.ledger.billed, { compact: true })}</p>
+   940→                </div>
+   941→                <div className="px-2 py-2.5">
+   942→                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Received</p>
+   943→                  <p className="text-sm font-bold tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(data.ledger.received, { compact: true })}</p>
+   944→                </div>
+   945→                <div className="px-2 py-2.5">
+   946→                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Outstanding</p>
+   947→                  <p className="text-sm font-bold tabular-nums text-red-600 dark:text-red-400">{formatINR(data.ledger.outstanding, { compact: true })}</p>
+   948→                </div>
+   949→              </div>
+   950→              <div className="max-h-40 overflow-y-auto">
+   951→                {data.days.length === 0 && <p className="p-4 text-center text-xs text-muted-foreground">No billing days yet</p>}
+   952→                {data.days.map((d) => (
+   953→                  <div key={d.date} className="flex items-center justify-between gap-2 border-b px-3 py-2 text-xs last:border-b-0">
+   954→                    <span className="tabular-nums text-muted-foreground">{fmtDay(d.date)}</span>
+   955→                    <span className="tabular-nums">{formatINR(d.billed)}</span>
+   956→                    <span className={cn("tabular-nums", d.paid >= d.billed ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+   957→                      {formatINR(d.paid)} paid
+   958→                    </span>
+   959→                  </div>
+   960→                ))}
+   961→              </div>
+   962→            </div>
+   963→          )}
+   964→
+   965→          <div className="grid gap-3 sm:grid-cols-2">
+   966→            <Field label="Amount (₹)" required>
+   967→              <Input type="number" inputMode="numeric" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" className="h-10" />
+   968→            </Field>
+   969→            <Field label="Date" required>
+   970→              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
+   971→            </Field>
+   972→          </div>
+   973→          <div className="grid gap-3 sm:grid-cols-2">
+   974→            <Field label="Method">
+   975→              <SelectInput value={method} onChange={setMethod} options={["UPI", "Bank", "Cash", "Cheque", "Other"].map((m) => ({ label: m, value: m }))} />
+   976→            </Field>
+   977→            <Field label="Reference">
+   978→              <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="UTR / cheque no." className="h-10" />
+   979→            </Field>
+   980→          </div>
+   981→          <Field label="Notes">
+   982→            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Optional" />
+   983→          </Field>
+   984→        </div>
+   985→        <DialogFooter className="gap-2">
+   986→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   987→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : "Record Payment"}</Button>
+   988→        </DialogFooter>
+   989→      </DialogContent>
+   990→    </Dialog>
+   991→  );
+   992→}
+   993→
+   994→// ---------------------------------------------------------------------------
+   995→// Deploy Wizard (multi-step: details → employees → review & save)
+   996→// ---------------------------------------------------------------------------
+   997→
+   998→interface ShiftRec { id: string; name: string; startTime?: string; endTime?: string }
+   999→
+  1000→export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyId, onDone }: {
+  1001→  open: boolean;
+  1002→  onOpenChange: (v: boolean) => void;
+  1003→  defaultDate?: string;
+  1004→  defaultPropertyId?: string;
+  1005→  onDone: () => void;
+  1006→}) {
+  1007→  const [step, setStep] = useState(1);
+  1008→  const [properties, setProperties] = useState<PropertyRec[]>([]);
+  1009→  const [shifts, setShifts] = useState<ShiftRec[]>([]);
+  1010→  const { employees, loading: loadingEmps } = useActiveEmployees(open);
+  1011→  const [propertyId, setPropertyId] = useState(defaultPropertyId ?? "");
+  1012→  const [date, setDate] = useState(defaultDate ?? todayStr());
+  1013→  const [shift, setShift] = useState("DAY");
+  1014→  const [workCategory, setWorkCategory] = useState("");
+  1015→  const [notes, setNotes] = useState("");
+  1016→  const [selected, setSelected] = useState<string[]>([]);
+  1017→  const [overrides, setOverrides] = useState<Record<string, { billingRate?: string; payoutRate?: string }>>({});
+  1018→  const [resolved, setResolved] = useState<{ billingRate: number | null; payoutRate: number | null } | null>(null);
+  1019→  const [duplicates, setDuplicates] = useState<string[] | null>(null);
+  1020→  const [creating, setCreating] = useState(false);
+  1021→
+  1022→  // Load static options (async) + reset on open (render-time state adjustment).
+  1023→  const [prevOpen, setPrevOpen] = useState(open);
+  1024→  if (open !== prevOpen) {
+  1025→    setPrevOpen(open);
+  1026→    if (open) {
+  1027→      setStep(1);
+  1028→      setPropertyId(defaultPropertyId ?? "");
+  1029→      setDate(defaultDate ?? todayStr());
+  1030→      setShift("DAY");
+  1031→      setWorkCategory("");
+  1032→      setNotes("");
+  1033→      setSelected([]);
+  1034→      setOverrides({});
+  1035→      setResolved(null);
+  1036→      setDuplicates(null);
+  1037→    }
+  1038→  }
+  1039→
+  1040→  useEffect(() => {
+  1041→    if (!open) return;
+  1042→    let cancelled = false;
+  1043→    api.get<ListResp<PropertyRec>>("/api/properties" + qs({ status: "ACTIVE", pageSize: 200 }))
+  1044→      .then((d) => { if (!cancelled) setProperties(d.items); })
+  1045→      .catch(() => {});
+  1046→    api.get<{ items: ShiftRec[] }>("/api/shifts")
+  1047→      .then((d) => { if (!cancelled) setShifts(d.items); })
+  1048→      .catch(() => {});
+  1049→    return () => { cancelled = true; };
+  1050→  }, [open]);
+  1051→
+  1052→  // Resolve contract rates when property + date known.
+  1053→  const [prevResolveKey, setPrevResolveKey] = useState("");
+  1054→  const resolveKey = open && propertyId && date ? `${propertyId}|${date}` : "";
+  1055→  if (resolveKey !== prevResolveKey) {
+  1056→    setPrevResolveKey(resolveKey);
+  1057→    if (!resolveKey) setResolved(null);
+  1058→  }
+  1059→  useEffect(() => {
+  1060→    if (!resolveKey) return;
+  1061→    let cancelled = false;
+  1062→    api.get<{ contract: ContractRec | null; billingRate: number | null; payoutRate: number | null }>(
+  1063→      "/api/contracts/resolve" + qs({ propertyId, date })
+  1064→    )
+  1065→      .then((d) => { if (!cancelled) setResolved({ billingRate: d.billingRate, payoutRate: d.payoutRate }); })
+  1066→      .catch(() => { if (!cancelled) setResolved(null); });
+  1067→    return () => { cancelled = true; };
+  1068→  }, [resolveKey]);
+  1069→
+  1070→  const selectedEmployees = useMemo(
+  1071→    () => employees.filter((e) => selected.includes(e.id)),
+  1072→    [employees, selected]
+  1073→  );
+  1074→
+  1075→  const rateFor = useCallback((emp: PickerEmployee, key: "billingRate" | "payoutRate"): number => {
+  1076→    const o = overrides[emp.id];
+  1077→    if (o && o[key] !== undefined && o[key] !== "") return parseAmount(o[key]);
+  1078→    if (key === "billingRate") return resolved?.billingRate ?? 0;
+  1079→    return resolved?.payoutRate ?? emp.standardRate ?? 0;
+  1080→  }, [overrides, resolved]);
+  1081→
+  1082→  const totals = useMemo(() => {
+  1083→    let billing = 0, payout = 0;
+  1084→    for (const e of selectedEmployees) {
+  1085→      billing += rateFor(e, "billingRate");
+  1086→      payout += rateFor(e, "payoutRate");
+  1087→    }
+  1088→    return { billing, payout, margin: billing - payout };
+  1089→  }, [selectedEmployees, rateFor]);
+  1090→
+  1091→  const buildBody = (ids: string[]) => {
+  1092→    const overridesPayload: Record<string, Record<string, number>> = {};
+  1093→    for (const e of selectedEmployees) {
+  1094→      if (!ids.includes(e.id)) continue;
+  1095→      const o = overrides[e.id];
+  1096→      if (!o) continue;
+  1097→      const payload: Record<string, number> = {};
+  1098→      if (o.billingRate !== undefined && o.billingRate !== "") payload.billingRate = parseAmount(o.billingRate);
+  1099→      if (o.payoutRate !== undefined && o.payoutRate !== "") payload.payoutRate = parseAmount(o.payoutRate);
+  1100→      if (Object.keys(payload).length > 0) overridesPayload[e.id] = payload;
+  1101→    }
+  1102→    return {
+  1103→      propertyId,
+  1104→      date,
+  1105→      shift,
+  1106→      workCategory: workCategory || undefined,
+  1107→      notes: notes || undefined,
+  1108→      employeeIds: ids,
+  1109→      overrides: Object.keys(overridesPayload).length > 0 ? overridesPayload : undefined,
+  1110→    };
+  1111→  };
+  1112→
+  1113→  const finish = (result: { created?: unknown[]; skipped?: { employeeName?: string }[] }) => {
+  1114→    const created = result.created?.length ?? 0;
+  1115→    const skipped = result.skipped?.length ?? 0;
+  1116→    toast.success(
+  1117→      created > 0
+  1118→        ? `Deployed ${created} employee${created === 1 ? "" : "s"}${skipped > 0 ? ` · ${skipped} skipped (duplicates)` : ""}`
+  1119→        : "No new deployments created"
+  1120→    );
+  1121→    onOpenChange(false);
+  1122→    onDone();
+  1123→  };
+  1124→
+  1125→  const submit = async (skipIds?: string[]) => {
+  1126→    const ids = skipIds ?? selected;
+  1127→    if (ids.length === 0) { toast.error("Select at least one employee"); return; }
+  1128→    setCreating(true);
+  1129→    try {
+  1130→      const result = await api.post<{ created: unknown[]; skipped: { employeeName?: string }[] }>("/api/deployments", buildBody(ids));
+  1131→      finish(result);
+  1132→    } catch (e) {
+  1133→      if (e instanceof ApiError && e.status === 409) {
+  1134→        const dups = Array.isArray(e.extra?.duplicates) ? (e.extra.duplicates as string[]) : [];
+  1135→        setDuplicates(dups);
+  1136→        toast.error(e.message || "Some employees are already deployed on this date & shift");
+  1137→      } else {
+  1138→        toast.error(errMessage(e));
+  1139→      }
+  1140→    } finally {
+  1141→      setCreating(false);
+  1142→    }
+  1143→  };
+  1144→
+  1145→  const remainingAfterSkip = useMemo(() => {
+  1146→    if (!duplicates) return [];
+  1147→    return selected.filter((id) => {
+  1148→      const emp = employees.find((x) => x.id === id);
+  1149→      if (!emp) return false;
+  1150→      return !duplicates.some((d) => d.includes(emp.fullName) || (!!emp.code && d.includes(emp.code)));
+  1151→    });
+  1152→  }, [duplicates, selected, employees]);
+  1153→
+  1154→  const canNext = propertyId && date && shift;
+  1155→
+  1156→  return (
+  1157→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1158→      <DialogContent className="flex h-[86vh] flex-col gap-0 overflow-hidden p-0 sm:h-[82vh] sm:max-w-xl">
+  1159→        <DialogHeader className="border-b px-5 pb-4 pt-5 text-left">
+  1160→          <DialogTitle>Deploy Employees</DialogTitle>
+  1161→          <DialogDescription>
+  1162→            Step {step} of 3 · {step === 1 ? "Where & when" : step === 2 ? "Pick employees" : "Review rates & save"}
+  1163→          </DialogDescription>
+  1164→          <div className="mt-3 flex items-center gap-1.5" aria-hidden>
+  1165→            {[1, 2, 3].map((s) => (
+  1166→              <div key={s} className={cn("h-1.5 flex-1 rounded-full transition-colors", s <= step ? "bg-primary" : "bg-muted")} />
+  1167→            ))}
+  1168→          </div>
+  1169→        </DialogHeader>
+  1170→
+  1171→        <div className="flex-1 space-y-3.5 overflow-y-auto px-5 py-4">
+  1172→          {duplicates && duplicates.length > 0 && (
+  1173→            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs dark:border-amber-900 dark:bg-amber-950/40">
+  1174→              <p className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300">
+  1175→                <AlertTriangle className="h-3.5 w-3.5" aria-hidden /> Already deployed
+  1176→              </p>
+  1177→              <ul className="mt-1.5 max-h-24 space-y-0.5 overflow-y-auto text-amber-800/90 dark:text-amber-300/90">
+  1178→                {duplicates.slice(0, 10).map((d, i) => <li key={i} className="truncate">• {d}</li>)}
+  1179→              </ul>
+  1180→              {remainingAfterSkip.length > 0 && (
+  1181→                <Button
+  1182→                  size="sm"
+  1183→                  variant="outline"
+  1184→                  className="mt-2 h-8 border-amber-300 text-amber-800 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-950"
+  1185→                  onClick={() => submit(remainingAfterSkip)}
+  1186→                  disabled={creating}
+  1187→                >
+  1188→                  Skip duplicates & save {remainingAfterSkip.length} rest
+  1189→                </Button>
+  1190→              )}
+  1191→            </div>
+  1192→          )}
+  1193→
+  1194→          {step === 1 && (
+  1195→            <>
+  1196→              <Field label="Property" required>
+  1197→                <SelectInput
+  1198→                  value={propertyId}
+  1199→                  onChange={setPropertyId}
+  1200→                  placeholder="Select property…"
+  1201→                  options={properties.map((p) => ({ label: p.brandName ? `${p.name} (${p.brandName})` : p.name, value: p.id }))}
+  1202→                />
+  1203→              </Field>
+  1204→              <div className="grid gap-3 sm:grid-cols-2">
+  1205→                <Field label="Date" required>
+  1206→                  <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
+  1207→                </Field>
+  1208→                <Field label="Shift" required>
+  1209→                  <SelectInput
+  1210→                    value={shift}
+  1211→                    onChange={setShift}
+  1212→                    options={shifts.length > 0
+  1213→                      ? shifts.map((s) => ({ label: `${s.name} (${s.startTime ?? ""}–${s.endTime ?? ""})`, value: s.name }))
+  1214→                      : [{ label: "Day", value: "DAY" }, { label: "Night", value: "NIGHT" }]}
+  1215→                  />
+  1216→                </Field>
+  1217→              </div>
+  1218→              <Field label="Work category" hint="e.g. Service, Kitchen, Bar, Delivery — optional">
+  1219→                <Input value={workCategory} onChange={(e) => setWorkCategory(e.target.value)} className="h-10" placeholder="Service" />
+  1220→              </Field>
+  1221→              <Field label="Notes">
+  1222→                <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Optional instructions" />
+  1223→              </Field>
+  1224→              <div className={cn(
+  1225→                "rounded-xl border px-3.5 py-3 text-xs",
+  1226→                resolved?.billingRate != null
+  1227→                  ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300"
+  1228→                  : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+  1229→              )}>
+  1230→                {resolved?.billingRate != null ? (
+  1231→                  <p className="font-medium">
+  1232→                    Contract rates will be used: billing {formatINR(resolved.billingRate)} / payout {formatINR(resolved.payoutRate ?? 0)} per shift
+  1233→                  </p>
+  1234→                ) : (
+  1235→                  <p className="font-medium">
+  1236→                    No contract found for this property & date. Payout falls back to each employee&apos;s standard rate; set billing manually in review or the save may be rejected.
+  1237→                  </p>
+  1238→                )}
+  1239→              </div>
+  1240→            </>
+  1241→          )}
+  1242→
+  1243→          {step === 2 && (
+  1244→            loadingEmps ? (
+  1245→              <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 w-full rounded-xl" />)}</div>
+  1246→            ) : (
+  1247→              <>
+  1248→                <div className="flex items-center justify-between">
+  1249→                  <p className="text-sm font-medium">Select employees <span className="text-muted-foreground">({selected.length} chosen)</span></p>
+  1250→                  <Button
+  1251→                    type="button"
+  1252→                    variant="ghost"
+  1253→                    size="sm"
+  1254→                    className="h-8 text-xs"
+  1255→                    onClick={() => setSelected(selected.length === employees.length ? [] : employees.map((e) => e.id))}
+  1256→                  >
+  1257→                    {selected.length === employees.length ? "Deselect all" : "Select all"}
+  1258→                  </Button>
+  1259→                </div>
+  1260→                <EmployeePicker employees={employees} value={selected} onChange={setSelected} height="max-h-[46vh]" />
+  1261→              </>
+  1262→            )
+  1263→          )}
+  1264→
+  1265→          {step === 3 && (
+  1266→            <>
+  1267→              <div className="rounded-xl border bg-muted/40 px-3.5 py-2.5 text-xs">
+  1268→                <p className="font-medium">{properties.find((p) => p.id === propertyId)?.name ?? "Property"}</p>
+  1269→                <p className="mt-0.5 text-muted-foreground">
+  1270→                  {fmtDay(date)} · {shift} shift{workCategory ? ` · ${workCategory}` : ""} · {selected.length} employee{selected.length === 1 ? "" : "s"}
+  1271→                </p>
+  1272→              </div>
+  1273→              <div className="overflow-hidden rounded-xl border">
+  1274→                <div className="grid grid-cols-[1fr_auto_auto] gap-2 border-b bg-muted/50 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+  1275→                  <span>Employee</span><span className="text-right">Billing ₹</span><span className="text-right">Payout ₹</span>
+  1276→                </div>
+  1277→                <div className="max-h-56 overflow-y-auto">
+  1278→                  {selectedEmployees.map((e) => (
+  1279→                    <div key={e.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-2 border-b px-3 py-2 last:border-b-0">
+  1280→                      <div className="min-w-0">
+  1281→                        <p className="truncate text-xs font-medium">{e.fullName}</p>
+  1282→                        <p className="text-[10px] text-muted-foreground">{e.code}</p>
+  1283→                      </div>
+  1284→                      <Input
+  1285→                        type="number"
+  1286→                        inputMode="numeric"
+  1287→                        className="h-8 w-20 text-right text-xs tabular-nums"
+  1288→                        value={overrides[e.id]?.billingRate ?? String(resolved?.billingRate ?? 0)}
+  1289→                        onChange={(ev) => setOverrides((o) => ({ ...o, [e.id]: { ...o[e.id], billingRate: ev.target.value } }))}
+  1290→                        aria-label={`Billing rate for ${e.fullName}`}
+  1291→                      />
+  1292→                      <Input
+  1293→                        type="number"
+  1294→                        inputMode="numeric"
+  1295→                        className="h-8 w-20 text-right text-xs tabular-nums"
+  1296→                        value={overrides[e.id]?.payoutRate ?? String(resolved?.payoutRate ?? e.standardRate ?? 0)}
+  1297→                        onChange={(ev) => setOverrides((o) => ({ ...o, [e.id]: { ...o[e.id], payoutRate: ev.target.value } }))}
+  1298→                        aria-label={`Payout rate for ${e.fullName}`}
+  1299→                      />
+  1300→                    </div>
+  1301→                  ))}
+  1302→                </div>
+  1303→              </div>
+  1304→              <p className="text-[11px] text-muted-foreground">Rates are per shift. Edit any cell to override the contract rate for that employee only.</p>
+  1305→            </>
+  1306→          )}
+  1307→        </div>
+  1308→
+  1309→        <div className="border-t bg-card px-5 py-3">
+  1310→          {step === 3 && (
+  1311→            <div className="mb-2.5 flex items-center justify-between rounded-lg bg-muted/60 px-3 py-2 text-xs font-medium tabular-nums">
+  1312→              <span>Billing <span className="font-bold">{formatINR(totals.billing)}</span></span>
+  1313→              <span>Payout <span className="font-bold">{formatINR(totals.payout)}</span></span>
+  1314→              <span className={totals.margin >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>
+  1315→                Margin <span className="font-bold">{formatINR(totals.margin)}</span>
+  1316→              </span>
+  1317→            </div>
+  1318→          )}
+  1319→          <div className="flex items-center justify-between gap-2">
+  1320→            {step === 1 ? (
+  1321→              <Button variant="outline" className="min-h-10" onClick={() => onOpenChange(false)}>Cancel</Button>
+  1322→            ) : (
+  1323→              <Button variant="outline" className="min-h-10 gap-1" onClick={() => setStep(step - 1)}>
+  1324→                <ChevronLeft className="h-4 w-4" aria-hidden />Back
+  1325→              </Button>
+  1326→            )}
+  1327→            {step < 3 ? (
+  1328→              <Button className="min-h-10 gap-1.5" disabled={!canNext} onClick={() => setStep(step + 1)}>
+  1329→                Next<ArrowRight className="h-4 w-4" aria-hidden />
+  1330→              </Button>
+  1331→            ) : (
+  1332→              <Button className="min-h-10 gap-1.5" onClick={() => submit()} disabled={creating || selected.length === 0}>
+  1333→                <Users className="h-4 w-4" aria-hidden />
+  1334→                {creating ? "Deploying…" : `Deploy ${selected.length} employee${selected.length === 1 ? "" : "s"}`}
+  1335→              </Button>
+  1336→            )}
+  1337→          </div>
+  1338→        </div>
+  1339→      </DialogContent>
+  1340→    </Dialog>
+  1341→  );
+  1342→}
+  1343→
+  1344→// ---------------------------------------------------------------------------
+  1345→// Contract form (contracts-view + property-detail-view)
+  1346→// ---------------------------------------------------------------------------
+  1347→
+  1348→export function ContractFormDialog({ open, onOpenChange, contract, defaultPropertyId, properties: propsProp, onDone }: {
+  1349→  open: boolean;
+  1350→  onOpenChange: (v: boolean) => void;
+  1351→  contract?: ContractRec | null;
+  1352→  defaultPropertyId?: string;
+  1353→  properties?: { id: string; name: string }[];
+  1354→  onDone: () => void;
+  1355→}) {
+  1356→  const editing = Boolean(contract);
+  1357→  const [fetchedProps, setFetchedProps] = useState<{ id: string; name: string }[]>([]);
+  1358→  const properties = propsProp ?? fetchedProps;
+  1359→  const [form, setForm] = useState({
+  1360→    propertyId: defaultPropertyId ?? "", name: "", startDate: todayStr(), endDate: "",
+  1361→    billingRate: "", payoutRate: "", shift: "DAY", category: "", maxEmployees: "",
+  1362→    paymentTerms: "", notes: "",
+  1363→  });
+  1364→  const { mutate, saving } = useMutation();
+  1365→
+  1366→  useEffect(() => {
+  1367→    if (propsProp || properties.length > 0) return;
+  1368→    let cancelled = false;
+  1369→    api.get<ListResp<PropertyRec>>("/api/properties" + qs({ pageSize: 200 }))
+  1370→      .then((d) => { if (!cancelled) setFetchedProps(d.items.map((p) => ({ id: p.id, name: p.name }))); })
+  1371→      .catch(() => {});
+  1372→    return () => { cancelled = true; };
+  1373→  }, [propsProp]);
+  1374→
+  1375→  // Reset form each time the dialog opens (render-time state adjustment).
+  1376→  const [prevOpen, setPrevOpen] = useState(open);
+  1377→  if (open !== prevOpen) {
+  1378→    setPrevOpen(open);
+  1379→    if (open) {
+  1380→      setForm({
+  1381→        propertyId: contract?.propertyId ?? defaultPropertyId ?? "",
+  1382→        name: contract?.name ?? "",
+  1383→        startDate: contract?.startDate?.slice(0, 10) ?? todayStr(),
+  1384→        endDate: contract?.endDate?.slice(0, 10) ?? "",
+  1385→        billingRate: contract ? String(contract.billingRate) : "",
+  1386→        payoutRate: contract ? String(contract.payoutRate) : "",
+  1387→        shift: contract?.shift ?? "DAY",
+  1388→        category: contract?.category ?? "",
+  1389→        maxEmployees: contract?.maxEmployees ? String(contract.maxEmployees) : "",
+  1390→        paymentTerms: contract?.paymentTerms ?? "",
+  1391→        notes: contract?.notes ?? "",
+  1392→      });
+  1393→    }
+  1394→  }
+  1395→
+  1396→  const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+  1397→
+  1398→  const submit = async () => {
+  1399→    if (!form.propertyId) { toast.error("Select a property"); return; }
+  1400→    if (!form.name.trim()) { toast.error("Contract name is required"); return; }
+  1401→    if (!form.startDate) { toast.error("Start date is required"); return; }
+  1402→    const b = parseAmount(form.billingRate);
+  1403→    const p = parseAmount(form.payoutRate);
+  1404→    if (b <= 0 || p <= 0) { toast.error("Billing and payout rates are required"); return; }
+  1405→    const body = {
+  1406→      propertyId: form.propertyId,
+  1407→      name: form.name.trim(),
+  1408→      startDate: form.startDate,
+  1409→      endDate: form.endDate || undefined,
+  1410→      billingRate: b,
+  1411→      payoutRate: p,
+  1412→      shift: form.shift || undefined,
+  1413→      category: form.category || undefined,
+  1414→      maxEmployees: form.maxEmployees ? Number(form.maxEmployees) : undefined,
+  1415→      paymentTerms: form.paymentTerms || undefined,
+  1416→      notes: form.notes || undefined,
+  1417→    };
+  1418→    const res = editing
+  1419→      ? await mutate(() => api.put(`/api/contracts/${contract!.id}`, body), "Contract updated — affects future deployments only")
+  1420→      : await mutate(() => api.post("/api/contracts", body), "Contract created");
+  1421→    if (res.ok) { onOpenChange(false); onDone(); }
+  1422→  };
+  1423→
+  1424→  return (
+  1425→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1426→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+  1427→        <DialogHeader>
+  1428→          <DialogTitle>{editing ? "Edit Contract" : "New Contract"}</DialogTitle>
+  1429→          <DialogDescription>
+  1430→            {editing
+  1431→              ? "Rate changes affect future deployments only — historical records keep their snapshot."
+  1432→              : "Creating an ACTIVE contract ends the property's previous active contract."}
+  1433→          </DialogDescription>
+  1434→        </DialogHeader>
+  1435→        <div className="grid gap-3 sm:grid-cols-2">
+  1436→          <Field label="Property" required className="sm:col-span-2">
+  1437→            <SelectInput
+  1438→              value={form.propertyId}
+  1439→              onChange={set("propertyId")}
+  1440→              placeholder="Select property…"
+  1441→              disabled={Boolean(defaultPropertyId) && !editing}
+  1442→              options={properties.map((p) => ({ label: p.name, value: p.id }))}
+  1443→            />
+  1444→          </Field>
+  1445→          <Field label="Contract name" required className="sm:col-span-2">
+  1446→            <Input value={form.name} onChange={(e) => set("name")(e.target.value)} className="h-10" placeholder="e.g. Day-shift 2025" />
+  1447→          </Field>
+  1448→          <Field label="Start date" required><Input type="date" value={form.startDate} onChange={(e) => set("startDate")(e.target.value)} className="h-10" /></Field>
+  1449→          <Field label="End date"><Input type="date" value={form.endDate} onChange={(e) => set("endDate")(e.target.value)} className="h-10" /></Field>
+  1450→          <Field label="Billing rate (₹/shift)" required><Input type="number" inputMode="numeric" value={form.billingRate} onChange={(e) => set("billingRate")(e.target.value)} className="h-10" /></Field>
+  1451→          <Field label="Payout rate (₹/shift)" required><Input type="number" inputMode="numeric" value={form.payoutRate} onChange={(e) => set("payoutRate")(e.target.value)} className="h-10" /></Field>
+  1452→          <Field label="Shift">
+  1453→            <SelectInput value={form.shift} onChange={set("shift")} options={[{ label: "Day", value: "DAY" }, { label: "Night", value: "NIGHT" }, { label: "All", value: "ALL" }]} />
+  1454→          </Field>
+  1455→          <Field label="Work category"><Input value={form.category} onChange={(e) => set("category")(e.target.value)} className="h-10" placeholder="Service, Kitchen…" /></Field>
+  1456→          <Field label="Max employees"><Input type="number" inputMode="numeric" value={form.maxEmployees} onChange={(e) => set("maxEmployees")(e.target.value)} className="h-10" /></Field>
+  1457→          <Field label="Payment terms"><Input value={form.paymentTerms} onChange={(e) => set("paymentTerms")(e.target.value)} className="h-10" placeholder="Weekly, every Monday" /></Field>
+  1458→          <Field label="Notes" className="sm:col-span-2"><Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} rows={2} /></Field>
+  1459→        </div>
+  1460→        <DialogFooter className="gap-2">
+  1461→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+  1462→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : editing ? "Save changes" : "Create contract"}</Button>
+  1463→        </DialogFooter>
+  1464→      </DialogContent>
+  1465→    </Dialog>
+  1466→  );
+  1467→}
+  1468→
+  1469→// ---------------------------------------------------------------------------
+  1470→// Misc shared bits
+  1471→// ---------------------------------------------------------------------------
+  1472→
+  1473→export function ShiftBadgeInline({ shift }: { shift: string }) {
+  1474→  return (
+  1475→    <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+  1476→      <span className={cn("inline-block h-1.5 w-1.5 rounded-full", shift === "NIGHT" ? "bg-slate-500" : "bg-amber-500")} aria-hidden />
+  1477→      {shift}
+  1478→    </span>
+  1479→  );
+  1480→}
+  1481→

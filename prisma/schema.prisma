@@ -70,9 +70,9 @@ model Employee {
   joiningDate            DateTime     @default(now())
   designation            String?
   skills                 String?
-  standardRate           Float        @default(0)
-  rateType               String       @default("PER_DAY")
-  status                 String       @default("ACTIVE") // ACTIVE/INACTIVE/SUSPENDED/LEFT
+  standardRate           Float        @default(0) // fixed payout rate per shift — snapshot into deployments
+  rateType               String       @default("PER_SHIFT")
+  status                 String       @default("ACTIVE") // ACTIVE/INACTIVE
   bankDetails            String?
   upiId                  String?
   preferredPaymentMethod String?
@@ -100,42 +100,21 @@ model Property {
   whatsapp      String?
   email         String?
   startDate     DateTime?
+  billingRate   Float     @default(0) // fixed billing rate per shift — snapshot into deployments
   status        String    @default("ACTIVE") // ACTIVE/INACTIVE
   notes         String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  contracts   Contract[]
   deployments Deployment[]
   payments    PropertyPayment[]
 
   @@index([status])
 }
 
-model Contract {
-  id           String    @id @default(cuid())
-  propertyId   String
-  property     Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-  name         String
-  startDate    DateTime
-  endDate      DateTime?
-  billingRate  Float
-  payoutRate   Float
-  shift        String?
-  category     String?
-  maxEmployees Int?
-  paymentTerms String?
-  notes        String?
-  status       String    @default("ACTIVE") // ACTIVE/ENDED
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-
-  deployments Deployment[]
-
-  @@index([propertyId, status])
-}
-
-// Immutable daily work record — historical rates snapshotted here.
+// Immutable daily work record — a row means the employee WORKED that shift.
+// Rates + amounts are snapshotted here at creation; later master-rate changes
+// never touch historical rows (the zero-mismatch guarantee).
 model Deployment {
   id               String    @id @default(cuid())
   date             DateTime
@@ -143,17 +122,13 @@ model Deployment {
   employee         Employee  @relation(fields: [employeeId], references: [id])
   propertyId       String
   property         Property  @relation(fields: [propertyId], references: [id])
-  contractId       String?
-  contract         Contract? @relation(fields: [contractId], references: [id])
-  shift            String // DAY / NIGHT / custom
-  workCategory     String?
-  billingRate      Float
-  payoutRate       Float
-  billingAmount    Float
-  payoutAmount     Float
+  shift            String // DAY / NIGHT / FULL (FULL = day + night = 2 shift units)
+  billingRate      Float // per shift-unit, snapshotted
+  payoutRate       Float // per shift-unit, snapshotted
+  billingAmount    Float // billingRate × shift units (+ adjustment)
+  payoutAmount     Float // payoutRate × shift units
   adjustmentAmount Float     @default(0)
   adjustmentNote   String?
-  status           String    @default("SCHEDULED") // SCHEDULED/CONFIRMED/COMPLETED/PARTIAL/CANCELLED/NO_SHOW
   paidAmount       Float     @default(0) // derived/dynamic, persisted for quick list rendering
   notes            String?
   createdById      String?
@@ -164,7 +139,6 @@ model Deployment {
   @@index([date])
   @@index([propertyId, date])
   @@index([employeeId, date])
-  @@index([status])
 }
 
 model PropertyPayment {

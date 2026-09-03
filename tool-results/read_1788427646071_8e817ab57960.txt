@@ -1,0 +1,696 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import { api, qs } from "@/lib/api-client";
+     5→import { formatINR, parseAmount } from "@/lib/money";
+     6→import type { ViewProps } from "@/components/view-types";
+     7→import { PageHeader } from "@/components/shared/page-header";
+     8→import { DataTable, type Column } from "@/components/shared/data-table";
+     9→import { RangeSelector, type RangeKey } from "@/components/shared/filters";
+    10→import { Button } from "@/components/ui/button";
+    11→import { Card, CardContent } from "@/components/ui/card";
+    12→import {
+    13→  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+    14→} from "@/components/ui/dialog";
+    15→import { Input } from "@/components/ui/input";
+    16→import { Label } from "@/components/ui/label";
+    17→import { Separator } from "@/components/ui/separator";
+    18→import { Skeleton } from "@/components/ui/skeleton";
+    19→import { StatusBadge } from "@/components/shared/status-badge";
+    20→import { toast } from "sonner";
+    21→import { cn } from "@/lib/utils";
+    22→import { useLang, t } from "@/lib/i18n";
+    23→import { CalendarCheck, CheckCheck, CheckSquare, Square, Users, IndianRupee, Pencil, UserX, XCircle, MinusCircle, CalendarDays, ChevronDown } from "lucide-react";
+    24→import {
+    25→  DeploymentRec, DeployWizard, ListResp, Option, PropertyRec, SelectInput, ShiftBadgeInline,
+    26→  errMessage, fmtDateTime, fmtDay, todayStr, useAsync, useMutation,
+    27→} from "./_shared";
+    28→
+    29→const STATUS_OPTIONS: Option[] = [
+    30→  { label: "All statuses", value: "" },
+    31→  { label: "Scheduled", value: "SCHEDULED" },
+    32→  { label: "Confirmed", value: "CONFIRMED" },
+    33→  { label: "Completed", value: "COMPLETED" },
+    34→  { label: "Partial", value: "PARTIAL" },
+    35→  { label: "No-show", value: "NO_SHOW" },
+    36→  { label: "Cancelled", value: "CANCELLED" },
+    37→];
+    38→
+    39→const SHIFT_OPTIONS: Option[] = [
+    40→  { label: "All shifts", value: "" },
+    41→  { label: "Day", value: "DAY" },
+    42→  { label: "Night", value: "NIGHT" },
+    43→];
+    44→
+    45→interface Totals { billing: number; payout: number; margin: number; count: number }
+    46→
+    47→// --- Attendance month grid (per-employee × per-day shift counts) ---
+    48→interface AttendanceCell { date: string; shifts: number }
+    49→interface AttendanceRow {
+    50→  employeeId: string; name: string; code: string; role?: string | null;
+    51→  total: number; workedDays: number; cells: AttendanceCell[];
+    52→}
+    53→interface AttendanceResp { month: string; dates: string[]; rows: AttendanceRow[]; totalShifts: number }
+    54→
+    55→const ATT_HEAT = [
+    56→  "bg-muted/50",
+    57→  "bg-emerald-200/70 dark:bg-emerald-900/60",
+    58→  "bg-emerald-400/80 dark:bg-emerald-800/80",
+    59→  "bg-emerald-600 dark:bg-emerald-600",
+    60→];
+    61→
+    62→function attClass(n: number): string {
+    63→  if (n <= 0) return ATT_HEAT[0];
+    64→  if (n === 1) return ATT_HEAT[1];
+    65→  if (n === 2) return ATT_HEAT[2];
+    66→  return ATT_HEAT[3];
+    67→}
+    68→
+    69→const WD_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
+    70→
+    71→function monthLabel(month: string): string {
+    72→  const [y, m] = month.split("-").map(Number);
+    73→  return new Date(y, (m ?? 1) - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+    74→}
+    75→
+    76→function shiftMonth(month: string, delta: number): string {
+    77→  const [y, m] = month.split("-").map(Number);
+    78→  const d = new Date(y, (m ?? 1) - 1 + delta, 1);
+    79→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    80→}
+    81→
+    82→function isWeekend(dateStr: string): boolean {
+    83→  const [y, m, d] = dateStr.split("-").map(Number);
+    84→  const wd = new Date(y, (m ?? 1) - 1, d ?? 1).getDay();
+    85→  return wd === 0 || wd === 6;
+    86→}
+    87→
+    88→function monthBounds(offset = 0): { from: string; to: string } {
+    89→  const now = new Date();
+    90→  const first = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    91→  const last = new Date(now.getFullYear(), now.getMonth() + offset + 1, 0);
+    92→  const f = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    93→  return { from: f(first), to: f(last) };
+    94→}
+    95→
+    96→export default function DeploymentsView({ params }: ViewProps) {
+    97→  const { lang } = useLang();
+    98→  const [date, setDate] = useState(params?.date ?? todayStr());
+    99→  const [fromTo, setFromTo] = useState<{ from?: string; to?: string }>({});
+   100→  const [rangeKey, setRangeKey] = useState<RangeKey | null>(params?.date ? null : "today");
+   101→  const [propertyId, setPropertyId] = useState(params?.propertyId ?? "");
+   102→  const [employeeId, setEmployeeId] = useState(params?.employeeId ?? "");
+   103→  const [shift, setShift] = useState("");
+   104→  const [status, setStatus] = useState("");
+   105→  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+   106→  const [wizardOpen, setWizardOpen] = useState(false);
+   107→  const [detail, setDetail] = useState<DeploymentRec | null>(null);
+   108→  const [editRates, setEditRates] = useState(false);
+   109→  const [rateForm, setRateForm] = useState({ billingRate: "", payoutRate: "", adjustmentAmount: "", adjustmentNote: "", notes: "" });
+   110→  const { mutate, saving } = useMutation();
+   111→
+   112→  // Attendance month grid — fetched lazily, only while expanded.
+   113→  const [attOpen, setAttOpen] = useState(false);
+   114→  const [attMonth, setAttMonth] = useState(() => {
+   115→    const n = new Date();
+   116→    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+   117→  });
+   118→  const { data: att, loading: attLoading } = useAsync<AttendanceResp | null>(
+   119→    () => (attOpen ? api.get<AttendanceResp>(`/api/deployments/attendance?month=${attMonth}`) : Promise.resolve(null)),
+   120→    [attOpen, attMonth]
+   121→  );
+   122→
+   123→  // Property options for filter.
+   124→  const [properties, setProperties] = useState<PropertyRec[]>([]);
+   125→  useEffect(() => {
+   126→    let cancelled = false;
+   127→    api.get<ListResp<PropertyRec>>("/api/properties" + qs({ pageSize: 200 }))
+   128→      .then((d) => { if (!cancelled) setProperties(d.items); })
+   129→      .catch(() => {});
+   130→    return () => { cancelled = true; };
+   131→  }, []);
+   132→
+   133→  // Employee options for filter (active only).
+   134→  const [employees, setEmployees] = useState<{ id: string; fullName: string; code: string }[]>([]);
+   135→  useEffect(() => {
+   136→    let cancelled = false;
+   137→    api.get<ListResp<{ id: string; fullName: string; code: string }>>("/api/employees" + qs({ status: "ACTIVE", pageSize: 200 }))
+   138→      .then((d) => { if (!cancelled) setEmployees(d.items); })
+   139→      .catch(() => {});
+   140→    return () => { cancelled = true; };
+   141→  }, []);
+   142→
+   143→  const onRange = (r: RangeKey) => {
+   144→    setRangeKey(r);
+   145→    setSelectedIds([]);
+   146→    if (r === "today") { setDate(todayStr()); setFromTo({}); }
+   147→    else if (r === "yesterday") { setDate(todayStr(-1)); setFromTo({}); }
+   148→    else if (r === "week") { setDate(""); setFromTo({ from: todayStr(-6), to: todayStr() }); }
+   149→    else if (r === "lastweek") { setDate(""); setFromTo({ from: todayStr(-13), to: todayStr(-7) }); }
+   150→    else if (r === "month") { setDate(""); setFromTo({ ...monthBounds(0), to: todayStr() }); }
+   151→    else { setDate(""); setFromTo(monthBounds(-1)); }
+   152→  };
+   153→
+   154→  const onDateChange = (d: string) => {
+   155→    setDate(d);
+   156→    setRangeKey(null);
+   157→    setFromTo({});
+   158→    setSelectedIds([]);
+   159→  };
+   160→
+   161→  const [data, setData] = useState<ListResp<DeploymentRec> & { totals?: Totals } | null>(null);
+   162→  const [loading, setLoading] = useState(true);
+   163→  const [error, setError] = useState<string | null>(null);
+   164→
+   165→  const load = useCallback(async () => {
+   166→    setLoading(true);
+   167→    try {
+   168→      const query = qs({
+   169→        date: date || undefined,
+   170→        from: fromTo.from,
+   171→        to: fromTo.to,
+   172→        propertyId: propertyId || undefined,
+   173→        employeeId: employeeId || undefined,
+   174→        shift: shift || undefined,
+   175→        status: status || undefined,
+   176→        pageSize: 200,
+   177→      });
+   178→      const d = await api.get<ListResp<DeploymentRec> & { totals?: Totals }>("/api/deployments" + query);
+   179→      setData(d);
+   180→      setError(null);
+   181→    } catch (e) {
+   182→      setError(errMessage(e));
+   183→      toast.error(errMessage(e));
+   184→    } finally {
+   185→      setLoading(false);
+   186→    }
+   187→  }, [date, fromTo, propertyId, employeeId, shift, status]);
+   188→
+   189→  useEffect(() => { void load(); }, [load]);
+   190→
+   191→  const rows = useMemo(() => data?.items ?? [], [data]);
+   192→  const totals = data?.totals;
+   193→
+   194→  const allChecked = rows.length > 0 && rows.every((r) => selectedIds.includes(r.id));
+   195→
+   196→  const toggleAll = () => {
+   197→    setSelectedIds(allChecked ? [] : rows.map((r) => r.id));
+   198→  };
+   199→
+   200→  const toggleOne = (id: string) => {
+   201→    setSelectedIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+   202→  };
+   203→
+   204→  const bulkStatus = async (next: string) => {
+   205→    if (selectedIds.length === 0) return;
+   206→    const res = await mutate(
+   207→      () => api.post<{ updated: number }>("/api/deployments/bulk-status", { ids: selectedIds, status: next }),
+   208→      `${selectedIds.length} deployment(s) marked ${next.replace("_", " ").toLowerCase()}`
+   209→    );
+   210→    if (res.ok) { setSelectedIds([]); void load(); }
+   211→  };
+   212→
+   213→  const changeStatus = async (d: DeploymentRec, next: string) => {
+   214→    const res = await mutate(() => api.put(`/api/deployments/${d.id}/status`, { status: next }), `Marked ${next.replace("_", " ").toLowerCase()}`, () => ({ module: "DEPLOYMENT", recordId: d.id, onUndo: () => void load() }));
+   215→    if (res.ok) { setDetail(null); void load(); }
+   216→  };
+   217→
+   218→  const openDetail = (d: DeploymentRec) => {
+   219→    setDetail(d);
+   220→    setEditRates(false);
+   221→    setRateForm({
+   222→      billingRate: String(d.billingRate ?? 0),
+   223→      payoutRate: String(d.payoutRate ?? 0),
+   224→      adjustmentAmount: d.adjustmentAmount ? String(d.adjustmentAmount) : "",
+   225→      adjustmentNote: d.adjustmentNote ?? "",
+   226→      notes: d.notes ?? "",
+   227→    });
+   228→  };
+   229→
+   230→  const saveRates = async () => {
+   231→    if (!detail) return;
+   232→    const res = await mutate(
+   233→      () => api.put(`/api/deployments/${detail.id}`, {
+   234→        billingRate: parseAmount(rateForm.billingRate),
+   235→        payoutRate: parseAmount(rateForm.payoutRate),
+   236→        adjustmentAmount: rateForm.adjustmentAmount ? parseAmount(rateForm.adjustmentAmount) : 0,
+   237→        adjustmentNote: rateForm.adjustmentNote || undefined,
+   238→        notes: rateForm.notes || undefined,
+   239→      }),
+   240→      "Rates & adjustments updated"
+   241→    );
+   242→    if (res.ok) { setDetail(null); void load(); }
+   243→  };
+   244→
+   245→  const columns: Column<DeploymentRec>[] = [
+   246→    {
+   247→      key: "select", label: "", className: "w-10",
+   248→      render: (r) => (
+   249→        <div className="flex items-center" onClick={(e) => e.stopPropagation()}>
+   250→          <button
+   251→            type="button"
+   252→            aria-label={selectedIds.includes(r.id) ? "Unselect row" : "Select row"}
+   253→            aria-pressed={selectedIds.includes(r.id)}
+   254→            className="rounded p-1 hover:bg-muted"
+   255→            onClick={() => toggleOne(r.id)}
+   256→          >
+   257→            {selectedIds.includes(r.id)
+   258→              ? <CheckSquare className="h-4 w-4 text-primary" aria-hidden />
+   259→              : <Square className="h-4 w-4 text-muted-foreground" aria-hidden />}
+   260→          </button>
+   261→        </div>
+   262→      ),
+   263→      value: () => "",
+   264→    },
+   265→    { key: "date", label: t(lang, "col.date"), value: (r) => fmtDay(r.date), hideOnMobile: true },
+   266→    {
+   267→      key: "employee", label: t(lang, "col.employee"), primary: true,
+   268→      render: (r) => (
+   269→        <div className="min-w-0">
+   270→          <p className="truncate font-medium">{r.employeeName}</p>
+   271→          <p className="truncate text-[11px] text-muted-foreground">{r.employeeCode} · {r.propertyName}</p>
+   272→        </div>
+   273→      ),
+   274→      value: (r) => r.employeeName,
+   275→    },
+   276→    { key: "property", label: t(lang, "col.property"), value: (r) => r.propertyName, hideOnMobile: true },
+   277→    { key: "shift", label: t(lang, "col.shift"), render: (r) => <ShiftBadgeInline shift={r.shift} />, value: (r) => r.shift },
+   278→    { key: "category", label: t(lang, "col.category"), value: (r) => r.workCategory ?? "—", hideOnMobile: true },
+   279→    {
+   280→      key: "billingAmount", label: t(lang, "col.billing"), className: "text-right",
+   281→      render: (r) => <span className="tabular-nums">{formatINR(r.billingAmount ?? 0)}</span>,
+   282→      value: (r) => formatINR(r.billingAmount ?? 0),
+   283→    },
+   284→    {
+   285→      key: "payoutAmount", label: t(lang, "col.payout"), className: "text-right",
+   286→      render: (r) => <span className="tabular-nums">{formatINR(r.payoutAmount ?? 0)}</span>,
+   287→      value: (r) => formatINR(r.payoutAmount ?? 0),
+   288→      hideOnMobile: true,
+   289→    },
+   290→    { key: "status", label: t(lang, "col.status"), render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+   291→    {
+   292→      key: "paidStatus", label: t(lang, "col.paid"), render: (r) => <StatusBadge status={r.paidStatus ?? "UNPAID"} />, value: (r) => r.paidStatus ?? "UNPAID",
+   293→      hideOnMobile: true,
+   294→    },
+   295→  ];
+   296→
+   297→  return (
+   298→    <div className="space-y-4">
+   299→      <PageHeader
+   300→        title={t(lang, "page.deployments")}
+   301→        subtitle={t(lang, "page.deployments.sub")}
+   302→        actions={
+   303→          <Button size="sm" className="h-9 gap-1.5" onClick={() => setWizardOpen(true)}>
+   304→            <Users className="h-4 w-4" aria-hidden />Deploy Employees
+   305→          </Button>
+   306→        }
+   307→      />
+   308→
+   309→      {/* Attendance month grid (collapsible) */}
+   310→      <Card>
+   311→        <button
+   312→          type="button"
+   313→          className="flex w-full items-center gap-2.5 p-4 text-left"
+   314→          aria-expanded={attOpen}
+   315→          onClick={() => setAttOpen((v) => !v)}
+   316→        >
+   317→          <span className="rounded-lg bg-emerald-100 p-1.5 dark:bg-emerald-950" aria-hidden>
+   318→            <CalendarDays className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+   319→          </span>
+   320→          <span className="min-w-0 flex-1">
+   321→            <span className="block text-sm font-semibold">Attendance — {monthLabel(attMonth)}</span>
+   322→            <span className="block text-xs text-muted-foreground">
+   323→              {att ? `${att.totalShifts.toLocaleString("en-IN")} shifts across ${att.rows.length} employees · click a cell to inspect` : "Per-employee daily shift grid"}
+   324→            </span>
+   325→          </span>
+   326→          <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", attOpen && "rotate-180")} aria-hidden />
+   327→        </button>
+   328→        {attOpen && (
+   329→          <CardContent className="border-t pt-3">
+   330→            <div className="mb-3 flex items-center justify-between gap-2">
+   331→              <div className="flex items-center gap-1">
+   332→                <Button variant="outline" size="sm" className="h-7 w-7 p-0" aria-label="Previous month" onClick={() => setAttMonth((m) => shiftMonth(m, -1))}>
+   333→                  ‹
+   334→                </Button>
+   335→                <Button
+   336→                  variant="outline"
+   337→                  size="sm"
+   338→                  className="h-7 px-2.5 text-xs"
+   339→                  onClick={() => {
+   340→                    const n = new Date();
+   341→                    setAttMonth(`${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`);
+   342→                  }}
+   343→                >
+   344→                  This month
+   345→                </Button>
+   346→                <Button variant="outline" size="sm" className="h-7 w-7 p-0" aria-label="Next month" onClick={() => setAttMonth((m) => shiftMonth(m, 1))}>
+   347→                  ›
+   348→                </Button>
+   349→              </div>
+   350→              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground" aria-hidden>
+   351→                <span>Less</span>
+   352→                {ATT_HEAT.map((c) => <span key={c} className={cn("h-3 w-3 rounded-[3px]", c)} />)}
+   353→                <span>More</span>
+   354→              </div>
+   355→            </div>
+   356→
+   357→            {attLoading && !att ? (
+   358→              <div className="space-y-2">
+   359→                {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-6 w-full" />)}
+   360→              </div>
+   361→            ) : att && att.rows.length > 0 ? (
+   362→              <div className="overflow-x-auto pb-1">
+   363→                <div className="min-w-[640px]">
+   364→                  {/* Header: name + day numbers + totals */}
+   365→                  <div
+   366→                    className="sticky top-0 z-20 grid items-end gap-px border-b bg-card pb-1"
+   367→                    style={{ gridTemplateColumns: `minmax(8.5rem, 11rem) repeat(${att.dates.length}, minmax(14px, 1fr)) 2.6rem 2.6rem` }}
+   368→                  >
+   369→                    <div className="sticky left-0 z-30 bg-card pr-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Employee</div>
+   370→                    {att.dates.map((d, i) => {
+   371→                      const day = Number(d.slice(8));
+   372→                      const wd = WD_LETTERS[new Date(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, day).getDay()];
+   373→                      const isToday = d === todayStr();
+   374→                      return (
+   375→                        <div key={d} className={cn("text-center text-[9px] leading-tight", isWeekend(d) ? "text-muted-foreground/60" : "text-muted-foreground", isToday && "font-bold text-primary")}>
+   376→                          <div className={cn(isToday && "rounded-sm bg-primary/10")}>{day}</div>
+   377→                          <div className="opacity-70">{wd}</div>
+   378→                        </div>
+   379→                      );
+   380→                    })}
+   381→                    <div className="text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Shifts</div>
+   382→                    <div className="text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Days</div>
+   383→                  </div>
+   384→
+   385→                  <div className="max-h-[46vh] overflow-y-auto">
+   386→                    {att.rows.map((r) => (
+   387→                      <div
+   388→                        key={r.employeeId}
+   389→                        className="grid items-center gap-px border-b border-border/40 py-1"
+   390→                        style={{ gridTemplateColumns: `minmax(8.5rem, 11rem) repeat(${att.dates.length}, minmax(14px, 1fr)) 2.6rem 2.6rem` }}
+   391→                      >
+   392→                        <div className="sticky left-0 z-10 bg-card pr-2">
+   393→                          <p className="truncate text-xs font-medium" title={`${r.name} (${r.code})`}>{r.name}</p>
+   394→                          <p className="truncate text-[10px] text-muted-foreground">{r.code}</p>
+   395→                        </div>
+   396→                        {r.cells.map((c) => {
+   397→                          const active = c.shifts > 0;
+   398→                          return (
+   399→                            <button
+   400→                              key={c.date}
+   401→                              type="button"
+   402→                              disabled={!active}
+   403→                              className={cn(
+   404→                                "mx-auto flex h-4 w-4 items-center justify-center rounded-[3px] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+   405→                                active && "cursor-pointer hover:scale-125 hover:ring-1 hover:ring-primary/40",
+   406→                                !active && "cursor-default",
+   407→                                attClass(c.shifts),
+   408→                                isWeekend(c.date) && c.shifts === 0 && "opacity-50",
+   409→                                c.date === todayStr() && "ring-1 ring-primary ring-offset-1 ring-offset-background"
+   410→                              )}
+   411→                              role="img"
+   412→                              aria-label={
+   413→                                active
+   414→                                  ? `${r.name}: ${c.shifts} shift(s) on ${c.date} — filter deployments`
+   415→                                  : `${r.name}: no shifts on ${c.date}`
+   416→                              }
+   417→                              title={
+   418→                                active
+   419→                                  ? `${fmtDay(c.date)} · ${r.name} · ${c.shifts} shift${c.shifts === 1 ? "" : "s"} — click to inspect`
+   420→                                  : `${fmtDay(c.date)} · ${r.name} · no shifts`
+   421→                              }
+   422→                              onClick={
+   423→                                active
+   424→                                  ? () => {
+   425→                                      // Drill down: filter the table below to this employee + day.
+   426→                                      // The attendance grid is property-agnostic, so clear any
+   427→                                      // property filter to avoid an empty cross-filter result.
+   428→                                      setEmployeeId(r.employeeId);
+   429→                                      setPropertyId("");
+   430→                                      onDateChange(c.date);
+   431→                                      setAttOpen(false);
+   432→                                      toast.info(`Showing ${r.name} — ${fmtDay(c.date)}`);
+   433→                                    }
+   434→                                  : undefined
+   435→                              }
+   436→                            />
+   437→                          );
+   438→                        })}
+   439→                        <div className="text-right text-xs font-bold tabular-nums">{r.total}</div>
+   440→                        <div className="text-right text-xs tabular-nums text-muted-foreground">{r.workedDays}</div>
+   441→                      </div>
+   442→                    ))}
+   443→                  </div>
+   444→                </div>
+   445→              </div>
+   446→            ) : (
+   447→              <p className="py-6 text-center text-xs text-muted-foreground">No active employees found.</p>
+   448→            )}
+   449→          </CardContent>
+   450→        )}
+   451→      </Card>
+   452→
+   453→      {/* Filters */}
+   454→      <Card>
+   455→        <CardContent className="space-y-3 p-3 sm:p-4">
+   456→          <RangeSelector
+   457→            value={(rangeKey ?? "today") as RangeKey}
+   458→            onChange={onRange}
+   459→          />
+   460→          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+   461→            <div>
+   462→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Date</Label>
+   463→              <Input type="date" value={date} onChange={(e) => onDateChange(e.target.value)} className="h-10" aria-label="Filter by date" />
+   464→            </div>
+   465→            <div>
+   466→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Property</Label>
+   467→              <SelectInput
+   468→                value={propertyId}
+   469→                onChange={(v) => { setPropertyId(v); setSelectedIds([]); }}
+   470→                options={[{ label: "All properties", value: "" }, ...properties.map((p) => ({ label: p.name, value: p.id }))]}
+   471→                placeholder="All properties"
+   472→              />
+   473→            </div>
+   474→            <div>
+   475→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Employee</Label>
+   476→              <SelectInput
+   477→                value={employeeId}
+   478→                onChange={(v) => { setEmployeeId(v); setSelectedIds([]); }}
+   479→                options={[{ label: "All employees", value: "" }, ...employees.map((e) => ({ label: `${e.fullName} (${e.code})`, value: e.id }))]}
+   480→                placeholder="All employees"
+   481→              />
+   482→            </div>
+   483→            <div>
+   484→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Shift</Label>
+   485→              <SelectInput value={shift} onChange={(v) => { setShift(v); setSelectedIds([]); }} options={SHIFT_OPTIONS} placeholder="All shifts" />
+   486→            </div>
+   487→            <div>
+   488→              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Status</Label>
+   489→              <SelectInput value={status} onChange={(v) => { setStatus(v); setSelectedIds([]); }} options={STATUS_OPTIONS} placeholder="All statuses" />
+   490→            </div>
+   491→          </div>
+   492→        </CardContent>
+   493→      </Card>
+   494→
+   495→      {/* Totals */}
+   496→      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+   497→        {loading ? (
+   498→          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)
+   499→        ) : (
+   500→          <>
+   501→            <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+   502→              <p className="text-[11px] sm:text-xs text-muted-foreground">Deployments</p>
+   503→              <p className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{totals?.count ?? rows.length}</p>
+   504→            </CardContent></Card>
+   505→            <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+   506→              <p className="text-[11px] sm:text-xs text-muted-foreground">Billing</p>
+   507→              <p className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{formatINR(totals?.billing ?? 0, { compact: true })}</p>
+   508→            </CardContent></Card>
+   509→            <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+   510→              <p className="text-[11px] sm:text-xs text-muted-foreground">Payout</p>
+   511→              <p className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{formatINR(totals?.payout ?? 0, { compact: true })}</p>
+   512→            </CardContent></Card>
+   513→            <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
+   514→              <p className="text-[11px] sm:text-xs text-muted-foreground">Margin</p>
+   515→              <p className={cn("mt-1 text-lg sm:text-xl font-bold tabular-nums", (totals?.margin ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+   516→                {formatINR(totals?.margin ?? 0, { compact: true })}
+   517→              </p>
+   518→            </CardContent></Card>
+   519→          </>
+   520→        )}
+   521→      </div>
+   522→
+   523→      {error && (
+   524→        <div className="rounded-xl border border-red-200 bg-red-50/60 p-4 text-center dark:border-red-900 dark:bg-red-950/30">
+   525→          <p className="text-xs text-red-700 dark:text-red-300">{error}</p>
+   526→          <Button variant="outline" size="sm" className="mt-2 h-8" onClick={() => void load()}>Retry</Button>
+   527→        </div>
+   528→      )}
+   529→
+   530→      {!error && (
+   531→        <Card>
+   532→          <CardContent className="p-3 sm:p-4">
+   533→            <div className="mb-2.5 flex items-center justify-between">
+   534→              <button
+   535→                type="button"
+   536→                className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+   537→                onClick={toggleAll}
+   538→              >
+   539→                {allChecked ? <CheckSquare className="h-4 w-4 text-primary" aria-hidden /> : <Square className="h-4 w-4" aria-hidden />}
+   540→                Select all {selectedIds.length > 0 && <span className="font-bold text-foreground">({selectedIds.length})</span>}
+   541→              </button>
+   542→              <p className="text-xs text-muted-foreground">Tap a row for details & rate edits</p>
+   543→            </div>
+   544→            <DataTable
+   545→              columns={columns}
+   546→              rows={rows}
+   547→              rowKey={(r) => r.id}
+   548→              onRowClick={openDetail}
+   549→              exportName="deployments"
+   550→              loading={loading}
+   551→              emptyIcon={CalendarCheck}
+   552→              emptyTitle="No deployments for this filter"
+   553→              emptyDescription="Use the Deploy Employees button to create today's roster."
+   554→            />
+   555→          </CardContent>
+   556→        </Card>
+   557→      )}
+   558→
+   559→      {/* Bulk action bar */}
+   560→      {selectedIds.length > 0 && (
+   561→        <div className={cn(
+   562→          "fixed inset-x-3 bottom-20 z-40 md:inset-x-auto md:left-1/2 md:bottom-6 md:-translate-x-1/2",
+   563→          "rounded-2xl border bg-card/95 p-2 shadow-xl backdrop-blur supports-[backdrop-filter]:bg-card/80"
+   564→        )} role="toolbar" aria-label="Bulk actions">
+   565→          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+   566→            <span className="shrink-0 px-1.5 text-xs font-semibold tabular-nums">{selectedIds.length} selected</span>
+   567→            <Separator orientation="vertical" className="h-6 shrink-0" />
+   568→            <Button size="sm" variant="outline" className="h-9 shrink-0 gap-1.5" onClick={() => void bulkStatus("COMPLETED")}>
+   569→              <CheckCheck className="h-3.5 w-3.5 text-emerald-600" aria-hidden />Complete
+   570→            </Button>
+   571→            <Button size="sm" variant="outline" className="h-9 shrink-0 gap-1.5" onClick={() => void bulkStatus("CONFIRMED")}>
+   572→              <IndianRupee className="h-3.5 w-3.5 text-teal-600" aria-hidden />Confirm
+   573→            </Button>
+   574→            <Button size="sm" variant="outline" className="h-9 shrink-0 gap-1.5" onClick={() => void bulkStatus("NO_SHOW")}>
+   575→              <UserX className="h-3.5 w-3.5 text-red-600" aria-hidden />No-Show
+   576→            </Button>
+   577→            <Button size="sm" variant="ghost" className="h-9 shrink-0" onClick={() => setSelectedIds([])}>Clear</Button>
+   578→          </div>
+   579→        </div>
+   580→      )}
+   581→
+   582→      <DeployWizard open={wizardOpen} onOpenChange={setWizardOpen} defaultDate={date || undefined} defaultPropertyId={propertyId || undefined} onDone={load} />
+   583→
+   584→      {/* Detail dialog */}
+   585→      <Dialog open={Boolean(detail)} onOpenChange={(v) => !v && setDetail(null)}>
+   586→        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+   587→          {detail && (
+   588→            <>
+   589→              <DialogHeader>
+   590→                <DialogTitle className="flex flex-wrap items-center gap-2">
+   591→                  {detail.employeeName}
+   592→                  <StatusBadge status={detail.status} />
+   593→                  <StatusBadge status={detail.paidStatus ?? "UNPAID"} />
+   594→                </DialogTitle>
+   595→                <DialogDescription>
+   596→                  {fmtDay(detail.date)} · {detail.propertyName} · {detail.shift} shift{detail.workCategory ? ` · ${detail.workCategory}` : ""}
+   597→                </DialogDescription>
+   598→              </DialogHeader>
+   599→
+   600→              <div className="grid grid-cols-3 gap-2 text-center">
+   601→                <div className="rounded-xl bg-muted/60 p-2.5">
+   602→                  <p className="text-[10px] uppercase text-muted-foreground">Billing</p>
+   603→                  <p className="text-sm font-bold tabular-nums">{formatINR(detail.billingAmount ?? 0)}</p>
+   604→                  <p className="text-[10px] text-muted-foreground tabular-nums">@ {formatINR(detail.billingRate ?? 0)}</p>
+   605→                </div>
+   606→                <div className="rounded-xl bg-muted/60 p-2.5">
+   607→                  <p className="text-[10px] uppercase text-muted-foreground">Payout</p>
+   608→                  <p className="text-sm font-bold tabular-nums">{formatINR(detail.payoutAmount ?? 0)}</p>
+   609→                  <p className="text-[10px] text-muted-foreground tabular-nums">@ {formatINR(detail.payoutRate ?? 0)}</p>
+   610→                </div>
+   611→                <div className="rounded-xl bg-muted/60 p-2.5">
+   612→                  <p className="text-[10px] uppercase text-muted-foreground">Margin</p>
+   613→                  <p className={cn("text-sm font-bold tabular-nums", (detail.billingAmount ?? 0) - (detail.payoutAmount ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+   614→                    {formatINR((detail.billingAmount ?? 0) - (detail.payoutAmount ?? 0))}
+   615→                  </p>
+   616→                  <p className="text-[10px] text-muted-foreground">per shift</p>
+   617→                </div>
+   618→              </div>
+   619→
+   620→              {(detail.adjustmentAmount ?? 0) !== 0 && (
+   621→                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+   622→                  Adjustment {formatINR(detail.adjustmentAmount ?? 0)}{detail.adjustmentNote ? ` — ${detail.adjustmentNote}` : ""}
+   623→                </p>
+   624→              )}
+   625→              {detail.notes && <p className="text-xs text-muted-foreground">Notes: {detail.notes}</p>}
+   626→
+   627→              <div>
+   628→                <p className="mb-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">Change status</p>
+   629→                <div className="flex flex-wrap gap-1.5">
+   630→                  {["CONFIRMED", "COMPLETED", "PARTIAL", "NO_SHOW", "CANCELLED"].filter((s) => s !== detail.status).map((s) => (
+   631→                    <Button
+   632→                      key={s}
+   633→                      size="sm"
+   634→                      variant="outline"
+   635→                      className="h-8 gap-1"
+   636→                      disabled={saving}
+   637→                      onClick={() => void changeStatus(detail, s)}
+   638→                    >
+   639→                      {s === "CANCELLED" && <XCircle className="h-3 w-3 text-red-500" aria-hidden />}
+   640→                      {s === "NO_SHOW" && <UserX className="h-3 w-3 text-red-500" aria-hidden />}
+   641→                      {s === "PARTIAL" && <MinusCircle className="h-3 w-3 text-amber-500" aria-hidden />}
+   642→                      {s.replace("_", " ").charAt(0) + s.replace("_", " ").slice(1).toLowerCase()}
+   643→                    </Button>
+   644→                  ))}
+   645→                </div>
+   646→              </div>
+   647→
+   648→              <Separator />
+   649→
+   650→              {editRates ? (
+   651→                <div className="space-y-3">
+   652→                  <div className="grid gap-3 sm:grid-cols-2">
+   653→                    <div className="space-y-1.5">
+   654→                      <Label className="text-xs">Billing rate (₹)</Label>
+   655→                      <Input type="number" inputMode="numeric" className="h-9" value={rateForm.billingRate} onChange={(e) => setRateForm((f) => ({ ...f, billingRate: e.target.value }))} />
+   656→                    </div>
+   657→                    <div className="space-y-1.5">
+   658→                      <Label className="text-xs">Payout rate (₹)</Label>
+   659→                      <Input type="number" inputMode="numeric" className="h-9" value={rateForm.payoutRate} onChange={(e) => setRateForm((f) => ({ ...f, payoutRate: e.target.value }))} />
+   660→                    </div>
+   661→                    <div className="space-y-1.5">
+   662→                      <Label className="text-xs">Adjustment amount (± ₹)</Label>
+   663→                      <Input type="number" inputMode="numeric" className="h-9" value={rateForm.adjustmentAmount} onChange={(e) => setRateForm((f) => ({ ...f, adjustmentAmount: e.target.value }))} placeholder="e.g. -100 or 250" />
+   664→                    </div>
+   665→                    <div className="space-y-1.5">
+   666→                      <Label className="text-xs">Adjustment note</Label>
+   667→                      <Input className="h-9" value={rateForm.adjustmentNote} onChange={(e) => setRateForm((f) => ({ ...f, adjustmentNote: e.target.value }))} />
+   668→                    </div>
+   669→                    <div className="space-y-1.5 sm:col-span-2">
+   670→                      <Label className="text-xs">Notes</Label>
+   671→                      <Input className="h-9" value={rateForm.notes} onChange={(e) => setRateForm((f) => ({ ...f, notes: e.target.value }))} />
+   672→                    </div>
+   673→                  </div>
+   674→                  <div className="flex gap-2">
+   675→                    <Button variant="outline" className="min-h-10 flex-1" onClick={() => setEditRates(false)}>Cancel</Button>
+   676→                    <Button className="min-h-10 flex-1" onClick={saveRates} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+   677→                  </div>
+   678→                </div>
+   679→              ) : (
+   680→                <div className="flex items-center justify-between gap-2">
+   681→                  <p className="text-[11px] text-muted-foreground">
+   682→                    By {detail.createdByName ?? "—"} · {fmtDateTime(detail.createdAt)}
+   683→                  </p>
+   684→                  <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setEditRates(true)}>
+   685→                    <Pencil className="h-3 w-3" aria-hidden />Edit rates
+   686→                  </Button>
+   687→                </div>
+   688→              )}
+   689→            </>
+   690→          )}
+   691→        </DialogContent>
+   692→      </Dialog>
+   693→    </div>
+   694→  );
+   695→}
+   696→

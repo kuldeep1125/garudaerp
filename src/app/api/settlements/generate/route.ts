@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { handleRoute, readBody, requireFields, monthBounds } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
-import { BILLABLE, startOfDay } from "@/app/api/_lib/engine";
+import { startOfDay } from "@/app/api/_lib/engine";
 
 /**
  * Settlement engine:
@@ -25,7 +25,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
       select: { id: true, fullName: true, code: true, designation: true },
     }),
     db.deployment.findMany({
-      where: { date: { gte: from, lte: to }, status: { in: [...BILLABLE] }, employee: { status: { not: "ACTIVE" } } },
+      where: { date: { gte: from, lte: to }, employee: { status: { not: "ACTIVE" } } },
       select: { employeeId: true },
       distinct: ["employeeId"],
     }),
@@ -44,7 +44,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
   // Bulk-fetch month data once (no N+1).
   const [deps, adjs, existingSettlements] = await Promise.all([
     db.deployment.findMany({
-      where: { date: { gte: from, lte: to }, status: { in: [...BILLABLE] } },
+      where: { date: { gte: from, lte: to } },
       select: { employeeId: true, date: true, propertyId: true, shift: true, payoutRate: true, payoutAmount: true, property: { select: { name: true } } },
       orderBy: { date: "asc" },
     }),
@@ -97,8 +97,9 @@ export const POST = handleRoute(async ({ owner, req }) => {
         amount: d.payoutAmount,
       }));
       const grossEarnings = round2(empDeps.reduce((s, d) => s + d.payoutAmount, 0));
-      const dayShifts = empDeps.filter((d) => d.shift.toUpperCase().includes("DAY")).length;
-      const nightShifts = empDeps.filter((d) => d.shift.toUpperCase().includes("NIGHT")).length;
+      // FULL shift = day + night → counts in both buckets (2 shift units of work).
+      const dayShifts = empDeps.filter((d) => { const s = d.shift.toUpperCase(); return s === "DAY" || s === "FULL"; }).length;
+      const nightShifts = empDeps.filter((d) => { const s = d.shift.toUpperCase(); return s === "NIGHT" || s === "FULL"; }).length;
       const totalDays = new Set(empDeps.map((d) => startOfDay(d.date).getTime())).size;
       const otherDeductions = 0;
 

@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { handleRoute } from "@/lib/api-helpers";
 import { round2 } from "@/lib/money";
-import { BILLABLE, dayKey } from "@/app/api/_lib/engine";
+import { dayKey } from "@/app/api/_lib/engine";
 import { lastNDays } from "../../_lib/dashboard";
 
 // GET /api/dashboard/combined-trend?days=14
@@ -14,7 +14,7 @@ export const GET = handleRoute(async ({ req }) => {
 
   const [deps, pays, trips, exps] = await Promise.all([
     db.deployment.findMany({
-      where: { date: { gte: from, lte: to }, status: { in: [...BILLABLE] } },
+      where: { date: { gte: from, lte: to } },
       select: { date: true, billingAmount: true },
     }),
     db.propertyPayment.findMany({

@@ -31,7 +31,6 @@ const MODEL: Record<string, string> = {
   PROPERTY: "property",
   CLIENT: "client",
   VEHICLE: "vehicle",
-  CONTRACT: "contract",
 };
 
 /** module → Prisma dmmf model name (for column validation on DELETE-restore) */
@@ -48,7 +47,6 @@ const DMMF_MODEL: Record<string, string> = {
   PROPERTY: "Property",
   CLIENT: "Client",
   VEHICLE: "Vehicle",
-  CONTRACT: "Contract",
 };
 
 /**
@@ -90,15 +88,25 @@ export const POST = handleRoute(async ({ owner, req }) => {
   if (auditLogId) {
     log = await db.auditLog.findUnique({ where: { id: auditLogId } });
   } else if (recordId) {
-    log = await db.auditLog.findFirst({
-      where: {
-        recordId,
-        ...(moduleFilter ? { module: moduleFilter } : {}),
-        action: { in: UNDOABLE_ACTIONS },
-        undoneAt: null,
-      },
-      orderBy: { createdAt: "desc" },
-    });
+    const base = {
+      ...(moduleFilter ? { module: moduleFilter } : {}),
+      action: { in: UNDOABLE_ACTIONS },
+      undoneAt: null,
+    };
+    if (recordId.includes(",")) {
+      // Multi-row creates (e.g. bulk deployment) store comma-joined ids — match
+      // any undoable log whose id set intersects the requested one.
+      const want = recordId.split(",").map((s) => s.trim()).filter(Boolean);
+      const candidates = await db.auditLog.findMany({ where: base, orderBy: { createdAt: "desc" }, take: 50 });
+      log =
+        candidates.find((c) => {
+          if (!c.recordId) return false;
+          const have = c.recordId.split(",").map((s) => s.trim()).filter(Boolean);
+          return want.every((w) => have.includes(w)) || have.some((h) => want.includes(h));
+        }) ?? null;
+    } else {
+      log = await db.auditLog.findFirst({ where: { recordId, ...base }, orderBy: { createdAt: "desc" } });
+    }
   }
   if (!log) throw new HttpError(404, "No undoable entry found for this record.");
   if (log.undoneAt) throw new HttpError(409, "This entry has already been undone.");
@@ -168,17 +176,22 @@ export const POST = handleRoute(async ({ owner, req }) => {
         break;
       }
       case "DEPLOYMENT:CREATE": {
-        const dep = await txDelegate.findUnique({ where: { id: log!.recordId! } });
-        if (!dep) break;
-        await txDelegate.delete({ where: { id: log!.recordId! } });
-        await recomputeDeploymentPaid(tx, (dep as { propertyId: string }).propertyId);
+        // Multi-employee creates store comma-joined ids — reverse every row.
+        const ids = (log!.recordId ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+        let propertyId: string | null = null;
+        for (const depId of ids) {
+          const dep = await txDelegate.findUnique({ where: { id: depId } });
+          if (!dep) continue;
+          propertyId = (dep as { propertyId: string }).propertyId;
+          await txDelegate.delete({ where: { id: depId } });
+        }
+        if (propertyId) await recomputeDeploymentPaid(tx, propertyId);
         break;
       }
       case "EMPLOYEE:CREATE":
       case "PROPERTY:CREATE":
       case "CLIENT:CREATE":
-      case "VEHICLE:CREATE":
-      case "CONTRACT:CREATE": {
+      case "VEHICLE:CREATE": {
         const existing = await txDelegate.findUnique({ where: { id: log!.recordId! } });
         if (!existing) break;
         try {
@@ -192,8 +205,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
         break;
       }
 
-      // STATUS / UPDATE → restore previousValue fields
-      case "DEPLOYMENT:STATUS":
+      // UPDATE → restore previousValue fields
       case "DEPLOYMENT:UPDATE": {
         const prev = asObj(log!.previousValue);
         if (Object.keys(prev).length === 0) throw new HttpError(409, "No previous value recorded for this change.");
@@ -204,6 +216,9 @@ export const POST = handleRoute(async ({ owner, req }) => {
         break;
       }
       default: {
+        // DELETion restore (any module) is handled by the dedicated block below —
+        // it recreates the record from the previousValue snapshot.
+        if (log!.action === "DELETE") break;
         // TRIP:PAYMENT (collection on trip) + generic STATUS / UPDATE restore
         if (log!.action === "STATUS" || log!.action === "UPDATE" || log!.action === "PAYMENT") {
           const prev = asObj(log!.previousValue);

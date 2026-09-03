@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, qs } from "@/lib/api-client";
-import { formatINR } from "@/lib/money";
+import { formatINR, parseAmount } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
 import { PageHeader } from "@/components/shared/page-header";
 import { DataTable, type Column } from "@/components/shared/data-table";
@@ -31,24 +31,27 @@ const TYPES = ["Restaurant", "Cloud Kitchen", "Cafe", "Bar", "Banquet", "Other"]
 function PropertyFormDialog({ open, onOpenChange, onDone }: {
   open: boolean; onOpenChange: (v: boolean) => void; onDone: () => void;
 }) {
-  const [form, setForm] = useState({ name: "", brandName: "", type: "Restaurant", contactPerson: "", contactNumber: "", whatsapp: "", email: "", address: "", startDate: "", notes: "" });
+  const [form, setForm] = useState({ name: "", brandName: "", type: "Restaurant", billingRate: "", contactPerson: "", contactNumber: "", whatsapp: "", email: "", address: "", startDate: "", notes: "" });
   const { mutate, saving } = useMutation();
 
   // Reset form each time the dialog opens (render-time state adjustment).
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
     setPrevOpen(open);
-    if (open) setForm({ name: "", brandName: "", type: "Restaurant", contactPerson: "", contactNumber: "", whatsapp: "", email: "", address: "", startDate: "", notes: "" });
+    if (open) setForm({ name: "", brandName: "", type: "Restaurant", billingRate: "", contactPerson: "", contactNumber: "", whatsapp: "", email: "", address: "", startDate: "", notes: "" });
   }
 
   const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
 
   const submit = async () => {
     if (!form.name.trim()) { toast.error("Property name is required"); return; }
+    const rate = parseAmount(form.billingRate);
+    if (rate <= 0) { toast.error("Set the billing rate (₹ per shift)"); return; }
     const res = await mutate(() => api.post("/api/properties", {
       name: form.name.trim(),
       brandName: form.brandName || undefined,
       type: form.type || undefined,
+      billingRate: rate,
       contactPerson: form.contactPerson || undefined,
       contactNumber: form.contactNumber || undefined,
       whatsapp: form.whatsapp || undefined,
@@ -56,7 +59,7 @@ function PropertyFormDialog({ open, onOpenChange, onDone }: {
       address: form.address || undefined,
       startDate: form.startDate || undefined,
       notes: form.notes || undefined,
-    }), "Property added");
+    }), "Property added — rate applies to all future deployments");
     if (res.ok) { onOpenChange(false); onDone(); }
   };
 
@@ -72,6 +75,14 @@ function PropertyFormDialog({ open, onOpenChange, onDone }: {
           <Field label="Brand name"><Input value={form.brandName} onChange={(e) => set("brandName")(e.target.value)} className="h-10" /></Field>
           <Field label="Type">
             <SelectInput value={form.type} onChange={set("type")} options={TYPES.map((t) => ({ label: t, value: t }))} />
+          </Field>
+          <Field
+            label="Billing rate (₹/shift)"
+            required
+            className="sm:col-span-2"
+            hint="Charged to the property per employee per shift. Full shift = 2 units. Change it anytime — old records keep their original rate."
+          >
+            <Input type="number" inputMode="numeric" value={form.billingRate} onChange={(e) => set("billingRate")(e.target.value)} className="h-10" placeholder="e.g. 650" />
           </Field>
           <Field label="Contact person"><Input value={form.contactPerson} onChange={(e) => set("contactPerson")(e.target.value)} className="h-10" /></Field>
           <Field label="Contact number"><Input value={form.contactNumber} onChange={(e) => set("contactNumber")(e.target.value)} inputMode="tel" className="h-10" /></Field>
@@ -127,7 +138,11 @@ export default function PropertiesView({ navigate }: ViewProps) {
       value: (r) => r.name,
     },
     { key: "contact", label: t(lang, "col.contact"), value: (r) => r.contactPerson ?? "—", hideOnMobile: true },
-    { key: "contract", label: t(lang, "col.activeContract"), value: (r) => r.activeContractName ?? "—", hideOnMobile: true },
+    {
+      key: "billingRate", label: "Rate/shift", className: "text-right",
+      render: (r) => <span className="font-semibold tabular-nums text-primary">{formatINR(r.billingRate ?? 0)}</span>,
+      value: (r) => formatINR(r.billingRate ?? 0),
+    },
     { key: "billed", label: t(lang, "col.billed"), className: "text-right", value: (r) => formatINR(r.totalBilled ?? 0), hideOnMobile: true },
     { key: "received", label: t(lang, "col.received"), className: "text-right", value: (r) => formatINR(r.totalReceived ?? 0), hideOnMobile: true },
     {

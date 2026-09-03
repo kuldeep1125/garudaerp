@@ -6,25 +6,33 @@ import { round2 } from "@/lib/money";
 // GET /api/settings/integrity — data health checks (the "zero mismatch" audit).
 // Every check compares derived/stored values; anything non-zero is a real drift.
 export const GET = handleRoute(async () => {
-  const [trips, settlements] = await Promise.all([
+  const [trips, settlements, props, deps, pays] = await Promise.all([
     db.trip.findMany({ select: { id: true, paidAmount: true, agreedAmount: true, finalAmount: true, extraCharges: true } }),
     db.settlement.findMany({ select: { id: true, netPayable: true, grossEarnings: true, additions: true, advanceDeducted: true, otherDeductions: true } }),
+    db.property.findMany({ select: { id: true } }),
+    db.deployment.findMany({ select: { propertyId: true, billingAmount: true, paidAmount: true } }),
+    db.propertyPayment.findMany({ select: { propertyId: true, amount: true } }),
   ]);
 
-  // 1. Deployment paid-drift: paid amounts on zero-billing billable rows
-  const overpaid = await db.deployment.count({
-    where: { paidAmount: { gt: 0.005 }, billingAmount: { lt: 0.005 }, status: { in: ["CONFIRMED", "COMPLETED", "PARTIAL"] } },
-  });
+  // 1. Allocation drift: paid amounts sitting on zero-billing rows
+  const overpaid = deps.filter((d) => d.paidAmount > 0.005 && d.billingAmount < 0.005).length;
 
-  // 2. Paid cancellations: cancelled deployments still holding allocated money
-  const paidCancelled = await db.deployment.count({
-    where: { paidAmount: { gt: 0.005 }, status: "CANCELLED" },
-  });
+  // 2. Payment reconciliation per property: Σ deployment.paidAmount must equal
+  //    Σ payments (bounded by billing). Any drift = real mismatch.
+  const paidBy = new Map<string, number>();
+  const poolBy = new Map<string, number>();
+  for (const d of deps) paidBy.set(d.propertyId, round2((paidBy.get(d.propertyId) ?? 0) + d.paidAmount));
+  for (const p of pays) poolBy.set(p.propertyId, round2((poolBy.get(p.propertyId) ?? 0) + p.amount));
+  let reconciliationDrift = 0;
+  for (const p of props) {
+    const paid = round2(paidBy.get(p.id) ?? 0);
+    const pool = round2(poolBy.get(p.id) ?? 0);
+    if (Math.abs(paid - Math.min(pool, paid + 0.01)) > 0.01 && Math.abs(paid - pool) > 0.01) reconciliationDrift++;
+  }
 
   // 3. Payments without a matching property (orphans)
-  const orphanPayments = await db.propertyPayment.count({
-    where: { propertyId: { notIn: (await db.property.findMany({ select: { id: true } })).map((p) => p.id) } },
-  });
+  const propIds = new Set(props.map((p) => p.id));
+  const orphanPayments = pays.filter((p) => !propIds.has(p.propertyId)).length;
 
   // 4. Trip over-collection: paid beyond the payable target
   const overCollected = trips.filter(
@@ -45,7 +53,7 @@ export const GET = handleRoute(async () => {
 
   const checks = [
     { id: "allocation-drift", label: "Payment allocation drift", detail: "Deployments billed at zero yet holding paid amounts", count: overpaid },
-    { id: "paid-cancelled", label: "Paid cancellations", detail: "Cancelled deployments still holding allocated money", count: paidCancelled },
+    { id: "reconciliation", label: "Payment reconciliation", detail: "Per-property paid allocations not matching received payments", count: reconciliationDrift },
     { id: "orphan-payments", label: "Orphan payments", detail: "Payments not linked to any property", count: orphanPayments },
     { id: "trip-overcollect", label: "Trip over-collection", detail: "Trips collected beyond their payable amount", count: overCollected },
     { id: "settlement-drift", label: "Settlement total drift", detail: "Settlement headers not matching their line items", count: settlementDrift },
@@ -61,22 +69,16 @@ export const GET = handleRoute(async () => {
 });
 
 // POST /api/settings/integrity — auto-repair derived allocations (zero mismatch).
-// Re-runs the FIFO payment allocator for every property and zeroes paid amounts
-// on cancelled deployments. Never touches source records (payments, deployments).
+// Re-runs the FIFO payment allocator for every property from its payment pool.
+// Never touches source records (payments, deployments).
 export const POST = handleRoute(async () => {
-  const [properties, cancelled] = await Promise.all([
-    db.property.findMany({ select: { id: true } }),
-    db.deployment.findMany({ where: { paidAmount: { gt: 0.005 }, status: "CANCELLED" }, select: { id: true, propertyId: true } }),
-  ]);
+  const properties = await db.property.findMany({ select: { id: true } });
 
   await db.$transaction(async (tx) => {
-    for (const c of cancelled) {
-      await tx.deployment.update({ where: { id: c.id }, data: { paidAmount: 0 } });
-    }
     for (const p of properties) {
       await recomputeDeploymentPaid(tx, p.id);
     }
   }, { timeout: 30000, maxWait: 10000 });
 
-  return { ok: true, repaired: { properties: properties.length, cancelledCleaned: cancelled.length } };
+  return { ok: true, repaired: { properties: properties.length } };
 });

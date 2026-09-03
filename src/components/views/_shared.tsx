@@ -65,14 +65,12 @@ export interface DeploymentRec {
   propertyId: string;
   propertyName: string;
   shift: string;
-  workCategory?: string | null;
   billingRate?: number;
   payoutRate?: number;
   billingAmount?: number;
   payoutAmount?: number;
   adjustmentAmount?: number | null;
   adjustmentNote?: string | null;
-  status: string;
   paidStatus?: string;
   paidAmount?: number | null;
   notes?: string | null;
@@ -91,29 +89,12 @@ export interface PropertyRec {
   whatsapp?: string | null;
   email?: string | null;
   startDate?: string | null;
+  billingRate?: number | null;
   status: string;
   notes?: string | null;
-  activeContractName?: string | null;
   totalBilled?: number;
   totalReceived?: number;
   totalOutstanding?: number;
-}
-
-export interface ContractRec {
-  id: string;
-  propertyId: string;
-  propertyName?: string;
-  name: string;
-  startDate: string;
-  endDate?: string | null;
-  billingRate: number;
-  payoutRate: number;
-  shift?: string | null;
-  category?: string | null;
-  maxEmployees?: number | null;
-  paymentTerms?: string | null;
-  notes?: string | null;
-  status: string;
 }
 
 export interface PaymentRec {
@@ -697,7 +678,7 @@ export function EmployeePicker({ employees, value, onChange, multi = true, heigh
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{e.fullName}</p>
                 <p className="text-[11px] text-muted-foreground">
-                  {e.code ?? ""}{e.standardRate ? ` · ${formatINR(e.standardRate)}/day` : ""}
+                  {e.code ?? ""}{e.standardRate ? ` · ${formatINR(e.standardRate)}/shift` : ""}
                 </p>
               </div>
               {(e.advanceBalance ?? 0) > 0 && (
@@ -992,10 +973,29 @@ export function RecordPaymentDialog({ open, onOpenChange, propertyId, properties
 }
 
 // ---------------------------------------------------------------------------
-// Deploy Wizard (multi-step: details → employees → review & save)
+// ---------------------------------------------------------------------------
+// Shifts — simple fixed set: DAY / NIGHT / FULL (FULL = day + night = 2 units)
 // ---------------------------------------------------------------------------
 
-interface ShiftRec { id: string; name: string; startTime?: string; endTime?: string }
+export const SHIFT_OPTIONS: Option[] = [
+  { label: "Day", value: "DAY" },
+  { label: "Night", value: "NIGHT" },
+  { label: "Full (Day + Night)", value: "FULL" },
+];
+
+export const SHIFT_UNITS: Record<string, number> = { DAY: 1, NIGHT: 1, FULL: 2 };
+
+// ---------------------------------------------------------------------------
+// Deploy Wizard (multi-step: details → employees → per-person shift & rates)
+// Rates resolve automatically: billing from the property, payout from the
+// employee. Anything editable per row is an override for that person only.
+// ---------------------------------------------------------------------------
+
+interface ShiftOverrides {
+  shift?: string;
+  billingRate?: string;
+  payoutRate?: string;
+}
 
 export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyId, onDone }: {
   open: boolean;
@@ -1006,20 +1006,16 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
 }) {
   const [step, setStep] = useState(1);
   const [properties, setProperties] = useState<PropertyRec[]>([]);
-  const [shifts, setShifts] = useState<ShiftRec[]>([]);
   const { employees, loading: loadingEmps } = useActiveEmployees(open);
   const [propertyId, setPropertyId] = useState(defaultPropertyId ?? "");
   const [date, setDate] = useState(defaultDate ?? todayStr());
-  const [shift, setShift] = useState("DAY");
-  const [workCategory, setWorkCategory] = useState("");
   const [notes, setNotes] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
-  const [overrides, setOverrides] = useState<Record<string, { billingRate?: string; payoutRate?: string }>>({});
-  const [resolved, setResolved] = useState<{ billingRate: number | null; payoutRate: number | null } | null>(null);
+  const [rowState, setRowState] = useState<Record<string, ShiftOverrides>>({});
   const [duplicates, setDuplicates] = useState<string[] | null>(null);
   const [creating, setCreating] = useState(false);
 
-  // Load static options (async) + reset on open (render-time state adjustment).
+  // Load properties + reset on open (render-time state adjustment).
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
     setPrevOpen(open);
@@ -1027,12 +1023,9 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
       setStep(1);
       setPropertyId(defaultPropertyId ?? "");
       setDate(defaultDate ?? todayStr());
-      setShift("DAY");
-      setWorkCategory("");
       setNotes("");
       setSelected([]);
-      setOverrides({});
-      setResolved(null);
+      setRowState({});
       setDuplicates(null);
     }
   }
@@ -1043,80 +1036,64 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
     api.get<ListResp<PropertyRec>>("/api/properties" + qs({ status: "ACTIVE", pageSize: 200 }))
       .then((d) => { if (!cancelled) setProperties(d.items); })
       .catch(() => {});
-    api.get<{ items: ShiftRec[] }>("/api/shifts")
-      .then((d) => { if (!cancelled) setShifts(d.items); })
-      .catch(() => {});
     return () => { cancelled = true; };
   }, [open]);
 
-  // Resolve contract rates when property + date known.
-  const [prevResolveKey, setPrevResolveKey] = useState("");
-  const resolveKey = open && propertyId && date ? `${propertyId}|${date}` : "";
-  if (resolveKey !== prevResolveKey) {
-    setPrevResolveKey(resolveKey);
-    if (!resolveKey) setResolved(null);
-  }
-  useEffect(() => {
-    if (!resolveKey) return;
-    let cancelled = false;
-    api.get<{ contract: ContractRec | null; billingRate: number | null; payoutRate: number | null }>(
-      "/api/contracts/resolve" + qs({ propertyId, date })
-    )
-      .then((d) => { if (!cancelled) setResolved({ billingRate: d.billingRate, payoutRate: d.payoutRate }); })
-      .catch(() => { if (!cancelled) setResolved(null); });
-    return () => { cancelled = true; };
-  }, [resolveKey]);
+  const property = useMemo(() => properties.find((p) => p.id === propertyId) ?? null, [properties, propertyId]);
 
   const selectedEmployees = useMemo(
     () => employees.filter((e) => selected.includes(e.id)),
     [employees, selected]
   );
 
-  const rateFor = useCallback((emp: PickerEmployee, key: "billingRate" | "payoutRate"): number => {
-    const o = overrides[emp.id];
-    if (o && o[key] !== undefined && o[key] !== "") return parseAmount(o[key]);
-    if (key === "billingRate") return resolved?.billingRate ?? 0;
-    return resolved?.payoutRate ?? emp.standardRate ?? 0;
-  }, [overrides, resolved]);
+  const rowShift = (id: string) => (rowState[id]?.shift ?? "DAY");
+  const rowBillingRate = (e: PickerEmployee) => {
+    const o = rowState[e.id];
+    if (o?.billingRate !== undefined && o?.billingRate !== "") return parseAmount(o.billingRate);
+    return property?.billingRate ?? 0;
+  };
+  const rowPayoutRate = (e: PickerEmployee) => {
+    const o = rowState[e.id];
+    if (o?.payoutRate !== undefined && o?.payoutRate !== "") return parseAmount(o.payoutRate);
+    return e.standardRate ?? 0;
+  };
 
   const totals = useMemo(() => {
     let billing = 0, payout = 0;
     for (const e of selectedEmployees) {
-      billing += rateFor(e, "billingRate");
-      payout += rateFor(e, "payoutRate");
+      const units = SHIFT_UNITS[rowShift(e.id)] ?? 1;
+      billing += rowBillingRate(e) * units;
+      payout += rowPayoutRate(e) * units;
     }
     return { billing, payout, margin: billing - payout };
-  }, [selectedEmployees, rateFor]);
+  }, [selectedEmployees, rowState, property]);
 
-  const buildBody = (ids: string[]) => {
-    const overridesPayload: Record<string, Record<string, number>> = {};
-    for (const e of selectedEmployees) {
-      if (!ids.includes(e.id)) continue;
-      const o = overrides[e.id];
-      if (!o) continue;
-      const payload: Record<string, number> = {};
-      if (o.billingRate !== undefined && o.billingRate !== "") payload.billingRate = parseAmount(o.billingRate);
-      if (o.payoutRate !== undefined && o.payoutRate !== "") payload.payoutRate = parseAmount(o.payoutRate);
-      if (Object.keys(payload).length > 0) overridesPayload[e.id] = payload;
-    }
-    return {
-      propertyId,
-      date,
-      shift,
-      workCategory: workCategory || undefined,
-      notes: notes || undefined,
-      employeeIds: ids,
-      overrides: Object.keys(overridesPayload).length > 0 ? overridesPayload : undefined,
-    };
-  };
+  const buildBody = (ids: string[]) => ({
+    propertyId,
+    date,
+    notes: notes || undefined,
+    entries: ids.map((id) => {
+      const o = rowState[id];
+      return {
+        employeeId: id,
+        shift: o?.shift ?? "DAY",
+        ...(o?.billingRate !== undefined && o?.billingRate !== "" ? { billingRate: parseAmount(o.billingRate) } : {}),
+        ...(o?.payoutRate !== undefined && o?.payoutRate !== "" ? { payoutRate: parseAmount(o.payoutRate) } : {}),
+      };
+    }),
+  });
 
-  const finish = (result: { created?: unknown[]; skipped?: { employeeName?: string }[] }) => {
+  const finish = (result: { created?: { id: string }[]; skipped?: { employeeName?: string }[] }) => {
     const created = result.created?.length ?? 0;
     const skipped = result.skipped?.length ?? 0;
+    const ids = (result.created ?? []).map((c) => c.id).join(",");
     toast.success(
       created > 0
-        ? `Deployed ${created} employee${created === 1 ? "" : "s"}${skipped > 0 ? ` · ${skipped} skipped (duplicates)` : ""}`
-        : "No new deployments created"
+        ? `Deployed ${created} employee${created === 1 ? "" : "s"}${skipped > 0 ? ` · ${skipped} skipped` : ""}`
+        : "No new deployments created",
+      created > 0
+        ? { duration: 8000, action: { label: "Undo", onClick: () => void undoRequest({ module: "DEPLOYMENT", recordId: ids, onUndo: onDone }) } }
+        : undefined
     );
     onOpenChange(false);
     onDone();
@@ -1127,7 +1104,7 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
     if (ids.length === 0) { toast.error("Select at least one employee"); return; }
     setCreating(true);
     try {
-      const result = await api.post<{ created: unknown[]; skipped: { employeeName?: string }[] }>("/api/deployments", buildBody(ids));
+      const result = await api.post<{ created: { id: string }[]; skipped: { employeeName?: string }[] }>("/api/deployments", buildBody(ids));
       finish(result);
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
@@ -1151,7 +1128,7 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
     });
   }, [duplicates, selected, employees]);
 
-  const canNext = propertyId && date && shift;
+  const canNext = propertyId && date;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1159,7 +1136,7 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
         <DialogHeader className="border-b px-5 pb-4 pt-5 text-left">
           <DialogTitle>Deploy Employees</DialogTitle>
           <DialogDescription>
-            Step {step} of 3 · {step === 1 ? "Where & when" : step === 2 ? "Pick employees" : "Review rates & save"}
+            Step {step} of 3 · {step === 1 ? "Where & when" : step === 2 ? "Pick employees" : "Shift & rates per person"}
           </DialogDescription>
           <div className="mt-3 flex items-center gap-1.5" aria-hidden>
             {[1, 2, 3].map((s) => (
@@ -1193,47 +1170,36 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
 
           {step === 1 && (
             <>
-              <Field label="Property" required>
+              <Field label="Property" required hint="Its billing rate is applied automatically to every selected employee.">
                 <SelectInput
                   value={propertyId}
                   onChange={setPropertyId}
                   placeholder="Select property…"
-                  options={properties.map((p) => ({ label: p.brandName ? `${p.name} (${p.brandName})` : p.name, value: p.id }))}
+                  options={properties.map((p) => ({
+                    label: `${p.brandName ? `${p.name} (${p.brandName})` : p.name}${p.billingRate ? ` — ${formatINR(p.billingRate)}/shift` : ""}`,
+                    value: p.id,
+                  }))}
                 />
               </Field>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Date" required>
-                  <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
-                </Field>
-                <Field label="Shift" required>
-                  <SelectInput
-                    value={shift}
-                    onChange={setShift}
-                    options={shifts.length > 0
-                      ? shifts.map((s) => ({ label: `${s.name} (${s.startTime ?? ""}–${s.endTime ?? ""})`, value: s.name }))
-                      : [{ label: "Day", value: "DAY" }, { label: "Night", value: "NIGHT" }]}
-                  />
-                </Field>
-              </div>
-              <Field label="Work category" hint="e.g. Service, Kitchen, Bar, Delivery — optional">
-                <Input value={workCategory} onChange={(e) => setWorkCategory(e.target.value)} className="h-10" placeholder="Service" />
+              <Field label="Date" required>
+                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
               </Field>
               <Field label="Notes">
                 <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Optional instructions" />
               </Field>
               <div className={cn(
                 "rounded-xl border px-3.5 py-3 text-xs",
-                resolved?.billingRate != null
+                (property?.billingRate ?? 0) > 0
                   ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300"
                   : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
               )}>
-                {resolved?.billingRate != null ? (
+                {(property?.billingRate ?? 0) > 0 ? (
                   <p className="font-medium">
-                    Contract rates will be used: billing {formatINR(resolved.billingRate)} / payout {formatINR(resolved.payoutRate ?? 0)} per shift
+                    {property?.name}: billing {formatINR(property?.billingRate ?? 0)} per shift · each employee is paid at their own fixed rate. Full shift = 2 units.
                   </p>
                 ) : (
                   <p className="font-medium">
-                    No contract found for this property & date. Payout falls back to each employee&apos;s standard rate; set billing manually in review or the save may be rejected.
+                    This property has no billing rate yet — set it from the Properties page before deploying.
                   </p>
                 )}
               </div>
@@ -1265,43 +1231,75 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
           {step === 3 && (
             <>
               <div className="rounded-xl border bg-muted/40 px-3.5 py-2.5 text-xs">
-                <p className="font-medium">{properties.find((p) => p.id === propertyId)?.name ?? "Property"}</p>
+                <p className="font-medium">{property?.name ?? "Property"}</p>
                 <p className="mt-0.5 text-muted-foreground">
-                  {fmtDay(date)} · {shift} shift{workCategory ? ` · ${workCategory}` : ""} · {selected.length} employee{selected.length === 1 ? "" : "s"}
+                  {fmtDay(date)} · {selected.length} employee{selected.length === 1 ? "" : "s"} · rates auto-filled — change shift or any rate below
                 </p>
               </div>
-              <div className="overflow-hidden rounded-xl border">
-                <div className="grid grid-cols-[1fr_auto_auto] gap-2 border-b bg-muted/50 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  <span>Employee</span><span className="text-right">Billing ₹</span><span className="text-right">Payout ₹</span>
-                </div>
-                <div className="max-h-56 overflow-y-auto">
-                  {selectedEmployees.map((e) => (
-                    <div key={e.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-2 border-b px-3 py-2 last:border-b-0">
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-medium">{e.fullName}</p>
-                        <p className="text-[10px] text-muted-foreground">{e.code}</p>
+              <div className="space-y-2">
+                {selectedEmployees.map((e) => {
+                  const st = rowState[e.id] ?? {};
+                  const shift = rowShift(e.id);
+                  const units = SHIFT_UNITS[shift] ?? 1;
+                  const bRate = rowBillingRate(e);
+                  const pRate = rowPayoutRate(e);
+                  return (
+                    <div key={e.id} className="rounded-xl border p-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-medium">{e.fullName} <span className="text-muted-foreground">({e.code})</span></p>
+                          <p className="text-[10px] text-muted-foreground">Auto: bill {formatINR(property?.billingRate ?? 0)} · pay {formatINR(e.standardRate ?? 0)}/shift</p>
+                        </div>
+                        {/* Per-person shift segmented control */}
+                        <div className="flex shrink-0 rounded-lg border bg-muted/50 p-0.5" role="group" aria-label={`Shift for ${e.fullName}`}>
+                          {SHIFT_OPTIONS.map((s) => (
+                            <button
+                              key={s.value}
+                              type="button"
+                              className={cn(
+                                "min-h-7 rounded-md px-2 text-[11px] font-medium transition-colors",
+                                shift === s.value ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                              )}
+                              aria-pressed={shift === s.value}
+                              onClick={() => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], shift: s.value } }))}
+                            >
+                              {s.value === "FULL" ? "Full" : s.label}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                      <Input
-                        type="number"
-                        inputMode="numeric"
-                        className="h-8 w-20 text-right text-xs tabular-nums"
-                        value={overrides[e.id]?.billingRate ?? String(resolved?.billingRate ?? 0)}
-                        onChange={(ev) => setOverrides((o) => ({ ...o, [e.id]: { ...o[e.id], billingRate: ev.target.value } }))}
-                        aria-label={`Billing rate for ${e.fullName}`}
-                      />
-                      <Input
-                        type="number"
-                        inputMode="numeric"
-                        className="h-8 w-20 text-right text-xs tabular-nums"
-                        value={overrides[e.id]?.payoutRate ?? String(resolved?.payoutRate ?? e.standardRate ?? 0)}
-                        onChange={(ev) => setOverrides((o) => ({ ...o, [e.id]: { ...o[e.id], payoutRate: ev.target.value } }))}
-                        aria-label={`Payout rate for ${e.fullName}`}
-                      />
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="mb-1 block text-[10px] uppercase tracking-wide text-muted-foreground">Billing ₹/shift</Label>
+                          <Input
+                            type="number"
+                            inputMode="numeric"
+                            className="h-8 text-right text-xs tabular-nums"
+                            value={st.billingRate ?? String(property?.billingRate ?? 0)}
+                            onChange={(ev) => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], billingRate: ev.target.value } }))}
+                            aria-label={`Billing rate for ${e.fullName}`}
+                          />
+                        </div>
+                        <div>
+                          <Label className="mb-1 block text-[10px] uppercase tracking-wide text-muted-foreground">Payout ₹/shift</Label>
+                          <Input
+                            type="number"
+                            inputMode="numeric"
+                            className="h-8 text-right text-xs tabular-nums"
+                            value={st.payoutRate ?? String(e.standardRate ?? 0)}
+                            onChange={(ev) => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], payoutRate: ev.target.value } }))}
+                            aria-label={`Payout rate for ${e.fullName}`}
+                          />
+                        </div>
+                      </div>
+                      <p className="mt-1.5 text-right text-[10px] tabular-nums text-muted-foreground">
+                        {units} unit{units > 1 ? "s" : ""} → bills <span className="font-semibold text-foreground">{formatINR(bRate * units)}</span> · pays <span className="font-semibold text-foreground">{formatINR(pRate * units)}</span>
+                      </p>
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
-              <p className="text-[11px] text-muted-foreground">Rates are per shift. Edit any cell to override the contract rate for that employee only.</p>
+              <p className="text-[11px] text-muted-foreground">Full shift = Day + Night = 2 shift units. Edited rates apply to this deployment only — the fixed master rates never change.</p>
             </>
           )}
         </div>
@@ -1342,139 +1340,25 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
 }
 
 // ---------------------------------------------------------------------------
-// Contract form (contracts-view + property-detail-view)
-// ---------------------------------------------------------------------------
-
-export function ContractFormDialog({ open, onOpenChange, contract, defaultPropertyId, properties: propsProp, onDone }: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  contract?: ContractRec | null;
-  defaultPropertyId?: string;
-  properties?: { id: string; name: string }[];
-  onDone: () => void;
-}) {
-  const editing = Boolean(contract);
-  const [fetchedProps, setFetchedProps] = useState<{ id: string; name: string }[]>([]);
-  const properties = propsProp ?? fetchedProps;
-  const [form, setForm] = useState({
-    propertyId: defaultPropertyId ?? "", name: "", startDate: todayStr(), endDate: "",
-    billingRate: "", payoutRate: "", shift: "DAY", category: "", maxEmployees: "",
-    paymentTerms: "", notes: "",
-  });
-  const { mutate, saving } = useMutation();
-
-  useEffect(() => {
-    if (propsProp || properties.length > 0) return;
-    let cancelled = false;
-    api.get<ListResp<PropertyRec>>("/api/properties" + qs({ pageSize: 200 }))
-      .then((d) => { if (!cancelled) setFetchedProps(d.items.map((p) => ({ id: p.id, name: p.name }))); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [propsProp]);
-
-  // Reset form each time the dialog opens (render-time state adjustment).
-  const [prevOpen, setPrevOpen] = useState(open);
-  if (open !== prevOpen) {
-    setPrevOpen(open);
-    if (open) {
-      setForm({
-        propertyId: contract?.propertyId ?? defaultPropertyId ?? "",
-        name: contract?.name ?? "",
-        startDate: contract?.startDate?.slice(0, 10) ?? todayStr(),
-        endDate: contract?.endDate?.slice(0, 10) ?? "",
-        billingRate: contract ? String(contract.billingRate) : "",
-        payoutRate: contract ? String(contract.payoutRate) : "",
-        shift: contract?.shift ?? "DAY",
-        category: contract?.category ?? "",
-        maxEmployees: contract?.maxEmployees ? String(contract.maxEmployees) : "",
-        paymentTerms: contract?.paymentTerms ?? "",
-        notes: contract?.notes ?? "",
-      });
-    }
-  }
-
-  const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
-
-  const submit = async () => {
-    if (!form.propertyId) { toast.error("Select a property"); return; }
-    if (!form.name.trim()) { toast.error("Contract name is required"); return; }
-    if (!form.startDate) { toast.error("Start date is required"); return; }
-    const b = parseAmount(form.billingRate);
-    const p = parseAmount(form.payoutRate);
-    if (b <= 0 || p <= 0) { toast.error("Billing and payout rates are required"); return; }
-    const body = {
-      propertyId: form.propertyId,
-      name: form.name.trim(),
-      startDate: form.startDate,
-      endDate: form.endDate || undefined,
-      billingRate: b,
-      payoutRate: p,
-      shift: form.shift || undefined,
-      category: form.category || undefined,
-      maxEmployees: form.maxEmployees ? Number(form.maxEmployees) : undefined,
-      paymentTerms: form.paymentTerms || undefined,
-      notes: form.notes || undefined,
-    };
-    const res = editing
-      ? await mutate(() => api.put(`/api/contracts/${contract!.id}`, body), "Contract updated — affects future deployments only")
-      : await mutate(() => api.post("/api/contracts", body), "Contract created");
-    if (res.ok) { onOpenChange(false); onDone(); }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{editing ? "Edit Contract" : "New Contract"}</DialogTitle>
-          <DialogDescription>
-            {editing
-              ? "Rate changes affect future deployments only — historical records keep their snapshot."
-              : "Creating an ACTIVE contract ends the property's previous active contract."}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Property" required className="sm:col-span-2">
-            <SelectInput
-              value={form.propertyId}
-              onChange={set("propertyId")}
-              placeholder="Select property…"
-              disabled={Boolean(defaultPropertyId) && !editing}
-              options={properties.map((p) => ({ label: p.name, value: p.id }))}
-            />
-          </Field>
-          <Field label="Contract name" required className="sm:col-span-2">
-            <Input value={form.name} onChange={(e) => set("name")(e.target.value)} className="h-10" placeholder="e.g. Day-shift 2025" />
-          </Field>
-          <Field label="Start date" required><Input type="date" value={form.startDate} onChange={(e) => set("startDate")(e.target.value)} className="h-10" /></Field>
-          <Field label="End date"><Input type="date" value={form.endDate} onChange={(e) => set("endDate")(e.target.value)} className="h-10" /></Field>
-          <Field label="Billing rate (₹/shift)" required><Input type="number" inputMode="numeric" value={form.billingRate} onChange={(e) => set("billingRate")(e.target.value)} className="h-10" /></Field>
-          <Field label="Payout rate (₹/shift)" required><Input type="number" inputMode="numeric" value={form.payoutRate} onChange={(e) => set("payoutRate")(e.target.value)} className="h-10" /></Field>
-          <Field label="Shift">
-            <SelectInput value={form.shift} onChange={set("shift")} options={[{ label: "Day", value: "DAY" }, { label: "Night", value: "NIGHT" }, { label: "All", value: "ALL" }]} />
-          </Field>
-          <Field label="Work category"><Input value={form.category} onChange={(e) => set("category")(e.target.value)} className="h-10" placeholder="Service, Kitchen…" /></Field>
-          <Field label="Max employees"><Input type="number" inputMode="numeric" value={form.maxEmployees} onChange={(e) => set("maxEmployees")(e.target.value)} className="h-10" /></Field>
-          <Field label="Payment terms"><Input value={form.paymentTerms} onChange={(e) => set("paymentTerms")(e.target.value)} className="h-10" placeholder="Weekly, every Monday" /></Field>
-          <Field label="Notes" className="sm:col-span-2"><Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} rows={2} /></Field>
-        </div>
-        <DialogFooter className="gap-2">
-          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : editing ? "Save changes" : "Create contract"}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Misc shared bits
 // ---------------------------------------------------------------------------
 
 export function ShiftBadgeInline({ shift }: { shift: string }) {
+  const s = String(shift).toUpperCase();
   return (
     <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-      <span className={cn("inline-block h-1.5 w-1.5 rounded-full", shift === "NIGHT" ? "bg-slate-500" : "bg-amber-500")} aria-hidden />
-      {shift}
+      {s === "FULL" ? (
+        <>
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-500" aria-hidden />
+          Full
+        </>
+      ) : (
+        <>
+          <span className={cn("inline-block h-1.5 w-1.5 rounded-full", s === "NIGHT" ? "bg-slate-500" : "bg-amber-500")} aria-hidden />
+          {s === "NIGHT" ? "Night" : "Day"}
+        </>
+      )}
     </span>
   );
 }

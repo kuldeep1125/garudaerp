@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import {
   AdvanceRec, AreaTrend, CHART_COLORS, DeploymentRec, EmployeeRec, Field, GiveAdvanceDialog,
-  InitialAvatar, Option, SelectInput, SettlementRec, ShiftBadgeInline, errMessage, fmtDay,
+  InitialAvatar, Option, SelectInput, SettlementRec, SHIFT_UNITS, ShiftBadgeInline, errMessage, fmtDay,
   todayStr, useMutation,
 } from "./_shared";
 
@@ -192,7 +192,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
     { key: "shift", label: "Shift", render: (r) => <ShiftBadgeInline shift={r.shift} />, value: (r) => r.shift },
     { key: "rate", label: "Rate", className: "text-right", value: (r) => formatINR(r.payoutRate ?? 0), hideOnMobile: true },
     { key: "earning", label: "Earning", className: "text-right", value: (r) => formatINR((r.payoutAmount ?? 0) + (r.adjustmentAmount ?? 0)) },
-    { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+    { key: "paid", label: "Paid", render: (r) => <StatusBadge status={r.paidStatus ?? "UNPAID"} />, value: (r) => r.paidStatus ?? "UNPAID", hideOnMobile: true },
   ];
 
   const advances = data?.advances ?? [];
@@ -208,7 +208,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
       if (!d.date) continue;
       const key = String(d.date).slice(0, 10);
       const row = byDay.get(key) ?? { shifts: 0, billing: 0 };
-      row.shifts += 1;
+      row.shifts += SHIFT_UNITS[String(d.shift).toUpperCase()] ?? 1;
       row.billing += d.billingAmount ?? 0;
       byDay.set(key, row);
     }
@@ -225,8 +225,8 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
     const billed = list.reduce((s, d) => s + d.billing, 0);
 
     // Utilization analytics: shift mix, weekday distribution, top properties.
-    // IMPORTANT: filter to the same 30-day window as the summary numbers above,
-    // so Day+Night sums equal totalShifts (the raw list may hold up to 100 records).
+    // IMPORTANT: filter to the same 30-day window as the summary numbers above.
+    // FULL covers both halves → counts once in day AND night (units stay equal).
     const window30 = new Set(list.map((d) => d.date));
     let dayShifts = 0;
     let nightShifts = 0;
@@ -236,8 +236,9 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
       if (!d.date) continue;
       const key = String(d.date).slice(0, 10);
       if (window30.has(key)) {
-        if (d.shift === "NIGHT") nightShifts += 1;
-        else dayShifts += 1;
+        const s = String(d.shift).toUpperCase();
+        if (s === "NIGHT" || s === "FULL") nightShifts += 1;
+        if (s === "DAY" || s === "FULL") dayShifts += 1;
         const wd = new Date(`${key}T00:00:00`).getDay();
         weekday[wd] += 1;
         byProp.set(d.propertyName, (byProp.get(d.propertyName) ?? 0) + 1);
@@ -301,7 +302,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
                 Joined {fmtDay(emp.joiningDate)} · {emp.city || "—"}
               </p>
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                <Badge variant="outline" className="tabular-nums">{formatINR(emp.standardRate ?? 0)}/day</Badge>
+                <Badge variant="outline" className="tabular-nums">{formatINR(emp.standardRate ?? 0)}/shift</Badge>
                 {(emp.advanceBalance ?? 0) > 0 ? (
                   <Badge variant="outline" className="border-red-200 bg-red-50 tabular-nums text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
                     Advance due {formatINR(emp.advanceBalance ?? 0)}
@@ -582,7 +583,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
               </div>
               <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-4">
                 <span className="mr-1 text-xs text-muted-foreground">Status control:</span>
-                {["ACTIVE", "INACTIVE", "SUSPENDED", "LEFT"].filter((s) => s !== emp.status).map((s) => (
+                {["ACTIVE", "INACTIVE"].filter((s) => s !== emp.status).map((s) => (
                   <Button key={s} variant="outline" size="sm" className="h-8" disabled={saving} onClick={() => void changeStatus(s)}>
                     Mark {s.charAt(0) + s.slice(1).toLowerCase()}
                   </Button>
@@ -608,7 +609,12 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
             </Field>
             <Field label="Mobile"><Input value={editForm.mobile} onChange={(e) => setEditForm((f) => ({ ...f, mobile: e.target.value }))} className="h-10" /></Field>
             <Field label="Designation"><Input value={editForm.designation} onChange={(e) => setEditForm((f) => ({ ...f, designation: e.target.value }))} className="h-10" /></Field>
-            <Field label="Standard rate (₹/day)"><Input type="number" inputMode="numeric" value={editForm.standardRate} onChange={(e) => setEditForm((f) => ({ ...f, standardRate: e.target.value }))} className="h-10" /></Field>
+            <Field
+              label="Payout rate (₹/shift)"
+              hint="Applies to future deployments only — past records keep their original rate."
+            >
+              <Input type="number" inputMode="numeric" value={editForm.standardRate} onChange={(e) => setEditForm((f) => ({ ...f, standardRate: e.target.value }))} className="h-10" />
+            </Field>
             <Field label="City"><Input value={editForm.city} onChange={(e) => setEditForm((f) => ({ ...f, city: e.target.value }))} className="h-10" /></Field>
             <Field label="Skills" className="sm:col-span-2"><Input value={editForm.skills} onChange={(e) => setEditForm((f) => ({ ...f, skills: e.target.value }))} className="h-10" /></Field>
             <Field label="UPI ID"><Input value={editForm.upiId} onChange={(e) => setEditForm((f) => ({ ...f, upiId: e.target.value }))} className="h-10" /></Field>

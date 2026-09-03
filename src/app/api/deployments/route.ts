@@ -4,7 +4,8 @@ import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
 import {
   startOfDay,
-  resolveContract,
+  SHIFT_UNITS,
+  SHIFTS,
   recomputeDeploymentPaid,
   serializeDeployment,
 } from "@/app/api/_lib/engine";
@@ -29,11 +30,9 @@ export const GET = handleRoute(async ({ req }) => {
   const propertyId = sp.get("propertyId");
   const employeeId = sp.get("employeeId");
   const shift = sp.get("shift");
-  const status = sp.get("status");
   if (propertyId) where.propertyId = propertyId;
   if (employeeId) where.employeeId = employeeId;
   if (shift) where.shift = shift.toUpperCase();
-  if (status) where.status = { in: status.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean) };
 
   const [rows, total, agg] = await Promise.all([
     db.deployment.findMany({
@@ -61,101 +60,121 @@ export const GET = handleRoute(async ({ req }) => {
   };
 });
 
+interface EntryInput {
+  employeeId?: string;
+  shift?: string;
+  billingRate?: number | string;
+  payoutRate?: number | string;
+}
+
+// POST /api/deployments — create work records for one property + date.
+// Rates resolve automatically: override > property.billingRate (billing) /
+// employee.standardRate (payout). Amounts = rate × shift units (FULL = 2).
+// Every amount is snapshotted — later master-rate changes never rewrite history.
 export const POST = handleRoute(async ({ owner, req }) => {
   const body = await readBody<{
     propertyId?: string;
     date?: string;
-    shift?: string;
-    workCategory?: string;
     notes?: string;
-    overrides?: Record<string, { billingRate?: number | string; payoutRate?: number | string }>;
+    entries?: EntryInput[];
+    // Legacy single-shift bulk shape (kept for compatibility): one shift for all employees.
+    shift?: string;
     employeeIds?: string[];
+    overrides?: Record<string, { billingRate?: number | string; payoutRate?: number | string }>;
   }>(req);
-  requireFields(body as Record<string, unknown>, ["propertyId", "date", "shift"]);
-  const employeeIds = Array.isArray(body.employeeIds) ? body.employeeIds.filter(Boolean).map(String) : [];
-  if (!employeeIds.length) throw new HttpError(400, "employeeIds must contain at least one employee");
+  requireFields(body as Record<string, unknown>, ["propertyId", "date"]);
 
   const property = await db.property.findUnique({ where: { id: String(body.propertyId) } });
   if (!property) throw new HttpError(404, "Property not found");
   const date = parseDate(String(body.date));
-  const shift = String(body.shift).toUpperCase();
   const dayStart = startOfDay(date);
   const dayEnd = endOfDay(date);
 
-  const [employees, contract, existingSameDay] = await Promise.all([
-    db.employee.findMany({ where: { id: { in: employeeIds } } }),
-    resolveContract(property.id, date),
-    db.deployment.findMany({
-      where: {
-        propertyId: property.id,
-        shift,
-        date: { gte: dayStart, lte: dayEnd },
-        status: { not: "CANCELLED" },
-        employeeId: { in: employeeIds },
-      },
-      select: { employeeId: true },
-    }),
-  ]);
-  const empById = new Map(employees.map((e) => [e.id, e]));
-  const duplicateIds = new Set(existingSameDay.map((d) => d.employeeId));
+  // Normalize input into per-employee entries with explicit shifts.
+  const rawEntries: EntryInput[] = Array.isArray(body.entries) && body.entries.length
+    ? body.entries
+    : (Array.isArray(body.employeeIds) ? body.employeeIds.filter(Boolean).map(String) : []).map((employeeId) => ({
+        employeeId,
+        shift: body.shift,
+        ...(body.overrides?.[employeeId] ?? {}),
+      }));
+  if (!rawEntries.length) throw new HttpError(400, "entries must contain at least one employee");
 
-  // Rate resolution per employee: override > contract > employee.standardRate (payout only).
   const planned: {
     employeeId: string;
     employeeName: string;
+    shift: string;
+    units: number;
     billingRate: number;
     payoutRate: number;
+    billingAmount: number;
+    payoutAmount: number;
   }[] = [];
   const skipped: { employeeName: string; reason: string }[] = [];
-  const missingBilling: string[] = [];
 
-  for (const empId of employeeIds) {
+  // Fetch employees + existing rows for duplicate detection in bulk.
+  const empIds = [...new Set(rawEntries.map((e) => String(e.employeeId ?? "")))].filter(Boolean);
+  const [employees, existingSameDay] = await Promise.all([
+    db.employee.findMany({ where: { id: { in: empIds } } }),
+    db.deployment.findMany({
+      where: { propertyId: property.id, date: { gte: dayStart, lte: dayEnd } },
+      select: { employeeId: true, shift: true },
+    }),
+  ]);
+  const empById = new Map(employees.map((e) => [e.id, e]));
+  const existingKeys = new Set(existingSameDay.map((d) => `${d.employeeId}|${d.shift}`));
+
+  if (property.billingRate <= 0) {
+    throw new HttpError(400, `Set a billing rate for ${property.name} first (edit the property).`);
+  }
+
+  for (const entry of rawEntries) {
+    const empId = String(entry.employeeId ?? "");
     const emp = empById.get(empId);
-    const override = body.overrides?.[empId];
     if (!emp) {
-      skipped.push({ employeeName: String(empId), reason: "Employee not found" });
+      skipped.push({ employeeName: empId || "Unknown", reason: "Employee not found" });
       continue;
     }
     const employeeLabel = `${emp.code} — ${emp.fullName}`;
-    if (duplicateIds.has(empId)) {
-      skipped.push({
-        employeeName: employeeLabel,
-        reason: "Duplicate: already deployed to this property on this date & shift",
-      });
+    const shift = String(entry.shift ?? body.shift ?? "DAY").toUpperCase();
+    if (!SHIFTS.includes(shift as (typeof SHIFTS)[number])) {
+      skipped.push({ employeeName: employeeLabel, reason: `Invalid shift "${shift}"` });
       continue;
     }
-    const overrideBilling =
-      override?.billingRate !== undefined && override?.billingRate !== null && override?.billingRate !== ""
-        ? Number(override.billingRate)
-        : null;
-    const overridePayout =
-      override?.payoutRate !== undefined && override?.payoutRate !== null && override?.payoutRate !== ""
-        ? Number(override.payoutRate)
-        : null;
-    const billingRate = overrideBilling ?? contract?.billingRate ?? null;
-    const payoutRate = overridePayout ?? contract?.payoutRate ?? emp.standardRate;
-    if (billingRate == null || !Number.isFinite(billingRate)) {
-      missingBilling.push(employeeLabel);
+    if (existingKeys.has(`${empId}|${shift}`)) {
+      skipped.push({ employeeName: employeeLabel, reason: `Duplicate: already deployed on this date for ${shift} shift` });
+      continue;
+    }
+    const units = SHIFT_UNITS[shift] ?? 1;
+    const billingRate = entry.billingRate !== undefined && entry.billingRate !== null && entry.billingRate !== ""
+      ? round2(Number(entry.billingRate))
+      : round2(property.billingRate);
+    const payoutRate = entry.payoutRate !== undefined && entry.payoutRate !== null && entry.payoutRate !== ""
+      ? round2(Number(entry.payoutRate))
+      : round2(emp.standardRate);
+    if (!Number.isFinite(billingRate) || !Number.isFinite(payoutRate) || billingRate < 0 || payoutRate < 0) {
+      skipped.push({ employeeName: employeeLabel, reason: "Invalid rate value" });
       continue;
     }
     planned.push({
       employeeId: emp.id,
       employeeName: employeeLabel,
-      billingRate: round2(billingRate),
-      payoutRate: round2(payoutRate),
+      shift,
+      units,
+      billingRate,
+      payoutRate,
+      billingAmount: round2(billingRate * units),
+      payoutAmount: round2(payoutRate * units),
     });
   }
 
   if (!planned.length) {
-    if (missingBilling.length) {
-      throw new HttpError(
-        400,
-        `No active contract for ${property.name} on ${String(body.date)} and no billing override for: ${missingBilling.join(", ")}`
-      );
+    if (skipped.some((s) => s.reason.startsWith("Duplicate"))) {
+      throw new HttpError(409, "No deployments created — all selected employees are duplicates for this property/date/shift", {
+        duplicates: skipped.map((s) => s.employeeName),
+      });
     }
-    throw new HttpError(409, "No deployments created — all selected employees are duplicates for this property/date/shift", {
-      duplicates: skipped.map((s) => s.employeeName),
-    });
+    throw new HttpError(400, skipped[0]?.reason ?? "No deployments created");
   }
 
   const created = await db.$transaction(async (tx) => {
@@ -166,13 +185,11 @@ export const POST = handleRoute(async ({ owner, req }) => {
           date,
           employeeId: p.employeeId,
           propertyId: property.id,
-          shift,
-          workCategory: body.workCategory ? String(body.workCategory) : null,
+          shift: p.shift,
           billingRate: p.billingRate,
           payoutRate: p.payoutRate,
-          billingAmount: p.billingRate,
-          payoutAmount: p.payoutRate,
-          status: "SCHEDULED",
+          billingAmount: p.billingAmount,
+          payoutAmount: p.payoutAmount,
           notes: body.notes ? String(body.notes) : null,
           createdById: owner.id,
           createdByName: owner.name,
@@ -189,9 +206,13 @@ export const POST = handleRoute(async ({ owner, req }) => {
     owner,
     action: "CREATE",
     module: "DEPLOYMENT",
+    // comma-joined ids — /api/undo splits them (bulk reverse)
     recordId: created.map((c) => String(c.id)).join(","),
-    recordLabel: `${created.length} deployment(s) — ${property.name} ${String(body.date)} ${shift}`,
-    newValue: { count: created.length, employees: planned.map((p) => p.employeeName) },
+    recordLabel: `${created.length} deployment(s) — ${property.name} ${String(body.date)}`,
+    newValue: {
+      count: created.length,
+      rows: planned.map((p) => ({ employee: p.employeeName, shift: p.shift, units: p.units, billingRate: p.billingRate, payoutRate: p.payoutRate })),
+    },
   });
 
   return { created, skipped };

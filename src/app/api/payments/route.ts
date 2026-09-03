@@ -47,12 +47,12 @@ export const POST = handleRoute(async ({ owner, req }) => {
   // Overpayment is allowed but audit-flagged.
   const [deps, pays] = await Promise.all([
     db.deployment.aggregate({
-      where: { propertyId: property.id, status: { in: ["CONFIRMED", "COMPLETED", "PARTIAL"] } },
+      where: { propertyId: property.id },
       _sum: { billingAmount: true },
     }),
     db.propertyPayment.aggregate({ where: { propertyId: property.id }, _sum: { amount: true } }),
   ]);
-  const outstandingBefore = round2((deps._sum.billingAmount ?? 0) - (pays._sum.amount ?? 0));
+  const outstandingBefore = round2((deps._sum?.billingAmount ?? 0) - (pays._sum?.amount ?? 0));
 
   const payment = await db.$transaction(async (tx) => {
     const row = await tx.propertyPayment.create({

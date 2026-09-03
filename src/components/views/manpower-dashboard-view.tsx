@@ -85,6 +85,7 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
   const night = m?.nightShifts ?? 0;
   const total = day + night;
   const dayPct = total > 0 ? Math.round((day / total) * 100) : 0;
+  const nightPct = total > 0 ? 100 - dayPct : 0;
 
   const columns: Column<ByPropertyRow>[] = [
     {
@@ -158,7 +159,7 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
                     <Moon className="h-3.5 w-3.5" aria-hidden />Night shifts
                   </div>
                   <p className="mt-1 text-xl font-bold tabular-nums">{night}</p>
-                  <p className="text-[11px] text-muted-foreground">{100 - dayPct}% of shifts</p>
+                  <p className="text-[11px] text-muted-foreground">{nightPct}% of shifts</p>
                 </div>
               </div>
               <div className="mt-3">

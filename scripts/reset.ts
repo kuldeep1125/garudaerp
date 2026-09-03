@@ -21,7 +21,7 @@ async function main() {
   // FK-safe wipe order. Master data (shift, appSetting, expenseCategory) is KEPT.
   const tables = [
     "settlementLine", "settlement", "adjustment", "advance", "deployment", "propertyPayment",
-    "contract", "expense", "recurringExpense", "vehicleEmiPayment", "maintenance", "trip",
+    "expense", "recurringExpense", "vehicleEmiPayment", "maintenance", "trip",
     "client", "vehicle", "notificationDismiss", "auditLog", "session", "employee", "property",
     "owner",
   ] as const;

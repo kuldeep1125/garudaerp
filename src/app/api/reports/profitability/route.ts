@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { handleRoute } from "@/lib/api-helpers";
 import { round2 } from "@/lib/money";
-import { BILLABLE, BUSINESSES, dayKey, reportRange, tripTarget } from "@/app/api/_lib/engine";
+import { BUSINESSES, dayKey, reportRange, tripTarget } from "@/app/api/_lib/engine";
 
 // GET /api/reports/profitability?from=&to=&business=
 // MANPOWER: billing = deployments billing, payout = deployment payouts, other = MANPOWER expenses.
@@ -20,7 +20,7 @@ export const GET = handleRoute(async ({ req }) => {
   const [depAgg, mpExpAgg, trips, trExpAgg] = await Promise.all([
     needManpower
       ? db.deployment.aggregate({
-          where: { date: { gte: from, lte: to }, status: { in: [...BILLABLE] } },
+          where: { date: { gte: from, lte: to } },
           _sum: { billingAmount: true, payoutAmount: true },
         })
       : Promise.resolve(null),

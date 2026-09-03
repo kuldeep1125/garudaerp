@@ -7,7 +7,7 @@ import { handleRoute } from "@/lib/api-helpers";
 // history is capped to the latest 1,000 entries to keep the file reasonable.
 export const GET = handleRoute(async () => {
   const [
-    owners, employees, properties, contracts, deployments, propertyPayments,
+    owners, employees, properties, deployments, propertyPayments,
     advances, adjustments, settlements, settlementLines, expenses, expenseCategories,
     recurringExpenses, vehicles, clients, trips, vehicleEmiPayments, maintenance,
     notificationDismisses, appSettings, shifts, auditLogs,
@@ -15,7 +15,6 @@ export const GET = handleRoute(async () => {
     db.owner.findMany(),
     db.employee.findMany(),
     db.property.findMany(),
-    db.contract.findMany(),
     db.deployment.findMany({ orderBy: { date: "asc" } }),
     db.propertyPayment.findMany({ orderBy: { date: "asc" } }),
     db.advance.findMany({ orderBy: { date: "asc" } }),
@@ -37,7 +36,7 @@ export const GET = handleRoute(async () => {
   ]);
 
   const data = {
-    owners, employees, properties, contracts, deployments, propertyPayments,
+    owners, employees, properties, deployments, propertyPayments,
     advances, adjustments, settlements, settlementLines, expenses, expenseCategories,
     recurringExpenses, vehicles, clients, trips, vehicleEmiPayments, maintenance,
     notificationDismisses, appSettings, shifts, auditLogs,

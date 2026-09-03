@@ -1,13 +1,13 @@
 import { db } from "@/lib/db";
 import { handleRoute } from "@/lib/api-helpers";
 import { round2 } from "@/lib/money";
-import { BILLABLE, dayKey, reportRange } from "@/app/api/_lib/engine";
+import { dayKey, reportRange } from "@/app/api/_lib/engine";
 
 // GET /api/reports/employee-earnings?from=&to=[&employeeId=]
-// Per-employee payout summary for billable deployments + advances in the range.
+// Per-employee payout summary for deployments + advances in the range.
 // When employeeId is given, the response additionally carries:
 //   employee  — profile header (name, code, designation, status)
-//   days      — day-by-day sheet: date → property → shift → status → earnings
+//   days      — day-by-day sheet: date → property → shift → earnings
 //   propertySummary — shifts & earnings per property for that employee
 export const GET = handleRoute(async ({ req }) => {
   const sp = new URL(req.url).searchParams;
@@ -18,7 +18,6 @@ export const GET = handleRoute(async ({ req }) => {
     db.deployment.findMany({
       where: {
         date: { gte: from, lte: to },
-        status: { in: [...BILLABLE] },
         ...(employeeId ? { employeeId } : {}),
       },
       select: {
@@ -28,7 +27,6 @@ export const GET = handleRoute(async ({ req }) => {
         property: { select: { name: true } },
         date: true,
         shift: true,
-        status: true,
         payoutRate: true,
         payoutAmount: true,
       },
@@ -56,8 +54,9 @@ export const GET = handleRoute(async ({ req }) => {
       shifts: 0, dayShifts: 0, nightShifts: 0, props: new Set<string>(), earnings: 0,
     };
     row.shifts++;
-    if (d.shift.toUpperCase().includes("DAY")) row.dayShifts++;
-    if (d.shift.toUpperCase().includes("NIGHT")) row.nightShifts++;
+    const s = d.shift.toUpperCase();
+    if (s === "DAY" || s === "FULL") row.dayShifts++;
+    if (s === "NIGHT" || s === "FULL") row.nightShifts++;
     row.props.add(d.propertyId);
     row.earnings = round2(row.earnings + d.payoutAmount);
     byEmp.set(d.employeeId, row);
@@ -113,7 +112,6 @@ export const GET = handleRoute(async ({ req }) => {
       date: dayKey(d.date),
       propertyName: d.property.name,
       shift: d.shift,
-      status: d.status,
       payoutRate: round2(d.payoutRate),
       earnings: round2(d.payoutAmount),
     }));
@@ -124,8 +122,9 @@ export const GET = handleRoute(async ({ req }) => {
         propertyName: d.property.name, shifts: 0, dayShifts: 0, nightShifts: 0, earnings: 0,
       };
       r.shifts++;
-      if (d.shift.toUpperCase().includes("DAY")) r.dayShifts++;
-      if (d.shift.toUpperCase().includes("NIGHT")) r.nightShifts++;
+      const s = d.shift.toUpperCase();
+      if (s === "DAY" || s === "FULL") r.dayShifts++;
+      if (s === "NIGHT" || s === "FULL") r.nightShifts++;
       r.earnings = round2(r.earnings + d.payoutAmount);
       propMap.set(d.propertyId, r);
     }

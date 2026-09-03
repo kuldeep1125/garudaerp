@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { handleRoute, readBody, HttpError } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
-import { recomputeDeploymentPaid, serializeDeployment, optionalAmount } from "@/app/api/_lib/engine";
+import { recomputeDeploymentPaid, serializeDeployment, optionalAmount, SHIFT_UNITS, SHIFTS } from "@/app/api/_lib/engine";
 
 export const PUT = handleRoute(async ({ owner, params, req }) => {
   const { id } = params;
@@ -12,19 +12,25 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
     include: { employee: { select: { fullName: true, code: true } }, property: { select: { name: true } } },
   });
   if (!existing) throw new HttpError(404, "Deployment not found");
-  if (existing.status === "CANCELLED") throw new HttpError(409, "Cancelled deployments cannot be edited");
+
+  // Shift may be corrected too — amounts always recompute as rate × units so the
+  // stored math can never drift from rate + shift + adjustment.
+  const shift = body.shift !== undefined ? String(body.shift).toUpperCase() : existing.shift;
+  if (!SHIFTS.includes(shift as (typeof SHIFTS)[number])) throw new HttpError(400, "Invalid shift: DAY, NIGHT or FULL");
+  const units = SHIFT_UNITS[shift] ?? 1;
 
   const billingRate = body.billingRate !== undefined ? optionalAmount(body.billingRate, existing.billingRate) : existing.billingRate;
   const payoutRate = body.payoutRate !== undefined ? optionalAmount(body.payoutRate, existing.payoutRate) : existing.payoutRate;
   const adjustmentAmount =
     body.adjustmentAmount !== undefined ? optionalAmount(body.adjustmentAmount, existing.adjustmentAmount) : existing.adjustmentAmount;
-  const billingAmount = round2(billingRate + adjustmentAmount);
-  const payoutAmount = round2(payoutRate);
+  const billingAmount = round2(billingRate * units + adjustmentAmount);
+  const payoutAmount = round2(payoutRate * units);
 
   const updated = await db.$transaction(async (tx) => {
     const row = await tx.deployment.update({
       where: { id },
       data: {
+        shift,
         billingRate,
         payoutRate,
         adjustmentAmount,
@@ -45,8 +51,38 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
     module: "DEPLOYMENT",
     recordId: id,
     recordLabel: `${existing.employee.code} — ${existing.employee.fullName} @ ${existing.property.name} (${existing.date.toISOString().slice(0, 10)})`,
-    previousValue: { billingRate: existing.billingRate, payoutRate: existing.payoutRate, adjustmentAmount: existing.adjustmentAmount },
-    newValue: { billingRate, payoutRate, adjustmentAmount, billingAmount, payoutAmount },
+    previousValue: {
+      shift: existing.shift, billingRate: existing.billingRate, payoutRate: existing.payoutRate,
+      adjustmentAmount: existing.adjustmentAmount, billingAmount: existing.billingAmount, payoutAmount: existing.payoutAmount,
+    },
+    newValue: { shift, billingRate, payoutRate, adjustmentAmount, billingAmount, payoutAmount },
   });
   return serializeDeployment(updated);
+});
+
+// DELETE /api/deployments/[id] — remove a wrong entry. The full row is snapshotted
+// into the audit log so the delete itself can be undone (zero-mismatch restore).
+export const DELETE = handleRoute(async ({ owner, params }) => {
+  const { id } = params;
+  const existing = await db.deployment.findUnique({
+    where: { id },
+    include: { employee: { select: { fullName: true, code: true } }, property: { select: { name: true } } },
+  });
+  if (!existing) throw new HttpError(404, "Deployment not found");
+  const { employee, property, ...row } = existing;
+
+  await db.$transaction(async (tx) => {
+    await tx.deployment.delete({ where: { id } });
+    await recomputeDeploymentPaid(tx, existing.propertyId);
+  });
+
+  await logAudit({
+    owner,
+    action: "DELETE",
+    module: "DEPLOYMENT",
+    recordId: id,
+    recordLabel: `${employee.code} — ${employee.fullName} @ ${property.name} (${existing.date.toISOString().slice(0, 10)}) ${existing.shift}`,
+    previousValue: row, // full scalar snapshot — restoreable
+  });
+  return { ok: true };
 });

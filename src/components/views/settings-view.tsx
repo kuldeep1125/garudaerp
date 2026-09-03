@@ -251,7 +251,7 @@ function DangerZoneCard() {
             <AlertDialogHeader>
               <AlertDialogTitle>Wipe all business data?</AlertDialogTitle>
               <AlertDialogDescription>
-                This permanently deletes every employee, property, contract, deployment, payment,
+                This permanently deletes every employee, property, deployment, payment,
                 advance, expense, vehicle, client, trip and settlement. Type <span className="font-mono font-bold">RESET</span> below
                 to confirm. This cannot be undone.
               </AlertDialogDescription>

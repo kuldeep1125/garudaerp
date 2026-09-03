@@ -23,7 +23,7 @@ export const GET = handleRoute(async ({ req }) => {
     manpowerBlock(from, to),
     manpowerTrend(),
     db.deployment.findMany({
-      where: { date: { gte: from, lte: to }, status: { in: ["CONFIRMED", "COMPLETED", "PARTIAL"] } },
+      where: { date: { gte: from, lte: to } },
       select: { propertyId: true, property: { select: { name: true } }, billingAmount: true, payoutAmount: true },
     }),
     db.propertyPayment.groupBy({

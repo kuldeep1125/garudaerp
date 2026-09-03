@@ -61,7 +61,7 @@ export const GET = handleRoute(async ({ req }) => {
       where: {
         OR: [{ employee: { fullName: { contains: q } } }, { property: { name: { contains: q } } }, { notes: { contains: q } }],
       },
-      select: { id: true, date: true, shift: true, status: true, employee: { select: { fullName: true } }, property: { select: { name: true } } },
+      select: { id: true, date: true, shift: true, employee: { select: { fullName: true } }, property: { select: { name: true } } },
       take: 5,
       orderBy: { date: "desc" },
     }),
@@ -105,7 +105,7 @@ export const GET = handleRoute(async ({ req }) => {
   const depItems: SearchItem[] = deployments.map((d) => ({
     id: d.id,
     title: `${d.employee.fullName} @ ${d.property.name}`,
-    subtitle: `${dayKey(d.date)} · ${d.shift} · ${d.status}`,
+    subtitle: `${dayKey(d.date)} · ${d.shift} shift`,
     view: "deployments",
     params: { date: dayKey(d.date) },
   }));

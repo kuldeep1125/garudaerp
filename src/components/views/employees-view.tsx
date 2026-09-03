@@ -33,11 +33,9 @@ const STATUS_OPTIONS: Option[] = [
   { label: "All statuses", value: "" },
   { label: "Active", value: "ACTIVE" },
   { label: "Inactive", value: "INACTIVE" },
-  { label: "Suspended", value: "SUSPENDED" },
-  { label: "Left", value: "LEFT" },
 ];
 
-const STATUS_VALUES = ["ACTIVE", "INACTIVE", "SUSPENDED", "LEFT"];
+const STATUS_VALUES = ["ACTIVE", "INACTIVE"];
 
 function EmployeeFormDialog({ open, onOpenChange, employee, onDone }: {
   open: boolean;
@@ -78,13 +76,15 @@ function EmployeeFormDialog({ open, onOpenChange, employee, onDone }: {
 
   const submit = async () => {
     if (!form.fullName.trim()) { toast.error("Full name is required"); return; }
+    const rate = form.standardRate ? parseAmount(form.standardRate) : 0;
+    if (rate <= 0) { toast.error("Set the payout rate (₹ per shift)"); return; }
     const body = {
       fullName: form.fullName.trim(),
       mobile: form.mobile || undefined,
       whatsapp: form.whatsapp || undefined,
       designation: form.designation || undefined,
       skills: form.skills || undefined,
-      standardRate: form.standardRate ? parseAmount(form.standardRate) : undefined,
+      standardRate: rate,
       joiningDate: form.joiningDate || undefined,
       gender: form.gender || undefined,
       city: form.city || undefined,
@@ -93,7 +93,7 @@ function EmployeeFormDialog({ open, onOpenChange, employee, onDone }: {
       notes: form.notes || undefined,
     };
     const res = editing
-      ? await mutate(() => api.put(`/api/employees/${employee!.id}`, body), "Employee updated")
+      ? await mutate(() => api.put(`/api/employees/${employee!.id}`, body), "Employee updated — new rate applies to future deployments only")
       : await mutate(() => api.post("/api/employees", body), "Employee added");
     if (res.ok) { onOpenChange(false); onDone(); }
   };
@@ -112,7 +112,15 @@ function EmployeeFormDialog({ open, onOpenChange, employee, onDone }: {
           <Field label="Mobile"><Input value={form.mobile} onChange={(e) => set("mobile")(e.target.value)} inputMode="tel" className="h-10" /></Field>
           <Field label="WhatsApp"><Input value={form.whatsapp} onChange={(e) => set("whatsapp")(e.target.value)} inputMode="tel" className="h-10" /></Field>
           <Field label="Designation"><Input value={form.designation} onChange={(e) => set("designation")(e.target.value)} placeholder="Waiter, Cook…" className="h-10" /></Field>
-          <Field label="Standard rate (₹/day)"><Input type="number" inputMode="numeric" value={form.standardRate} onChange={(e) => set("standardRate")(e.target.value)} className="h-10" /></Field>
+          <Field
+            label="Payout rate (₹/shift)"
+            required
+            hint={editing
+              ? "Applies to future deployments only — past records keep their original rate."
+              : "Paid to the employee per shift. Full shift = 2 units."}
+          >
+            <Input type="number" inputMode="numeric" value={form.standardRate} onChange={(e) => set("standardRate")(e.target.value)} className="h-10" placeholder="e.g. 500" />
+          </Field>
           <Field label="Joining date"><Input type="date" value={form.joiningDate} onChange={(e) => set("joiningDate")(e.target.value)} className="h-10" /></Field>
           <Field label="Gender">
             <SelectInput
@@ -187,7 +195,7 @@ export default function EmployeesView({ navigate }: ViewProps) {
       value: (r) => r.fullName,
     },
     { key: "mobile", label: t(lang, "col.mobile"), value: (r) => r.mobile ?? "—", hideOnMobile: true },
-    { key: "rate", label: t(lang, "col.rate"), className: "text-right", value: (r) => formatINR(r.standardRate ?? 0) },
+    { key: "rate", label: "Rate/shift", className: "text-right", value: (r) => formatINR(r.standardRate ?? 0) },
     { key: "status", label: t(lang, "col.status"), render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
     {
       key: "advanceBalance", label: t(lang, "col.advanceDue"), className: "text-right",

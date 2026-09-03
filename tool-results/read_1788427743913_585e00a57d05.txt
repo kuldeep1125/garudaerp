@@ -1,0 +1,702 @@
+    36→    36→export interface EmployeeRec {
+    37→    37→  id: string;
+    38→    38→  code: string;
+    39→    39→  fullName: string;
+    40→    40→  photoUrl?: string | null;
+    41→    41→  gender?: string | null;
+    42→    42→  mobile?: string | null;
+    43→    43→  whatsapp?: string | null;
+    44→    44→  address?: string | null;
+    45→    45→  city?: string | null;
+    46→    46→  joiningDate?: string | null;
+    47→    47→  designation?: string | null;
+    48→    48→  skills?: string | null;
+    49→    49→  standardRate?: number | null;
+    50→    50→  rateType?: string | null;
+    51→    51→  status: string;
+    52→    52→  bankDetails?: string | null;
+    53→    53→  upiId?: string | null;
+    54→    54→  preferredPaymentMethod?: string | null;
+    55→    55→  notes?: string | null;
+    56→    56→  advanceBalance?: number;
+    57→    57→}
+    58→    58→
+    59→    59→export interface DeploymentRec {
+    60→    60→  id: string;
+    61→    61→  date: string;
+    62→    62→  employeeId: string;
+    63→    63→  employeeName: string;
+    64→    64→  employeeCode?: string;
+    65→    65→  propertyId: string;
+    66→    66→  propertyName: string;
+    67→    67→  shift: string;
+    68→    68→  workCategory?: string | null;
+    69→    69→  billingRate?: number;
+    70→    70→  payoutRate?: number;
+    71→    71→  billingAmount?: number;
+    72→    72→  payoutAmount?: number;
+    73→    73→  adjustmentAmount?: number | null;
+    74→    74→  adjustmentNote?: string | null;
+    75→    75→  status: string;
+    76→    76→  paidStatus?: string;
+    77→    77→  paidAmount?: number | null;
+    78→    78→  notes?: string | null;
+    79→    79→  createdByName?: string;
+    80→    80→  createdAt?: string;
+    81→    81→}
+    82→    82→
+    83→    83→export interface PropertyRec {
+    84→    84→  id: string;
+    85→    85→  name: string;
+    86→    86→  brandName?: string | null;
+    87→    87→  type?: string | null;
+    88→    88→  address?: string | null;
+    89→    89→  contactPerson?: string | null;
+    90→    90→  contactNumber?: string | null;
+    91→    91→  whatsapp?: string | null;
+    92→    92→  email?: string | null;
+    93→    93→  startDate?: string | null;
+    94→    94→  status: string;
+    95→    95→  notes?: string | null;
+    96→    96→  activeContractName?: string | null;
+    97→    97→  totalBilled?: number;
+    98→    98→  totalReceived?: number;
+    99→    99→  totalOutstanding?: number;
+   100→   100→}
+   101→   101→
+   102→   102→export interface ContractRec {
+   103→   103→  id: string;
+   104→   104→  propertyId: string;
+   105→   105→  propertyName?: string;
+   106→   106→  name: string;
+   107→   107→  startDate: string;
+   108→   108→  endDate?: string | null;
+   109→   109→  billingRate: number;
+   110→   110→  payoutRate: number;
+   111→   111→  shift?: string | null;
+   112→   112→  category?: string | null;
+   113→   113→  maxEmployees?: number | null;
+   114→   114→  paymentTerms?: string | null;
+   115→   115→  notes?: string | null;
+   116→   116→  status: string;
+   117→   117→}
+   118→   118→
+   119→   119→export interface PaymentRec {
+   120→   120→  id: string;
+   121→   121→  propertyId: string;
+   122→   122→  propertyName?: string;
+   123→   123→  date: string;
+   124→   124→  amount: number;
+   125→   125→  method?: string | null;
+   126→   126→  reference?: string | null;
+   127→   127→  notes?: string | null;
+   128→   128→  receivedByName?: string | null;
+   129→   129→}
+   130→   130→
+   131→   131→export interface AdvanceRec {
+   132→   132→  id: string;
+   133→   133→  employeeId: string;
+   134→   134→  employeeName?: string;
+   135→   135→  employeeCode?: string;
+   136→   136→  date: string;
+   137→   137→  amount: number;
+   138→   138→  reason?: string | null;
+   139→   139→  method?: string | null;
+   140→   140→  givenByName?: string | null;
+   141→   141→}
+   142→   142→
+   143→   143→export interface SettlementLineRec {
+   144→   144→  date: string;
+   145→   145→  propertyName: string;
+   146→   146→  shift: string;
+   147→   147→  rate: number;
+   148→   148→  amount: number;
+   149→   149→}
+   150→   150→
+   151→   151→export interface SettlementRec {
+   152→   152→  id: string;
+   153→   153→  employeeId: string;
+   154→   154→  employeeName: string;
+   155→   155→  employeeCode?: string;
+   156→   156→  month: string;
+   157→   157→  totalDays?: number;
+   158→   158→  dayShifts?: number;
+   159→   159→  nightShifts?: number;
+   160→   160→  grossEarnings?: number;
+   161→   161→  additions?: number;
+   162→   162→  advanceDeducted?: number;
+   163→   163→  otherDeductions?: number;
+   164→   164→  netPayable?: number;
+   165→   165→  advanceCarryForward?: number | null;
+   166→   166→  status: string;
+   167→   167→  notes?: string | null;
+   168→   168→  lines?: SettlementLineRec[];
+   169→   169→}
+   170→   170→
+   171→   171→export interface ExpenseRec {
+   172→   172→  id: string;
+   173→   173→  date: string;
+   174→   174→  business: string;
+   175→   175→  categoryId?: string | null;
+   176→   176→  categoryName?: string | null;
+   177→   177→  amount: number;
+   178→   178→  method?: string | null;
+   179→   179→  description?: string | null;
+   180→   180→  notes?: string | null;
+   181→   181→  vehicleId?: string | null;
+   182→   182→  vehicleName?: string | null;
+   183→   183→  spentByName?: string | null;
+   184→   184→}
+   185→   185→
+   186→   186→export interface VehicleRec {
+   187→   187→  id: string;
+   188→   188→  code: string;
+   189→   189→  registrationNumber: string;
+   190→   190→  name: string;
+   191→   191→  make?: string | null;
+   192→   192→  model?: string | null;
+   193→   193→  variant?: string | null;
+   194→   194→  year?: number | null;
+   195→   195→  purchaseDate?: string | null;
+   196→   196→  purchasePrice?: number | null;
+   197→   197→  status: string;
+   198→   198→  insuranceCompany?: string | null;
+   199→   199→  insuranceNumber?: string | null;
+   200→   200→  insuranceExpiry?: string | null;
+   201→   201→  permitInfo?: string | null;
+   202→   202→  fitnessExpiry?: string | null;
+   203→   203→  notes?: string | null;
+   204→   204→  loanAmount?: number | null;
+   205→   205→  monthlyEmi?: number | null;
+   206→   206→  emiStartDate?: string | null;
+   207→   207→  emiEndDate?: string | null;
+   208→   208→  stats?: {
+   209→   209→    monthRevenue: number;
+   210→   210→    monthExpense: number;
+   211→   211→    monthEmi: number;
+   212→   212→    monthNet: number;
+   213→   213→    revenue: number;
+   214→   214→    expense: number;
+   215→   215→    net: number;
+   216→   216→  };
+   217→   217→}
+   218→   218→
+   219→   219→export interface ClientRec {
+   220→   220→  id: string;
+   221→   221→  name: string;
+   222→   222→  company?: string | null;
+   223→   223→  phone?: string | null;
+   224→   224→  whatsapp?: string | null;
+   225→   225→  email?: string | null;
+   226→   226→  address?: string | null;
+   227→   227→  billingDetails?: string | null;
+   228→   228→  notes?: string | null;
+   229→   229→  tripCount?: number;
+   230→   230→  totalBusiness?: number;
+   231→   231→}
+   232→   232→
+   233→   233→export interface TripRec {
+   234→   234→  id: string;
+   235→   235→  vehicleId: string;
+   236→   236→  vehicleName?: string;
+   237→   237→  vehicleReg?: string;
+   238→   238→  clientId: string;
+   239→   239→  clientName?: string;
+   240→   240→  startAt: string;
+   241→   241→  endAt?: string | null;
+   242→   242→  tripType: string;
+   243→   243→  rentalType?: string | null;
+   244→   244→  pickup?: string | null;
+   245→   245→  destination?: string | null;
+   246→   246→  driver?: string | null;
+   247→   247→  agreedAmount: number;
+   248→   248→  advanceReceived?: number;
+   249→   249→  extraCharges?: number;
+   250→   250→  finalAmount?: number | null;
+   251→   251→  paymentStatus: string;
+   252→   252→  status: string;
+   253→   253→  fuelResponsibility?: string | null;
+   254→   254→  notes?: string | null;
+   255→   255→  paidAmount?: number;
+   256→   256→  createdByName?: string;
+   257→   257→}
+   258→   258→
+   259→   259→export interface ListResp<T> { items: T[]; total: number; page?: number; pageSize?: number }
+   260→   260→
+   261→   261→// ---------------------------------------------------------------------------
+   262→   262→// Hooks & small utils
+   263→   263→// ---------------------------------------------------------------------------
+   264→   264→
+   265→   265→export function errMessage(e: unknown): string {
+   266→   266→  if (e instanceof ApiError) return e.message;
+   267→   267→  if (e instanceof Error) return e.message;
+   268→   268→  return "Something went wrong";
+   269→   269→}
+   270→   270→
+   271→   271→/** Fetch-on-mount hook with loading/error/reload. Toasts load failures. */
+   272→   272→export function useAsync<T>(loader: () => Promise<T>, deps: React.DependencyList) {
+   273→   273→  const [data, setData] = useState<T | null>(null);
+   274→   274→  const [loading, setLoading] = useState(true);
+   275→   275→  const [error, setError] = useState<string | null>(null);
+   276→   276→  const load = useCallback(async () => {
+   277→   277→    setLoading(true);
+   278→   278→    try {
+   279→   279→      const d = await loader();
+   280→   280→      setData(d);
+   281→   281→      setError(null);
+   282→   282→    } catch (e) {
+   283→   283→      const msg = errMessage(e);
+   284→   284→      setError(msg);
+   285→   285→      toast.error(msg);
+   286→   286→    } finally {
+   287→   287→      setLoading(false);
+   288→   288→    }
+   289→   289→  }, deps);
+   290→   290→  useEffect(() => { void load(); }, [load]);
+   291→   291→  return { data, loading, error, reload: load, setData };
+   292→   292→}
+   293→   293→
+   294→   294→/** Mutation wrapper: consistent error toasts, optional success toast.
+   295→   295→ *  Pass an `undo` resolver to attach an "Undo" action to the success toast —
+   296→   296→ *  it reverses the entry server-side (zero mismatch) and calls onUndo. */
+   297→   297→export interface UndoSpec {
+   298→   298→  module: string; // PAYMENT / ADVANCE / EXPENSE / DEPLOYMENT / TRIP / EMI / MAINTENANCE / ADJUSTMENT
+   299→   299→  recordId?: string;
+   300→   300→  onUndo?: () => void;
+   301→   301→}
+   302→   302→
+   303→   303→export async function undoRequest(spec: {
+   304→   304→  auditLogId?: string;
+   305→   305→  module?: string;
+   306→   306→  recordId?: string;
+   307→   307→  onUndo?: () => void;
+   308→   308→}): Promise<boolean> {
+   309→   309→  try {
+   310→   310→    await api.post("/api/undo", {
+   311→   311→      ...(spec.auditLogId ? { auditLogId: spec.auditLogId } : { module: spec.module, recordId: spec.recordId }),
+   312→   312→    });
+   313→   313→    toast.success("Entry reversed — everything is back to how it was", { icon: "↩️" });
+   314→   314→    spec.onUndo?.();
+   315→   315→    return true;
+   316→   316→  } catch (e) {
+   317→   317→    toast.error(errMessage(e));
+   318→   318→    return false;
+   319→   319→  }
+   320→   320→}
+   321→   321→
+   322→   322→export function useMutation() {
+   323→   323→  const [saving, setSaving] = useState(false);
+   324→   324→  const mutate = useCallback(async (
+   325→   325→    fn: () => Promise<unknown>,
+   326→   326→    success?: string,
+   327→   327→    undo?: (data: unknown) => UndoSpec | null | undefined
+   328→   328→  ) => {
+   329→   329→    setSaving(true);
+   330→   330→    try {
+   331→   331→      const data = await fn();
+   332→   332→      if (success) {
+   333→   333→        const spec = undo?.(data);
+   334→   334→        if (spec?.module && spec.recordId) {
+   335→   335→          toast.success(success, {
+   336→   336→            duration: 8000,
+   337→   337→            action: { label: "Undo", onClick: () => void undoRequest(spec) },
+   338→   338→          });
+   339→   339→        } else {
+   340→   340→          toast.success(success);
+   341→   341→        }
+   342→   342→      }
+   343→   343→      return { ok: true as const, data };
+   344→   344→    } catch (e) {
+   345→   345→      toast.error(errMessage(e));
+   346→   346→      return { ok: false as const, error: e };
+   347→   347→    } finally {
+   348→   348→      setSaving(false);
+   349→   349→    }
+   350→   350→  }, []);
+   351→   351→  return { mutate, saving };
+   352→   352→}
+   353→   353→
+   354→   354→export function useDebounced<T>(value: T, delay = 300): T {
+   355→   355→  const [v, setV] = useState(value);
+   356→   356→  useEffect(() => {
+   357→   357→    const t = setTimeout(() => setV(value), delay);
+   358→   358→    return () => clearTimeout(t);
+   359→   359→  }, [value, delay]);
+   360→   360→  return v;
+   361→   361→}
+   362→   362→
+   363→   363→export function todayStr(offsetDays = 0): string {
+   364→   364→  const d = new Date();
+   365→   365→  d.setDate(d.getDate() + offsetDays);
+   366→   366→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+   367→   367→}
+   368→   368→
+   369→   369→export function fmtDay(s?: string | null): string {
+   370→   370→  if (!s) return "—";
+   371→   371→  const d = new Date(s.length === 10 ? `${s}T00:00:00` : s);
+   372→   372→  if (Number.isNaN(d.getTime())) return s;
+   373→   373→  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+   374→   374→}
+   375→   375→
+   376→   376→export function fmtDateTime(s?: string | null): string {
+   377→   377→  if (!s) return "—";
+   378→   378→  const d = new Date(s);
+   379→   379→  if (Number.isNaN(d.getTime())) return s;
+   380→   380→  return d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+   381→   381→}
+   382→   382→
+   383→   383→export function initials(name?: string | null): string {
+   384→   384→  if (!name) return "?";
+   385→   385→  const parts = name.trim().split(/\s+/).slice(0, 2);
+   386→   386→  return parts.map((p) => p[0]?.toUpperCase() ?? "").join("") || "?";
+   387→   387→}
+   388→   388→
+   389→   389→export function moneyCls(v: number | null | undefined): string {
+   390→   390→  return (v ?? 0) < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400";
+   391→   391→}
+   392→   392→
+   393→   393→// ---------------------------------------------------------------------------
+   394→   394→// Form fields
+   395→   395→// ---------------------------------------------------------------------------
+   396→   396→
+   397→   397→export function Field({ label, required, hint, className, children }: {
+   398→   398→  label: string; required?: boolean; hint?: string; className?: string; children: React.ReactNode;
+   399→   399→}) {
+   400→   400→  return (
+   401→   401→    <div className={cn("space-y-1.5 min-w-0", className)}>
+   402→   402→      <Label className="text-xs font-medium text-foreground">
+   403→   403→        {label}
+   404→   404→        {required && <span className="ml-0.5 text-red-500" aria-hidden>*</span>}
+   405→   405→      </Label>
+   406→   406→      {children}
+   407→   407→      {hint && <p className="text-[11px] leading-snug text-muted-foreground">{hint}</p>}
+   408→   408→    </div>
+   409→   409→  );
+   410→   410→}
+   411→   411→
+   412→   412→export interface Option { label: string; value: string }
+   413→   413→
+   414→   414→// Sentinel for "no selection" options (Radix Select forbids empty-string values).
+   415→   415→export const EMPTY_SENTINEL = "__all__";
+   416→   416→
+   417→   417→export function SelectInput({ value, onChange, options, placeholder = "Select…", className, disabled }: {
+   418→   418→  value: string;
+   419→   419→  onChange: (v: string) => void;
+   420→   420→  options: Option[];
+   421→   421→  placeholder?: string;
+   422→   422→  className?: string;
+   423→   423→  disabled?: boolean;
+   424→   424→}) {
+   425→   425→  return (
+   426→   426→    <Select
+   427→   427→      // Always controlled: `value || sentinel` keeps Radix from flipping
+   428→   428→      // between uncontrolled (undefined) and controlled when value is "".
+   429→   429→      // A non-matching sentinel still renders the placeholder visually.
+   430→   430→      value={value || EMPTY_SENTINEL}
+   431→   431→      onValueChange={(v) => onChange(v === EMPTY_SENTINEL ? "" : v)}
+   432→   432→      disabled={disabled}
+   433→   433→    >
+   434→   434→      <SelectTrigger className={cn("h-10 w-full", className)} aria-label={placeholder}>
+   435→   435→        <SelectValue placeholder={placeholder} />
+   436→   436→      </SelectTrigger>
+   437→   437→      <SelectContent position="popper" className="max-h-72">
+   438→   438→        {/* Radix forbids empty-string item values — map them to a sentinel. */}
+   439→   439→        {options.map((o) => (
+   440→   440→          <SelectItem key={o.value || EMPTY_SENTINEL} value={o.value || EMPTY_SENTINEL} className="text-sm">{o.label}</SelectItem>
+   441→   441→        ))}
+   442→   442→      </SelectContent>
+   443→   443→    </Select>
+   444→   444→  );
+   445→   445→}
+   446→   446→
+   447→   447→// ---------------------------------------------------------------------------
+   448→   448→// States & misc UI
+   449→   449→// ---------------------------------------------------------------------------
+   450→   450→
+   451→   451→export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
+   452→   452→  return (
+   453→   453→    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-red-200 bg-red-50/50 py-10 px-6 text-center dark:border-red-900 dark:bg-red-950/20">
+   454→   454→      <div className="rounded-full bg-red-100 p-3 dark:bg-red-950">
+   455→   455→        <AlertCircle className="h-6 w-6 text-red-600 dark:text-red-400" aria-hidden />
+   456→   456→      </div>
+   457→   457→      <p className="mt-3 text-sm font-semibold">Couldn&apos;t load data</p>
+   458→   458→      <p className="mt-1 max-w-sm text-xs text-muted-foreground">{message}</p>
+   459→   459→      {onRetry && (
+   460→   460→        <Button size="sm" variant="outline" className="mt-4 h-9 gap-1.5" onClick={onRetry}>
+   461→   461→          <RefreshCw className="h-3.5 w-3.5" aria-hidden />Retry
+   462→   462→        </Button>
+   463→   463→      )}
+   464→   464→    </div>
+   465→   465→  );
+   466→   466→}
+   467→   467→
+   468→   468→export function ListSkeleton({ rows = 5 }: { rows?: number }) {
+   469→   469→  return (
+   470→   470→    <div className="space-y-2">
+   471→   471→      {Array.from({ length: rows }).map((_, i) => (
+   472→   472→        <Skeleton key={i} className="h-14 w-full rounded-xl" />
+   473→   473→      ))}
+   474→   474→    </div>
+   475→   475→  );
+   476→   476→}
+   477→   477→
+   478→   478→/** Label/value row used inside summary cards. */
+   479→   479→export function KV({ label, value, className }: { label: string; value: React.ReactNode; className?: string }) {
+   480→   480→  return (
+   481→   481→    <div className="flex items-center justify-between gap-3 py-1.5">
+   482→   482→      <span className="text-xs text-muted-foreground">{label}</span>
+   483→   483→      <span className={cn("text-sm font-semibold tabular-nums", className)}>{value}</span>
+   484→   484→    </div>
+   485→   485→  );
+   486→   486→}
+   487→   487→
+   488→   488→/** Rounded initials avatar block. */
+   489→   489→export function InitialAvatar({ name, className, tone = "emerald" }: { name?: string | null; className?: string; tone?: "emerald" | "amber" | "zinc" }) {
+   490→   490→  const tones = {
+   491→   491→    emerald: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+   492→   492→    amber: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+   493→   493→    zinc: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
+   494→   494→  } as const;
+   495→   495→  return (
+   496→   496→    <div className={cn("flex shrink-0 items-center justify-center rounded-full font-bold", tones[tone], className ?? "h-10 w-10 text-sm")} aria-hidden>
+   497→   497→      {initials(name)}
+   498→   498→    </div>
+   499→   499→  );
+   500→   500→}
+   501→   501→
+   502→   502→// ---------------------------------------------------------------------------
+   503→   503→// Charts (recharts wrappers — responsive, theme-aware)
+   504→   504→// ---------------------------------------------------------------------------
+   505→   505→
+   506→   506→// Chart palette — CSS variables so every series re-tunes itself per theme
+   507→   507→// (light: deep ledger tones on white; dark: luminous on deep cards).
+   508→   508→export const CHART_COLORS = {
+   509→   509→  emerald: "var(--chart-1)",
+   510→   510→  amber: "var(--chart-2)",
+   511→   511→  teal: "var(--chart-3)",
+   512→   512→  red: "var(--chart-4)",
+   513→   513→  plum: "var(--chart-5)",
+   514→   514→} as const;
+   515→   515→
+   516→   516→export interface SeriesDef { key: string; label: string; color: string }
+   517→   517→
+   518→   518→const AXIS_TICK = { fontSize: 11, fill: "var(--muted-foreground)" };
+   519→   519→const TOOLTIP_STYLE = {
+   520→   520→  borderRadius: 10,
+   521→   521→  border: "1px solid var(--border)",
+   522→   522→  background: "var(--card)",
+   523→   523→  color: "var(--foreground)",
+   524→   524→  fontSize: 12,
+   525→   525→  boxShadow: "0 8px 24px -12px rgb(0 0 0 / 0.35)",
+   526→   526→} as const;
+   527→   527→
+   528→   528→export function AreaTrend({ data, xKey, series, height = 220 }: {
+   529→   529→  data: Record<string, unknown>[]; xKey: string; series: SeriesDef[]; height?: number;
+   530→   530→}) {
+   531→   531→  return (
+   532→   532→    <div className="w-full overflow-hidden" style={{ height }}>
+   533→   533→      <ResponsiveContainer width="100%" height="100%">
+   534→   534→        <AreaChart data={data} margin={{ top: 8, right: 8, left: -14, bottom: 0 }}>
+   535→   535→          <defs>
+   536→   536→            {series.map((s) => (
+   537→   537→              <linearGradient key={s.key} id={`grad-${s.key.replace(/[^a-z0-9]/gi, "")}`} x1="0" y1="0" x2="0" y2="1">
+   538→   538→                <stop offset="5%" stopColor={s.color} stopOpacity={0.28} />
+   539→   539→                <stop offset="95%" stopColor={s.color} stopOpacity={0.02} />
+   540→   540→              </linearGradient>
+   541→   541→            ))}
+   542→   542→          </defs>
+   543→   543→          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+   544→   544→          <XAxis dataKey={xKey} tick={AXIS_TICK} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={24} />
+   545→   545→          <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={56} tickFormatter={(v) => formatINR(Number(v), { compact: true })} />
+   546→   546→          <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} cursor={{ stroke: "var(--border)" }} />
+   547→   547→          {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />}
+   548→   548→          {series.map((s) => (
+   549→   549→            <Area
+   550→   550→              key={s.key}
+   551→   551→              type="monotone"
+   552→   552→              dataKey={s.key}
+   553→   553→              name={s.label}
+   554→   554→              stroke={s.color}
+   555→   555→              fill={`url(#grad-${s.key.replace(/[^a-z0-9]/gi, "")})`}
+   556→   556→              strokeWidth={2}
+   557→   557→              dot={false}
+   558→   558→              activeDot={{ r: 3 }}
+   559→   559→            />
+   560→   560→          ))}
+   561→   561→        </AreaChart>
+   562→   562→      </ResponsiveContainer>
+   563→   563→    </div>
+   564→   564→  );
+   565→   565→}
+   566→   566→
+   567→   567→export function BarsCompare({ data, xKey, series, height = 220 }: {
+   568→   568→  data: Record<string, unknown>[]; xKey: string; series: SeriesDef[]; height?: number;
+   569→   569→}) {
+   570→   570→  return (
+   571→   571→    <div className="w-full overflow-hidden" style={{ height }}>
+   572→   572→      <ResponsiveContainer width="100%" height="100%">
+   573→   573→        <BarChart data={data} margin={{ top: 8, right: 8, left: -14, bottom: 0 }} barCategoryGap="24%">
+   574→   574→          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+   575→   575→          <XAxis dataKey={xKey} tick={AXIS_TICK} tickLine={false} axisLine={false} minTickGap={16} />
+   576→   576→          <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={56} tickFormatter={(v) => formatINR(Number(v), { compact: true })} />
+   577→   577→          <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} cursor={{ fill: "var(--muted)", opacity: 0.5 }} />
+   578→   578→          {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />}
+   579→   579→          {series.map((s) => (
+   580→   580→            <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} radius={[4, 4, 4, 4]} maxBarSize={30} />
+   581→   581→          ))}
+   582→   582→        </BarChart>
+   583→   583→      </ResponsiveContainer>
+   584→   584→    </div>
+   585→   585→  );
+   586→   586→}
+   587→   587→
+   588→   588→/** Div-based horizontal bar list (category breakdown etc). */
+   589→   589→export function MiniBars({ rows }: { rows: { label: string; value: number; color?: string }[] }) {
+   590→   590→  const max = Math.max(1, ...rows.map((r) => r.value));
+   591→   591→  if (rows.length === 0) return <p className="py-4 text-center text-xs text-muted-foreground">No data</p>;
+   592→   592→  return (
+   593→   593→    <div className="space-y-2.5">
+   594→   594→      {rows.map((r) => (
+   595→   595→        <div key={r.label}>
+   596→   596→          <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+   597→   597→            <span className="min-w-0 truncate font-medium">{r.label}</span>
+   598→   598→            <span className="shrink-0 tabular-nums text-muted-foreground">{formatINR(r.value)}</span>
+   599→   599→          </div>
+   600→   600→          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+   601→   601→            <div
+   602→   602→              className="h-full rounded-full transition-all"
+   603→   603→              style={{ width: `${Math.max(3, (r.value / max) * 100)}%`, background: r.color ?? CHART_COLORS.emerald }}
+   604→   604→            />
+   605→   605→          </div>
+   606→   606→        </div>
+   607→   607→      ))}
+   608→   608→    </div>
+   609→   609→  );
+   610→   610→}
+   611→   611→
+   612→   612→// ---------------------------------------------------------------------------
+   613→   613→// Employee picker (searchable checkbox list)
+   614→   614→// ---------------------------------------------------------------------------
+   615→   615→
+   616→   616→export interface PickerEmployee {
+   617→   617→  id: string;
+   618→   618→  fullName: string;
+   619→   619→  code?: string | null;
+   620→   620→  standardRate?: number | null;
+   621→   621→  advanceBalance?: number | null;
+   622→   622→}
+   623→   623→
+   624→   624→export function EmployeePicker({ employees, value, onChange, multi = true, height = "max-h-60" }: {
+   625→   625→  employees: PickerEmployee[];
+   626→   626→  value: string[];
+   627→   627→  onChange: (ids: string[]) => void;
+   628→   628→  multi?: boolean;
+   629→   629→  height?: string;
+   630→   630→}) {
+   631→   631→  const [search, setSearch] = useState("");
+   632→   632→  const filtered = useMemo(() => {
+   633→   633→    const q = search.trim().toLowerCase();
+   634→   634→    if (!q) return employees;
+   635→   635→    return employees.filter((e) => `${e.fullName} ${e.code ?? ""}`.toLowerCase().includes(q));
+   636→   636→  }, [employees, search]);
+   637→   637→
+   638→   638→  const toggle = (id: string) => {
+   639→   639→    if (!multi) { onChange([id]); return; }
+   640→   640→    onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
+   641→   641→  };
+   642→   642→
+   643→   643→  return (
+   644→   644→    <div className="space-y-2">
+   645→   645→      <div className="relative">
+   646→   646→        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+   647→   647→        <Input
+   648→   648→          value={search}
+   649→   649→          onChange={(e) => setSearch(e.target.value)}
+   650→   650→          placeholder="Search employees…"
+   651→   651→          className="h-9 rounded-xl bg-card pl-9"
+   652→   652→          aria-label="Search employees"
+   653→   653→        />
+   654→   654→      </div>
+   655→   655→      {multi && value.length > 0 && (
+   656→   656→        <div className="flex items-center justify-between text-xs text-muted-foreground">
+   657→   657→          <span>{value.length} selected</span>
+   658→   658→          <button type="button" className="font-medium text-primary hover:underline" onClick={() => onChange([])}>
+   659→   659→            Clear all
+   660→   660→          </button>
+   661→   661→        </div>
+   662→   662→      )}
+   663→   663→      <div className={cn("overflow-y-auto rounded-xl border", height)} role="listbox" aria-multiselectable={multi}>
+   664→   664→        {filtered.length === 0 && (
+   665→   665→          <p className="p-6 text-center text-xs text-muted-foreground">No employees found</p>
+   666→   666→        )}
+   667→   667→        {filtered.map((e) => {
+   668→   668→          const on = value.includes(e.id);
+   669→   669→          return (
+   670→   670→            <div
+   671→   671→              key={e.id}
+   672→   672→              role="option"
+   673→   673→              aria-selected={on}
+   674→   674→              tabIndex={0}
+   675→   675→              onClick={() => toggle(e.id)}
+   676→   676→              onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(e.id); } }}
+   677→   677→              className={cn(
+   678→   678→                "flex cursor-pointer items-center gap-2.5 border-b px-3 py-2.5 transition-colors last:border-b-0 hover:bg-muted/60",
+   679→   679→                on && "bg-primary/5"
+   680→   680→              )}
+   681→   681→            >
+   682→   682→              {multi ? (
+   683→   683→                <span className={cn(
+   684→   684→                  "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+   685→   685→                  on ? "border-primary bg-primary text-primary-foreground" : "border-input bg-background"
+   686→   686→                )} aria-hidden>
+   687→   687→                  {on && <Check className="h-3 w-3" />}
+   688→   688→                </span>
+   689→   689→              ) : (
+   690→   690→                <span className={cn(
+   691→   691→                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors",
+   692→   692→                  on ? "border-primary" : "border-input"
+   693→   693→                )} aria-hidden>
+   694→   694→                  {on && <span className="h-2 w-2 rounded-full bg-primary" />}
+   695→   695→                </span>
+   696→   696→              )}
+   697→   697→              <div className="min-w-0 flex-1">
+   698→   698→                <p className="truncate text-sm font-medium">{e.fullName}</p>
+   699→   699→                <p className="text-[11px] text-muted-foreground">
+   700→   700→                  {e.code ?? ""}{e.standardRate ? ` · ${formatINR(e.standardRate)}/day` : ""}
+   701→   701→                </p>
+   702→   702→              </div>
+   703→   703→              {(e.advanceBalance ?? 0) > 0 && (
+   704→   704→                <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium tabular-nums text-red-600 dark:bg-red-950 dark:text-red-400">
+   705→   705→                  Adv {formatINR(e.advanceBalance ?? 0, { compact: true })}
+   706→   706→                </span>
+   707→   707→              )}
+   708→   708→            </div>
+   709→   709→          );
+   710→   710→        })}
+   711→   711→      </div>
+   712→   712→    </div>
+   713→   713→  );
+   714→   714→}
+   715→   715→
+   716→   716→/** Fetch ACTIVE employees for pickers. */
+   717→   717→export function useActiveEmployees(enabled: boolean) {
+   718→   718→  const [employees, setEmployees] = useState<PickerEmployee[]>([]);
+   719→   719→  const [loaded, setLoaded] = useState(false);
+   720→   720→  useEffect(() => {
+   721→   721→    if (!enabled || loaded) return;
+   722→   722→    let cancelled = false;
+   723→   723→    api.get<ListResp<EmployeeRec>>("/api/employees" + qs({ status: "ACTIVE", pageSize: 200 }))
+   724→   724→      .then((d) => { if (!cancelled) { setEmployees(d.items); setLoaded(true); } })
+   725→   725→      .catch((e) => { if (!cancelled) { setLoaded(true); toast.error(errMessage(e)); } });
+   726→   726→    return () => { cancelled = true; };
+   727→   727→  }, [enabled, loaded]);
+   728→   728→  return { employees, loading: enabled && !loaded };
+   729→   729→}
+   730→   730→
+   731→   731→// ---------------------------------------------------------------------------
+   732→   732→// Give Advance dialog (advances-view + employee-detail-view)
+   733→   733→// ---------------------------------------------------------------------------
+   734→   734→
+   735→   735→export function GiveAdvanceDialog({ open, onOpenChange, defaultEmployeeId, employees: employeesProp, onDone }: {
+
+[showing lines 36-735 of 1481; use offset=736 with limit to continue reading]

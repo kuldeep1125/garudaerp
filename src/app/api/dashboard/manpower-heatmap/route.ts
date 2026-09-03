@@ -1,18 +1,18 @@
 import { db } from "@/lib/db";
 import { handleRoute } from "@/lib/api-helpers";
-import { BILLABLE, dayKey } from "@/app/api/_lib/engine";
+import { SHIFT_UNITS, dayKey } from "@/app/api/_lib/engine";
 import { lastNDays } from "../../_lib/dashboard";
 
 // GET /api/dashboard/manpower-heatmap?days=14
 // Day × property deployment intensity matrix for the manpower dashboard
-// workforce heat-map, split DAY vs NIGHT per cell. Only BILLABLE deployments count.
+// workforce heat-map, split DAY vs NIGHT per cell. All deployment rows count (a row = worked).
 export const GET = handleRoute(async ({ req }) => {
   const sp = new URL(req.url).searchParams;
   const days = Math.min(30, Math.max(7, Number(sp.get("days") ?? 14) || 14));
   const { from, to, keys } = lastNDays(days);
 
   const deps = await db.deployment.findMany({
-    where: { date: { gte: from, lte: to }, status: { in: [...BILLABLE] } },
+    where: { date: { gte: from, lte: to } },
     select: { date: true, propertyId: true, property: { select: { name: true } }, shift: true },
   });
 
@@ -21,9 +21,13 @@ export const GET = handleRoute(async ({ req }) => {
   for (const d of deps) {
     const k = `${dayKey(d.date)}|${d.propertyId}`;
     const prev = cell.get(k) ?? { total: 0, day: 0, night: 0 };
-    const isNight = d.shift.toUpperCase().includes("NIGHT");
-    cell.set(k, { total: prev.total + 1, day: prev.day + (isNight ? 0 : 1), night: prev.night + (isNight ? 1 : 0) });
-    totals.set(d.propertyId, (totals.get(d.propertyId) ?? 0) + 1);
+    // FULL covers both halves → counts once in day AND night; total counts units.
+    const s = d.shift.toUpperCase();
+    const units = SHIFT_UNITS[s] ?? 1;
+    const isDay = s === "DAY" || s === "FULL";
+    const isNight = s === "NIGHT" || s === "FULL";
+    cell.set(k, { total: prev.total + units, day: prev.day + (isDay ? 1 : 0), night: prev.night + (isNight ? 1 : 0) });
+    totals.set(d.propertyId, (totals.get(d.propertyId) ?? 0) + units);
   }
 
   const propertyIds = [...totals.keys()];
@@ -51,6 +55,6 @@ export const GET = handleRoute(async ({ req }) => {
         return { date, shifts: c.total, day: c.day, night: c.night };
       }),
     })),
-    unlistedShifts: deps.length - rows.reduce((s, r) => s + r.total, 0),
+    unlistedShifts: deps.reduce((s, d) => s + (SHIFT_UNITS[String(d.shift).toUpperCase()] ?? 1), 0) - rows.reduce((s, r) => s + r.total, 0),
   };
 });

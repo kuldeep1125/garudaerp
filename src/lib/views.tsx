@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import type { ComponentType } from "react";
 import type { ViewProps } from "@/components/view-types";
 import {
-  LayoutDashboard, Users, UserRound, Building2, ScrollText, CalendarCheck, Wallet, HandCoins,
+  LayoutDashboard, Users, UserRound, Building2, CalendarCheck, Wallet, HandCoins,
   ReceiptText, Receipt, Truck, CarFront, Contact2, Route, BarChart3, Crown, History, Bell,
   Settings, FileText, Building, Search,
 } from "lucide-react";
@@ -34,7 +34,6 @@ export const VIEWS: ViewDef[] = [
   { id: "employee-detail", label: "Employee", icon: UserRound, group: "MANPOWER", hidden: true, component: load(() => import("@/components/views/employee-detail-view")) },
   { id: "properties", label: "Properties", icon: Building2, group: "MANPOWER", component: load(() => import("@/components/views/properties-view")) },
   { id: "property-detail", label: "Property", icon: Building, group: "MANPOWER", hidden: true, component: load(() => import("@/components/views/property-detail-view")) },
-  { id: "contracts", label: "Contracts & Rates", icon: ScrollText, group: "MANPOWER", component: load(() => import("@/components/views/contracts-view")) },
   { id: "deployments", label: "Deployments", icon: CalendarCheck, group: "MANPOWER", description: "Daily work records & attendance", component: load(() => import("@/components/views/deployments-view")) },
   { id: "payments", label: "Collections", icon: Wallet, group: "MANPOWER", description: "Property payments & receivables", component: load(() => import("@/components/views/payments-view")) },
   { id: "advances", label: "Advances", icon: HandCoins, group: "MANPOWER", component: load(() => import("@/components/views/advances-view")) },

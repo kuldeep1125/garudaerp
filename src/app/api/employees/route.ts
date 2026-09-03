@@ -42,6 +42,8 @@ export const POST = handleRoute(async ({ owner, req }) => {
   const fullName = String(body.fullName).trim();
   if (!fullName) throw new HttpError(400, "fullName cannot be empty");
   const status = body.status ? requireEnum(body.status, EMPLOYEE_STATUSES, "status") : "ACTIVE";
+  const standardRate = round2(Number(body.standardRate ?? 0) || 0);
+  if (standardRate <= 0) throw new HttpError(400, "Set the payout rate (₹ per shift) — it is used to pay the employee for every deployment automatically.");
   const code = await nextCode("EMP", "employee");
   const employee = await db.employee.create({
     data: {
@@ -58,8 +60,8 @@ export const POST = handleRoute(async ({ owner, req }) => {
       joiningDate: body.joiningDate ? parseDate(body.joiningDate as string) : new Date(),
       designation: body.designation ? String(body.designation) : null,
       skills: body.skills ? String(body.skills) : null,
-      standardRate: round2(Number(body.standardRate ?? 0) || 0),
-      rateType: body.rateType ? String(body.rateType) : "PER_DAY",
+      standardRate,
+      rateType: body.rateType ? String(body.rateType) : "PER_SHIFT",
       status,
       bankDetails: body.bankDetails ? String(body.bankDetails) : null,
       upiId: body.upiId ? String(body.upiId) : null,
