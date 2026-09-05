@@ -50,8 +50,8 @@ export const GET = handleRoute(async ({ req }) => {
         ...(validBusiness ? { business: validBusiness } : {}),
       },
       select: {
-        date: true, business: true, amount: true, categoryName: true, description: true,
-        isCommon: true, kind: true, spentById: true, spentByName: true,
+        id: true, date: true, business: true, amount: true, categoryName: true, description: true,
+        reason: true, method: true, isCommon: true, kind: true, spentById: true, spentByName: true,
       },
       orderBy: [{ date: "asc" }, { createdAt: "asc" }],
     }),
@@ -143,6 +143,43 @@ export const GET = handleRoute(async ({ req }) => {
     netPosition: round2(ownerRows.reduce((s, r) => s + r.deposits - r.withdrawals, 0)),
   };
 
+  // Transaction-level ledger of every owner CAPITAL movement (deposits in /
+  // withdrawals out) in the range — powers the "Detailed ledger" statement.
+  // Newest first so the statement reads like a bank passbook.
+  const transactions = rows
+    .filter((e) => e.kind === "CAPITAL" && !e.isCommon)
+    .map((e) => {
+      const cat = (e.categoryName ?? "").trim().toUpperCase();
+      const owner = e.spentById ? ownerMap.get(e.spentById) : undefined;
+      const type: "IN" | "OUT" = cat === "OWNER CONTRIBUTION" ? "IN" : "OUT";
+      return {
+        id: e.id,
+        date: dayKey(e.date),
+        ownerId: owner?.id ?? e.spentById ?? null,
+        ownerName: owner?.name ?? e.spentByName ?? "Unattributed",
+        type,
+        category: e.categoryName ?? "Owner Capital",
+        reason: e.reason ?? null,
+        method: e.method ?? null,
+        description: e.description ?? null,
+        business: e.business,
+        amount: round2(e.amount),
+        balanceAfter: 0, // filled below (running balance per owner, date-asc order)
+      };
+    })
+    .sort((a, b) => (a.date === b.date ? a.id.localeCompare(b.id) : a.date.localeCompare(b.date)));
+
+  // Running balance per owner over the asc-ordered ledger (deposits − withdrawals).
+  const runningByOwner = new Map<string, number>();
+  for (const t of transactions) {
+    const key = t.ownerId ?? t.ownerName;
+    const prev = runningByOwner.get(key) ?? 0;
+    const next = round2(prev + (t.type === "IN" ? t.amount : -t.amount));
+    t.balanceAfter = next;
+    runningByOwner.set(key, next);
+  }
+  transactions.reverse(); // newest first for display
+
   return {
     range: { from: dayKey(from), to: dayKey(to) },
     business: validBusiness,
@@ -152,5 +189,6 @@ export const GET = handleRoute(async ({ req }) => {
     totals,
     daily: [...daily.values()].sort((a, b) => a.day.localeCompare(b.day)),
     byCategory: [...byCategory.values()].sort((a, b) => b.amount - a.amount),
+    transactions,
   };
 });

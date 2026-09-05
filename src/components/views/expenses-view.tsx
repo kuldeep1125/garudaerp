@@ -74,6 +74,11 @@ interface OwnerBreakdownData {
   };
   daily: { day: string; deposits: number; withdrawals: number; operating: number; common: number }[];
   byCategory: { name: string; amount: number; kind: string }[];
+  transactions: {
+    id: string; date: string; ownerId: string | null; ownerName: string;
+    type: "IN" | "OUT"; category: string; reason: string | null; method: string | null;
+    description: string | null; business: string; amount: number; balanceAfter: number;
+  }[];
 }
 
 const BUSINESS_OPTIONS: Option[] = [
@@ -133,12 +138,14 @@ function CommonBadge() {
 // Add / edit expense dialog
 // ---------------------------------------------------------------------------
 
-function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
+function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, preset }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   expense: ExpenseRec | null;
   vehicles: VehicleRec[];
   onDone: () => void;
+  /** Optional pre-fill for quick actions (e.g. "Add deposit" opens the form with the Owner Contribution category). */
+  preset?: { categoryName?: string; spentById?: string } | null;
 }) {
   const editing = Boolean(expense);
   const [form, setForm] = useState({
@@ -169,7 +176,7 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
         vehicleId: expense?.vehicleId ?? "",
         notes: expense?.notes ?? "",
         reason: expense?.reason ?? "",
-        spentById: expense ? (expense.isCommon ? "COMMON" : (expense.spentById ?? "")) : "",
+        spentById: expense ? (expense.isCommon ? "COMMON" : (expense.spentById ?? "")) : (preset?.spentById || ""),
       });
     }
   }
@@ -196,6 +203,13 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
     return () => { cancelled = true; };
   }, [open]);
 
+  // Quick-action preset: resolve the pre-filled category by NAME (render-time
+  // derivation — no setState inside an effect). Only for brand-new expenses.
+  const presetCategoryId = useMemo(() => {
+    if (editing || !preset?.categoryName) return "";
+    return categories.find((c) => c.name.toUpperCase() === preset.categoryName!.toUpperCase())?.id ?? "";
+  }, [editing, preset, categories]);
+
   const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
 
   const createCategory = async () => {
@@ -220,7 +234,7 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
     const body = {
       date: form.date,
       business: form.business,
-      categoryId: form.categoryId || undefined,
+      categoryId: form.categoryId || presetCategoryId || undefined,
       amount: amt,
       method: form.method || undefined,
       description: form.description || undefined,
@@ -284,7 +298,7 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
           </Field>
           <Field label="Category">
             <SelectInput
-              value={form.categoryId}
+              value={form.categoryId || presetCategoryId}
               onChange={set("categoryId")}
               placeholder="Select category…"
               options={categories.map((c) => ({ label: c.name, value: c.id }))}
@@ -483,13 +497,20 @@ function NetPositionChip({ net }: { net: number }) {
   );
 }
 
-function OwnerBreakdownSection({ business, from, to }: { business: string; from: string; to: string }) {
+type QuickCapitalKind = "deposit" | "withdrawal";
+
+function OwnerBreakdownSection({ business, from, to, onQuickAction, refreshKey }: {
+  business: string; from: string; to: string;
+  onQuickAction?: (kind: QuickCapitalKind, ownerId?: string) => void;
+  /** Bumped by the parent whenever expense data changes — keeps this section's numbers fresh. */
+  refreshKey?: number;
+}) {
   const [mode, setMode] = useState<"all" | "single">("all");
   const [focusId, setFocusId] = useState("");
 
   const data = useAsync<OwnerBreakdownData>(
     () => api.get("/api/expenses/owner-breakdown" + qs({ from, to, business: business || undefined })),
-    [from, to, business]
+    [from, to, business, refreshKey]
   );
 
   const owners = data.data?.owners ?? [];
@@ -528,13 +549,74 @@ function OwnerBreakdownSection({ business, from, to }: { business: string; from:
 
   const totals = data.data?.totals;
 
+  // Detailed passbook ledger — every deposit & withdrawal, filtered to the
+  // focused owner in single-owner mode. Newest first (API order).
+  const ledgerRows = useMemo(() => {
+    const all = data.data?.transactions ?? [];
+    return mode === "single" && focus ? all.filter((tx) => tx.ownerId === focus.id) : all;
+  }, [data.data?.transactions, mode, focus]);
+
+  const ledgerColumns: Column<OwnerBreakdownData["transactions"][number]>[] = [
+    {
+      key: "owner", label: "Owner", primary: true,
+      render: (tx) => (
+        <div className="min-w-0">
+          <p className="flex items-center gap-1 truncate font-medium">
+            <Crown className="h-3 w-3 shrink-0 text-amber-500" aria-hidden />{tx.ownerName}
+          </p>
+          <p className="truncate text-[11px] text-muted-foreground">
+            {fmtDay(tx.date)} · {tx.category}{tx.method ? ` · ${tx.method}` : ""}
+          </p>
+        </div>
+      ),
+      value: (tx) => tx.ownerName,
+    },
+    { key: "date", label: "Date", value: (tx) => fmtDay(tx.date), hideOnMobile: true },
+    {
+      key: "type", label: "Type",
+      render: (tx) =>
+        tx.type === "IN" ? (
+          <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] font-semibold text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
+            <ArrowDownToLine className="mr-1 h-3 w-3" aria-hidden />Deposit
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="border-red-200 bg-red-50 text-[10px] font-semibold text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+            <ArrowUpFromLine className="mr-1 h-3 w-3" aria-hidden />Withdrawal
+          </Badge>
+        ),
+      value: (tx) => (tx.type === "IN" ? "Deposit (in)" : "Withdrawal (out)"),
+    },
+    { key: "category", label: "Category", value: (tx) => tx.category, hideOnMobile: true },
+    {
+      key: "reason", label: "Reason", hideOnMobile: true,
+      render: (tx) => <span className="text-xs text-muted-foreground">{tx.reason || tx.description || "—"}</span>,
+      value: (tx) => tx.reason || tx.description || "",
+    },
+    { key: "business", label: "Business", render: (tx) => <BusinessBadge business={tx.business} />, value: (tx) => tx.business, hideOnMobile: true },
+    {
+      key: "amount", label: "Amount", className: "text-right",
+      render: (tx) => (
+        <span className={cn("font-semibold tabular-nums", tx.type === "IN" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+          {tx.type === "IN" ? "+" : "−"}{formatINR(tx.amount)}
+        </span>
+      ),
+      value: (tx) => `${tx.type === "IN" ? "+" : "-"}${formatINR(tx.amount)}`,
+    },
+    {
+      key: "balance", label: "Balance after", className: "text-right",
+      render: (tx) => <span className="tabular-nums text-muted-foreground">{formatINR(tx.balanceAfter)}</span>,
+      value: (tx) => formatINR(tx.balanceAfter),
+      hideOnMobile: true,
+    },
+  ];
+
   return (
     <div className="space-y-4" aria-busy={data.loading}>
       {data.error ? (
         <ErrorState message={data.error} onRetry={() => void data.reload()} />
       ) : (
         <>
-          {/* Focus switch: all owners combined vs a single owner */}
+          {/* Focus switch: all owners combined vs a single owner + quick record actions */}
           <Card>
             <CardContent className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
               <div
@@ -575,6 +657,25 @@ function OwnerBreakdownSection({ business, from, to }: { business: string; from:
                   />
                 </div>
               )}
+            </CardContent>
+            <CardContent className="flex flex-wrap items-center gap-2 border-t py-2.5 sm:px-4">
+              <span className="mr-auto text-[11px] font-medium text-muted-foreground">Quick record owner money:</span>
+              <Button
+                size="sm" variant="outline"
+                className="h-8 gap-1.5 border-emerald-200 text-xs text-emerald-700 hover:bg-emerald-50 dark:border-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-950"
+                onClick={() => onQuickAction?.("deposit", mode === "single" ? focusId : undefined)}
+                aria-label="Add owner deposit"
+              >
+                <ArrowDownToLine className="h-3.5 w-3.5" aria-hidden />Add deposit
+              </Button>
+              <Button
+                size="sm" variant="outline"
+                className="h-8 gap-1.5 border-red-200 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950"
+                onClick={() => onQuickAction?.("withdrawal", mode === "single" ? focusId : undefined)}
+                aria-label="Add owner withdrawal"
+              >
+                <ArrowUpFromLine className="h-3.5 w-3.5" aria-hidden />Add withdrawal
+              </Button>
             </CardContent>
           </Card>
 
@@ -810,6 +911,39 @@ function OwnerBreakdownSection({ business, from, to }: { business: string; from:
             </Card>
           </div>
 
+          {/* Detailed passbook ledger — every deposit & withdrawal, one row each */}
+          <Card>
+            <CardContent className="p-3 sm:p-4">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">Detailed ledger — deposits &amp; withdrawals</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Every owner money movement in this range, newest first, with the running balance{mode === "single" && focus ? ` — ${focus.name} only` : " of all owners combined"}
+                  </p>
+                </div>
+                <Badge variant="outline" className="shrink-0 text-[10px]">{ledgerRows.length} {ledgerRows.length === 1 ? "entry" : "entries"}</Badge>
+              </div>
+              {data.loading ? (
+                <div className="space-y-2.5">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-10 animate-pulse rounded-lg bg-muted" />)}</div>
+              ) : ledgerRows.length === 0 ? (
+                <div className="rounded-xl border border-dashed p-6 text-center">
+                  <p className="text-sm font-medium">No deposits or withdrawals in this range yet</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Use “Add deposit” / “Add withdrawal” above — each entry then appears here with date, reason and running balance.</p>
+                </div>
+              ) : (
+                <DataTable
+                  columns={ledgerColumns}
+                  rows={ledgerRows}
+                  rowKey={(tx) => tx.id}
+                  exportName="owner-deposits-withdrawals"
+                  emptyIcon={Landmark}
+                  emptyTitle="No movements"
+                  emptyDescription="No deposits or withdrawals match this range."
+                />
+              )}
+            </CardContent>
+          </Card>
+
           {/* Reconciliation note — makes the zero-mismatch guarantee visible */}
           <p className="px-1 text-[11px] text-muted-foreground">
             Reconciliation: operating {formatINR(totals?.operating ?? 0)} + owner capital {formatINR(totals?.capital ?? 0)} = all expense rows {formatINR(totals?.grand ?? 0)}.
@@ -878,9 +1012,30 @@ export default function ExpensesView({ navigate }: ViewProps) {
   const items = expenses.data?.items ?? [];
   const vehicleItems = business === "TRANSPORT" ? vehicles.data?.items ?? [] : [];
 
+  const [editTarget, setEditTarget] = useState<ExpenseRec | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ExpenseRec | null>(null);
+
+  // Quick actions from the Owner Breakdown tab open the Add Expense dialog
+  // pre-filled with the right capital category (and owner when focused).
+  const [addPreset, setAddPreset] = useState<{ categoryName: string; spentById?: string } | null>(null);
+  const openQuickCapital = (kind: QuickCapitalKind, ownerId?: string) => {
+    setAddPreset({ categoryName: kind === "deposit" ? "Owner Contribution" : "Owner Withdrawal", spentById: ownerId || undefined });
+    setAddOpen(true);
+  };
+
+  // Expenses tab ↔ Owner Breakdown tab (controlled so the hint strip can link across).
+  const [tab, setTab] = useState("expenses");
+
+  // Version bump whenever expense data changes — the Owner Breakdown section
+  // includes it in its fetch deps so its numbers NEVER go stale after a
+  // quick-action deposit/withdrawal, delete, edit or undo.
+  const [bdVersion, setBdVersion] = useState(0);
+  const reloadExpenses = () => { void expenses.reload(); setBdVersion((v) => v + 1); };
+
   // An undo applied from the global Undo Center may have restored rows — refresh.
   useEffect(() => {
-    const onUndoApplied = () => void expenses.reload();
+    const onUndoApplied = () => reloadExpenses();
     window.addEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
     return () => window.removeEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
   }, [expenses.reload]);
@@ -897,10 +1052,6 @@ export default function ExpensesView({ navigate }: ViewProps) {
       .slice(0, 8);
   }, [items]);
 
-  const [editTarget, setEditTarget] = useState<ExpenseRec | null>(null);
-  const [addOpen, setAddOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<ExpenseRec | null>(null);
-
   // Bulk selection + delete
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkConfirm, setBulkConfirm] = useState(false);
@@ -913,8 +1064,8 @@ export default function ExpensesView({ navigate }: ViewProps) {
 
   const removeExpense = async () => {
     if (!deleteTarget) return;
-    const res = await mutate(() => api.del(`/api/expenses/${deleteTarget.id}`), "Expense deleted", () => ({ module: "EXPENSE", recordId: deleteTarget.id, onUndo: () => void expenses.reload() }));
-    if (res.ok) void expenses.reload();
+    const res = await mutate(() => api.del(`/api/expenses/${deleteTarget.id}`), "Expense deleted", () => ({ module: "EXPENSE", recordId: deleteTarget.id, onUndo: () => reloadExpenses() }));
+    if (res.ok) reloadExpenses();
     setDeleteTarget(null);
   };
 
@@ -942,7 +1093,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
           onClick: () => {
             void (async () => {
               for (const id of okIds) {
-                await undoRequest({ module: "EXPENSE", recordId: id, onUndo: () => void expenses.reload() });
+                await undoRequest({ module: "EXPENSE", recordId: id, onUndo: () => reloadExpenses() });
               }
             })();
           },
@@ -952,7 +1103,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
       toast.error("Could not delete the selected expenses");
     }
     setSelectedIds(new Set());
-    void expenses.reload();
+    void reloadExpenses();
   };
 
   const toggleRecurring = async (row: RecurringRow, next: boolean) => {
@@ -973,7 +1124,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
     if (res.ok) {
       toast.success(`Created ${created} expenses from "${row.name}"`);
       void recurring.reload();
-      void expenses.reload();
+      reloadExpenses();
     }
   };
 
@@ -1058,7 +1209,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
         }
       />
 
-      <Tabs defaultValue="expenses">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="h-10 w-full sm:w-auto" aria-label="Expense sections">
           <TabsTrigger value="expenses" className="flex-1 gap-1.5 sm:flex-none sm:px-4">
             <Receipt className="h-3.5 w-3.5" aria-hidden />Expenses
@@ -1070,6 +1221,27 @@ export default function ExpensesView({ navigate }: ViewProps) {
 
         {/* ------------------------- Expenses tab ------------------------- */}
         <TabsContent value="expenses" className="mt-4 space-y-4">
+          {/* Discoverability pointer — owner deposits & withdrawals live in the Owner Breakdown tab */}
+          <Card className="border-amber-200/70 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/30">
+            <CardContent className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:p-3.5">
+              <div className="flex min-w-0 items-start gap-2.5">
+                <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300" aria-hidden>
+                  <Landmark className="h-4 w-4" />
+                </span>
+                <p className="text-xs leading-relaxed text-foreground">
+                  <span className="font-semibold">Owner money in &amp; out?</span> When recording an expense, choose <span className="font-semibold">who took or put in the money</span> under “Paid by / Owner” — deposits, withdrawals, reasons and the full statement with running balance live in the <span className="font-semibold">Owner Breakdown</span> tab.
+                </p>
+              </div>
+              <Button
+                size="sm" variant="outline"
+                className="h-8 shrink-0 gap-1.5 border-amber-300 text-xs text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:text-amber-200 dark:hover:bg-amber-900"
+                onClick={() => setTab("owners")}
+              >
+                <Crown className="h-3.5 w-3.5" aria-hidden />Open Owner Breakdown
+              </Button>
+            </CardContent>
+          </Card>
+
           {/* Filters */}
           <Card>
             <CardContent className="space-y-3 p-3 sm:p-4">
@@ -1291,19 +1463,26 @@ export default function ExpensesView({ navigate }: ViewProps) {
 
         {/* ---------------------- Owner Breakdown tab ---------------------- */}
         <TabsContent value="owners" className="mt-4">
-          <OwnerBreakdownSection business={business} from={eff.from} to={eff.to} />
+          <OwnerBreakdownSection business={business} from={eff.from} to={eff.to} onQuickAction={openQuickCapital} refreshKey={bdVersion} />
         </TabsContent>
       </Tabs>
 
-      <ExpenseFormDialog open={addOpen} onOpenChange={setAddOpen} expense={null} vehicles={vehicles.data?.items ?? []} onDone={() => void expenses.reload()} />
+      <ExpenseFormDialog
+        open={addOpen}
+        onOpenChange={(v) => { setAddOpen(v); if (!v) setAddPreset(null); }}
+        expense={null}
+        vehicles={vehicles.data?.items ?? []}
+        onDone={() => { reloadExpenses(); }}
+        preset={addPreset}
+      />
 
       {/* Mobile FAB — alternate trigger for Add Expense (hidden while bulk rows
           are selected so the sticky bulk bar stays unobstructed) */}
       {selectedIds.size === 0 && (
         <ViewFab icon={Plus} label="Add expense" onClick={() => setAddOpen(true)} />
       )}
-      <ExpenseFormDialog open={Boolean(editTarget)} onOpenChange={(v) => !v && setEditTarget(null)} expense={editTarget} vehicles={vehicles.data?.items ?? []} onDone={() => void expenses.reload()} />
-      <RecurringFormDialog open={recAddOpen} onOpenChange={setRecAddOpen} onDone={() => { void recurring.reload(); void expenses.reload(); }} />
+      <ExpenseFormDialog open={Boolean(editTarget)} onOpenChange={(v) => !v && setEditTarget(null)} expense={editTarget} vehicles={vehicles.data?.items ?? []} onDone={() => reloadExpenses()} />
+      <RecurringFormDialog open={recAddOpen} onOpenChange={setRecAddOpen} onDone={() => { void recurring.reload(); reloadExpenses(); }} />
 
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(v) => !v && setDeleteTarget(null)}>
         <AlertDialogContent>

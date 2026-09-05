@@ -188,6 +188,23 @@ async function main() {
   void baseDash;
   ok("dashboard month expenses == operating-only scope", dashExpenses <= t.operating + 0.006, `dash ${dashExpenses} > operating ${t.operating}`);
 
+  // ZERO-MISMATCH INVARIANT: dashboard "Net Result" MUST equal the
+  // profitability report's "Net" for the same period (revenue − employee
+  // payout − operating expenses). Guards the 850-vs-550 mismatch class.
+  const profRep = await api("GET", `/api/reports/profitability?from=${from}&to=${to}`);
+  const dashRanged = await api("GET", `/api/dashboard/summary?range=custom&from=${from}&to=${to}`);
+  const dashNet = dashRanged.data.combined.net ?? 0;
+  const expectedNet = (dashRanged.data.combined.revenue ?? 0) - (dashRanged.data.combined.employeePayout ?? 0) - (dashRanged.data.combined.expenses ?? 0);
+  ok("dashboard net identity: revenue − payout − expenses", Math.abs(dashNet - expectedNet) < 0.006, `net ${dashNet} != ${expectedNet}`);
+  ok("dashboard net == profitability net (same range)", Math.abs(dashNet - (profRep.data.totals?.net ?? 0)) < 0.006, `dash ${dashNet} vs reports ${profRep.data.totals?.net}`);
+
+  // owner-expenses report reconciles with the owner-breakdown tab
+  const repOwner = await api("GET", `/api/reports/owner-expenses?from=${from}&to=${to}`);
+  ok("report owner-expenses deposits == breakdown deposits", Math.abs((repOwner.data.totals?.deposits ?? 0) - obt.deposits) < 0.006, `${repOwner.data.totals?.deposits} vs ${obt.deposits}`);
+  ok("report owner-expenses withdrawals == breakdown withdrawals", Math.abs((repOwner.data.totals?.withdrawals ?? 0) - obt.withdrawals) < 0.006, `${repOwner.data.totals?.withdrawals} vs ${obt.withdrawals}`);
+  ok("report owner-expenses operating == breakdown operating", Math.abs((repOwner.data.totals?.operating ?? 0) - obt.operating) < 0.006, `${repOwner.data.totals?.operating} vs ${obt.operating}`);
+  ok("breakdown transactions == deposits+withdrawals rows", (ob.data.transactions ?? []).length >= 2 && Math.abs((ob.data.transactions ?? []).reduce((s: number, x: { type: string; amount: number }) => s + (x.type === "IN" ? x.amount : -x.amount), 0) - obt.netPosition) < 0.006);
+
   // monthly metrics excludes capital
   const monthly = await api("GET", "/api/dashboard/monthly-summary?month=2026-09");
   const mCur = monthly.data.current;

@@ -44,7 +44,7 @@ interface SummaryResp {
     received: number; pending: number; monthRevenue: number; monthExpense: number;
     monthEmi: number; monthNet: number;
   };
-  combined: { revenue: number; expenses: number; net: number; manpowerMargin: number; transportNet: number };
+  combined: { revenue: number; expenses: number; employeePayout?: number; net: number; manpowerMargin: number; transportNet: number };
   collections: {
     totalBilled: number; totalReceived: number; totalOutstanding: number;
     byProperty: { propertyId: string; propertyName: string; outstanding: number }[];
@@ -244,7 +244,7 @@ export default function DashboardView({ navigate }: ViewProps) {
             <StatCard label="Outstanding" value={formatINR(c?.totalOutstanding ?? 0, { compact: true })} icon={Building2} tone="negative" onClick={() => navigate("payments")} hint="All properties" />
             <StatCard label="Employee Payout" value={formatINR(m?.payout ?? 0, { compact: true })} icon={Users} onClick={() => navigate("manpower")} hint={`${m?.deployments ?? 0} deployments`} />
             <StatCard label="Transport Revenue" value={formatINR(t?.revenue ?? 0, { compact: true })} icon={Truck} tone="transport" onClick={() => navigate("transport")} hint={`${t?.onTripVehicles ?? 0} on trip`} />
-            <StatCard label="Net Result" value={formatINR(net, { compact: true })} icon={Landmark} tone={net >= 0 ? "positive" : "negative"} onClick={() => navigate("reports")} hint="Revenue − all expenses" />
+            <StatCard label="Net Result" value={formatINR(net, { compact: true })} icon={Landmark} tone={net >= 0 ? "positive" : "negative"} onClick={() => navigate("reports")} hint="Revenue − employee payout − expenses (same as Reports)" />
           </div>
 
           {/* First-run setup checklist — self-hides once the business is set up */}
