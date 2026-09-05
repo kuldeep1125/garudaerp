@@ -13,7 +13,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
 
   const tables = [
     "settlementLine", "settlement", "adjustment", "advance", "deployment", "propertyPayment",
-    "contract", "expense", "recurringExpense", "vehicleEmiPayment", "maintenance", "trip",
+    "expense", "recurringExpense", "vehicleEmiPayment", "maintenance", "trip",
     "client", "vehicle", "notificationDismiss", "auditLog", "employee", "property",
   ] as const;
   const removed: Record<string, number> = {};

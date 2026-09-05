@@ -306,14 +306,33 @@
   }
 }
 
-/* Recharts polish — text fills follow the theme without per-component code */
+/* Recharts polish — text fills follow the theme without per-component code.
+   CSS rules override SVG presentation attributes in EVERY browser, so axis
+   values, grid lines and labels can never fall back to invisible black. */
 .recharts-text,
 .recharts-cartesian-axis-tick-value {
   fill: var(--muted-foreground);
+}
+.recharts-cartesian-axis-tick text {
+  fill: var(--muted-foreground);
+}
+.recharts-cartesian-grid line,
+.recharts-cartesian-axis-line {
+  stroke: var(--border);
 }
 .recharts-legend-item-text {
   color: var(--foreground) !important;
 }
 .recharts-pie-label-text {
   fill: var(--foreground);
+}
+/* Value labels rendered on top of bars (LabelList) — always theme-colored. */
+.recharts-label-list text {
+  fill: var(--foreground);
+  font-weight: 600;
+}
+/* Surface (area/bar) strokes keep series colors; dots stay visible on dark. */
+.recharts-area-dot,
+.recharts-line-dot {
+  stroke: var(--card);
 }

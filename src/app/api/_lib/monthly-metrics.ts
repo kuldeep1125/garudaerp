@@ -71,7 +71,7 @@ export async function metricsFor(month: string): Promise<MonthMetrics> {
     }),
     db.expense.findMany({
       where: { date: { gte: from, lte: to } },
-      select: { business: true, categoryName: true, amount: true },
+      select: { business: true, categoryName: true, amount: true, kind: true },
     }),
   ]);
 
@@ -79,6 +79,7 @@ export async function metricsFor(month: string): Promise<MonthMetrics> {
   let transportOpex = 0;
   let transportEmi = 0;
   for (const e of expenses) {
+    if (e.kind === "CAPITAL") continue; // owner contributions/withdrawals are capital, not P&L expenses
     const isEmi = (e.categoryName ?? "").toUpperCase() === "EMI";
     if (e.business === "MANPOWER") manpowerOther += e.amount;
     else if (e.business === "TRANSPORT") {

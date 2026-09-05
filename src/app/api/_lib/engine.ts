@@ -24,6 +24,52 @@ export const TRIP_STATUSES = ["CONFIRMED", "ACTIVE", "COMPLETED", "CANCELLED"] a
 
 export const EPS = 0.005;
 
+// ---------- owner capital movements (canonical predicate) ----------
+// Owner CONTRIBUTION (money in) / WITHDRAWAL (drawings) are capital movements,
+// NOT operating expenses. Every P&L aggregation must count OPERATING expenses
+// only — the Owner Breakdown surfaces capital flows separately. This constant
+// list is the single source of truth; Expense.kind is stamped from it on write.
+export const CAPITAL_CATEGORY_NAMES = ["OWNER CONTRIBUTION", "OWNER WITHDRAWAL"] as const;
+export const EXPENSE_KINDS = ["OPERATING", "CAPITAL"] as const;
+
+export function isCapitalCategoryName(name?: string | null): boolean {
+  return (CAPITAL_CATEGORY_NAMES as readonly string[]).includes((name ?? "").trim().toUpperCase());
+}
+
+/** Canonical expense kind stamp: capital when the category is an owner capital movement. */
+export function expenseKindForCategory(categoryName?: string | null): (typeof EXPENSE_KINDS)[number] {
+  return isCapitalCategoryName(categoryName) ? "CAPITAL" : "OPERATING";
+}
+
+export interface ExpenseAttribution {
+  isCommon: boolean;
+  spentById: string | null;
+  spentByName: string | null;
+}
+
+/**
+ * Resolves who the money is attributed to for an expense.
+ * - `isCommon: true` (or spentById === "COMMON") → shared by all owners & the business;
+ *   `spentBy` still records who physically took/spent the money (the acting user).
+ * - `spentById` of a real owner → attributed to that owner.
+ * - otherwise → attributed to the acting user.
+ */
+export async function resolveExpenseAttribution(
+  body: { isCommon?: unknown; spentById?: unknown },
+  actingOwner: { id: string; name: string },
+): Promise<ExpenseAttribution> {
+  if (body.isCommon === true || String(body.spentById ?? "") === "COMMON") {
+    return { isCommon: true, spentById: actingOwner.id, spentByName: actingOwner.name };
+  }
+  const wanted = body.spentById ? String(body.spentById) : "";
+  if (wanted && wanted !== actingOwner.id) {
+    const o = await db.owner.findUnique({ where: { id: wanted } });
+    if (!o || !o.isActive) throw new HttpError(404, "Selected owner not found");
+    return { isCommon: false, spentById: o.id, spentByName: o.name };
+  }
+  return { isCommon: false, spentById: actingOwner.id, spentByName: actingOwner.name };
+}
+
 // ---------- date helpers ----------
 
 export function dayKey(d: Date): string {
@@ -345,7 +391,7 @@ export async function vehicleStatsMap(vehicleIds: string[]): Promise<Map<string,
     }),
     db.expense.findMany({
       where: { vehicleId: { in: vehicleIds } },
-      select: { vehicleId: true, date: true, amount: true, categoryName: true },
+      select: { vehicleId: true, date: true, amount: true, categoryName: true, kind: true },
     }),
   ]);
   for (const t of trips) {
@@ -358,6 +404,7 @@ export async function vehicleStatsMap(vehicleIds: string[]): Promise<Map<string,
     if (!e.vehicleId) continue; // nullable FK; filtered by query but guard anyway
     const s = map.get(e.vehicleId);
     if (!s) continue;
+    if (e.kind === "CAPITAL") continue; // owner capital movements are never vehicle opex (defensive)
     const isEmi = (e.categoryName ?? "").toUpperCase() === "EMI";
     if (!isEmi) s.expense = round2(s.expense + e.amount);
     else s.emi = round2(s.emi + e.amount);

@@ -1,0 +1,783 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useEffect, useMemo, useState } from "react";
+     4→     4→import { api, qs } from "@/lib/api-client";
+     5→     5→import { formatINR, parseAmount } from "@/lib/money";
+     6→     6→import type { ViewProps } from "@/components/view-types";
+     7→     7→import { useBusiness } from "@/components/providers";
+     8→     8→import { PageHeader } from "@/components/shared/page-header";
+     9→     9→import { ViewFab } from "@/components/shared/view-fab";
+    10→    10→import { DataTable, downloadCsv, type Column } from "@/components/shared/data-table";
+    11→    11→import { StatCard, StatGrid } from "@/components/shared/stat-card";
+    12→    12→import { RangeSelector, SearchInput, type RangeKey } from "@/components/shared/filters";
+    13→    13→import { Button } from "@/components/ui/button";
+    14→    14→import { Card, CardContent } from "@/components/ui/card";
+    15→    15→import { Input } from "@/components/ui/input";
+    16→    16→import { Textarea } from "@/components/ui/textarea";
+    17→    17→import { Switch } from "@/components/ui/switch";
+    18→    18→import { Badge } from "@/components/ui/badge";
+    19→    19→import {
+    20→    20→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    21→    21→} from "@/components/ui/dialog";
+    22→    22→import {
+    23→    23→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+    24→    24→  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+    25→    25→} from "@/components/ui/alert-dialog";
+    26→    26→import {
+    27→    27→  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+    28→    28→} from "@/components/ui/dropdown-menu";
+    29→    29→import { toast } from "sonner";
+    30→    30→import { cn } from "@/lib/utils";
+    31→    31→import { useLang, t } from "@/lib/i18n";
+    32→    32→import {
+    33→    33→  Receipt, Plus, MoreHorizontal, Pencil, Trash2, Repeat, ChevronDown, Play, Wallet, Hash, Download,
+    34→    34→} from "lucide-react";
+    35→    35→import {
+    36→    36→  type ExpenseRec, type VehicleRec, type Option, SelectInput, Field, ErrorState, MiniBars, MoneyInput,
+    37→    37→  CHART_COLORS, type ListResp, useAsync, useMutation, useDebounced, fmtDay, todayStr, undoRequest,
+    38→    38→  UNDO_APPLIED_EVENT,
+    39→    39→} from "./_shared";
+    40→    40→
+    41→    41→interface ExpenseCategoryRec { id: string; name: string; business: string; kind?: string }
+    42→    42→interface OwnerRec { id: string; name: string }
+    43→    43→interface RecurringRow {
+    44→    44→  id: string;
+    45→    45→  name: string;
+    46→    46→  business: string;
+    47→    47→  categoryId?: string | null;
+    48→    48→  categoryName?: string | null;
+    49→    49→  amount: number;
+    50→    50→  frequency: string;
+    51→    51→  startDate: string;
+    52→    52→  method?: string | null;
+    53→    53→  notes?: string | null;
+    54→    54→  active?: boolean;
+    55→    55→  lastGeneratedMonth?: string | null;
+    56→    56→}
+    57→    57→
+    58→    58→const BUSINESS_OPTIONS: Option[] = [
+    59→    59→  { label: "All businesses", value: "" },
+    60→    60→  { label: "Manpower", value: "MANPOWER" },
+    61→    61→  { label: "Transport", value: "TRANSPORT" },
+    62→    62→];
+    63→    63→
+    64→    64→const METHOD_OPTIONS: Option[] = ["Cash", "UPI", "Bank", "Card", "Cheque", "Other"].map((m) => ({ label: m, value: m }));
+    65→    65→
+    66→    66→function rangeDates(r: RangeKey): { from: string; to: string } {
+    67→    67→  const now = new Date();
+    68→    68→  const f = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    69→    69→  if (r === "today") { const t = f(now); return { from: t, to: t }; }
+    70→    70→  if (r === "yesterday") return { from: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)), to: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)) };
+    71→    71→  if (r === "week") return { from: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6)), to: f(now) };
+    72→    72→  if (r === "lastweek") return { from: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 13)), to: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7)) };
+    73→    73→  if (r === "lastmonth") return { from: f(new Date(now.getFullYear(), now.getMonth() - 1, 1)), to: f(new Date(now.getFullYear(), now.getMonth(), 0)) };
+    74→    74→  return { from: f(new Date(now.getFullYear(), now.getMonth(), 1)), to: f(new Date(now.getFullYear(), now.getMonth() + 1, 0)) };
+    75→    75→}
+    76→    76→
+    77→    77→function BusinessBadge({ business }: { business: string }) {
+    78→    78→  const b = String(business ?? "").toUpperCase();
+    79→    79→  return (
+    80→    80→    <Badge
+    81→    81→      variant="outline"
+    82→    82→      className={cn(
+    83→    83→        "font-medium text-[11px] px-2 py-0.5 whitespace-nowrap",
+    84→    84→        b === "MANPOWER" && "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 border-emerald-200",
+    85→    85→        b === "TRANSPORT" && "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300 border-amber-200"
+    86→    86→      )}
+    87→    87→    >
+    88→    88→      {b || "—"}
+    89→    89→    </Badge>
+    90→    90→  );
+    91→    91→}
+    92→    92→
+    93→    93→// ---------------------------------------------------------------------------
+    94→    94→// Add / edit expense dialog
+    95→    95→// ---------------------------------------------------------------------------
+    96→    96→
+    97→    97→function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
+    98→    98→  open: boolean;
+    99→    99→  onOpenChange: (v: boolean) => void;
+   100→   100→  expense: ExpenseRec | null;
+   101→   101→  vehicles: VehicleRec[];
+   102→   102→  onDone: () => void;
+   103→   103→}) {
+   104→   104→  const editing = Boolean(expense);
+   105→   105→  const [form, setForm] = useState({
+   106→   106→    date: todayStr(), business: "MANPOWER", categoryId: "", amount: "", method: "Cash",
+   107→   107→    description: "", vehicleId: "", notes: "",
+   108→   108→  });
+   109→   109→  const [categories, setCategories] = useState<ExpenseCategoryRec[]>([]);
+   110→   110→  const { mutate, saving } = useMutation();
+   111→   111→
+   112→   112→  // Reset form each time the dialog opens (render-time state adjustment).
+   113→   113→  const [prevOpen, setPrevOpen] = useState(open);
+   114→   114→  if (open !== prevOpen) {
+   115→   115→    setPrevOpen(open);
+   116→   116→    if (open) {
+   117→   117→      setForm({
+   118→   118→        date: expense?.date?.slice(0, 10) ?? todayStr(),
+   119→   119→        business: expense?.business ?? "MANPOWER",
+   120→   120→        categoryId: expense?.categoryId ?? "",
+   121→   121→        amount: expense ? String(expense.amount) : "",
+   122→   122→        method: expense?.method ?? "Cash",
+   123→   123→        description: expense?.description ?? "",
+   124→   124→        vehicleId: expense?.vehicleId ?? "",
+   125→   125→        notes: expense?.notes ?? "",
+   126→   126→      });
+   127→   127→    }
+   128→   128→  }
+   129→   129→
+   130→   130→  useEffect(() => {
+   131→   131→    if (!open) return;
+   132→   132→    let cancelled = false;
+   133→   133→    api.get<{ items: ExpenseCategoryRec[] }>("/api/expense-categories" + qs({ business: form.business || undefined }))
+   134→   134→      .then((d) => { if (!cancelled) setCategories(d.items ?? []); })
+   135→   135→      .catch(() => { if (!cancelled) setCategories([]); });
+   136→   136→    return () => { cancelled = true; };
+   137→   137→  }, [open, form.business]);
+   138→   138→
+   139→   139→  const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+   140→   140→
+   141→   141→  const submit = async () => {
+   142→   142→    const amt = parseAmount(form.amount);
+   143→   143→    if (amt <= 0) { toast.error("Enter a valid amount"); return; }
+   144→   144→    if (!form.date) { toast.error("Date is required"); return; }
+   145→   145→    const body = {
+   146→   146→      date: form.date,
+   147→   147→      business: form.business,
+   148→   148→      categoryId: form.categoryId || undefined,
+   149→   149→      amount: amt,
+   150→   150→      method: form.method || undefined,
+   151→   151→      description: form.description || undefined,
+   152→   152→      notes: form.notes || undefined,
+   153→   153→      vehicleId: form.business === "TRANSPORT" && form.vehicleId ? form.vehicleId : undefined,
+   154→   154→    };
+   155→   155→    const res = editing
+   156→   156→      ? await mutate(() => api.put(`/api/expenses/${expense!.id}`, body), "Expense updated", () => ({ module: "EXPENSE", recordId: expense!.id, onUndo: onDone }))
+   157→   157→      : await mutate(() => api.post("/api/expenses", body), "Expense recorded", (data) => ({ module: "EXPENSE", recordId: (data as { id: string }).id, onUndo: onDone }));
+   158→   158→    if (res.ok) { onOpenChange(false); onDone(); }
+   159→   159→  };
+   160→   160→
+   161→   161→  return (
+   162→   162→    <Dialog open={open} onOpenChange={onOpenChange}>
+   163→   163→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+   164→   164→        <DialogHeader>
+   165→   165→          <DialogTitle>{editing ? "Edit Expense" : "Add Expense"}</DialogTitle>
+   166→   166→          <DialogDescription>Expenses are tracked separately for each business.</DialogDescription>
+   167→   167→        </DialogHeader>
+   168→   168→        <div className="grid gap-3 sm:grid-cols-2">
+   169→   169→          <Field label="Date" required>
+   170→   170→            <Input type="date" value={form.date} onChange={(e) => set("date")(e.target.value)} className="h-10" />
+   171→   171→          </Field>
+   172→   172→          <Field label="Business" required>
+   173→   173→            <SelectInput
+   174→   174→              value={form.business}
+   175→   175→              onChange={(v) => setForm((f) => ({ ...f, business: v, categoryId: "", vehicleId: "" }))}
+   176→   176→              options={[{ label: "Manpower", value: "MANPOWER" }, { label: "Transport", value: "TRANSPORT" }]}
+   177→   177→            />
+   178→   178→          </Field>
+   179→   179→          <Field label="Category">
+   180→   180→            <SelectInput
+   181→   181→              value={form.categoryId}
+   182→   182→              onChange={set("categoryId")}
+   183→   183→              placeholder="Select category…"
+   184→   184→              options={categories.map((c) => ({ label: c.name, value: c.id }))}
+   185→   185→            />
+   186→   186→          </Field>
+   187→   187→          <Field label="Amount (₹)" required>
+   188→   188→            <MoneyInput value={form.amount} onChange={set("amount")} min={1} className="h-10" />
+   189→   189→          </Field>
+   190→   190→          <Field label="Method">
+   191→   191→            <SelectInput value={form.method} onChange={set("method")} options={METHOD_OPTIONS} />
+   192→   192→          </Field>
+   193→   193→          {form.business === "TRANSPORT" && (
+   194→   194→            <Field label="Vehicle">
+   195→   195→              <SelectInput
+   196→   196→                value={form.vehicleId}
+   197→   197→                onChange={set("vehicleId")}
+   198→   198→                placeholder="No specific vehicle"
+   199→   199→                options={[{ label: "No specific vehicle", value: "" }, ...vehicles.map((v) => ({ label: v.name, value: v.id }))]}
+   200→   200→              />
+   201→   201→            </Field>
+   202→   202→          )}
+   203→   203→          <Field label="Description" className="sm:col-span-2">
+   204→   204→            <Input value={form.description} onChange={(e) => set("description")(e.target.value)} className="h-10" placeholder="What was this expense for?" />
+   205→   205→          </Field>
+   206→   206→          <Field label="Notes" className="sm:col-span-2">
+   207→   207→            <Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} rows={2} placeholder="Optional" />
+   208→   208→          </Field>
+   209→   209→        </div>
+   210→   210→        <DialogFooter className="gap-2">
+   211→   211→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   212→   212→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>
+   213→   213→            {saving ? "Saving…" : editing ? "Save changes" : "Add expense"}
+   214→   214→          </Button>
+   215→   215→        </DialogFooter>
+   216→   216→      </DialogContent>
+   217→   217→    </Dialog>
+   218→   218→  );
+   219→   219→}
+   220→   220→
+   221→   221→// ---------------------------------------------------------------------------
+   222→   222→// New recurring expense dialog
+   223→   223→// ---------------------------------------------------------------------------
+   224→   224→
+   225→   225→function RecurringFormDialog({ open, onOpenChange, onDone }: {
+   226→   226→  open: boolean;
+   227→   227→  onOpenChange: (v: boolean) => void;
+   228→   228→  onDone: () => void;
+   229→   229→}) {
+   230→   230→  const [form, setForm] = useState({ name: "", business: "MANPOWER", categoryId: "", amount: "", startDate: todayStr(), method: "Bank", notes: "" });
+   231→   231→  const [categories, setCategories] = useState<ExpenseCategoryRec[]>([]);
+   232→   232→  const { mutate, saving } = useMutation();
+   233→   233→
+   234→   234→  const [prevOpen, setPrevOpen] = useState(open);
+   235→   235→  if (open !== prevOpen) {
+   236→   236→    setPrevOpen(open);
+   237→   237→    if (open) {
+   238→   238→      setForm({ name: "", business: "MANPOWER", categoryId: "", amount: "", startDate: todayStr(), method: "Bank", notes: "" });
+   239→   239→    }
+   240→   240→  }
+   241→   241→
+   242→   242→  useEffect(() => {
+   243→   243→    if (!open) return;
+   244→   244→    let cancelled = false;
+   245→   245→    api.get<{ items: ExpenseCategoryRec[] }>("/api/expense-categories" + qs({ business: form.business || undefined }))
+   246→   246→      .then((d) => { if (!cancelled) setCategories(d.items ?? []); })
+   247→   247→      .catch(() => { if (!cancelled) setCategories([]); });
+   248→   248→    return () => { cancelled = true; };
+   249→   249→  }, [open, form.business]);
+   250→   250→
+   251→   251→  const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+   252→   252→
+   253→   253→  const submit = async () => {
+   254→   254→    if (!form.name.trim()) { toast.error("Name is required"); return; }
+   255→   255→    const amt = parseAmount(form.amount);
+   256→   256→    if (amt <= 0) { toast.error("Enter a valid amount"); return; }
+   257→   257→    if (!form.startDate) { toast.error("Start date is required"); return; }
+   258→   258→    const res = await mutate(
+   259→   259→      () => api.post("/api/recurring-expenses", {
+   260→   260→        name: form.name.trim(),
+   261→   261→        business: form.business,
+   262→   262→        categoryId: form.categoryId || undefined,
+   263→   263→        amount: amt,
+   264→   264→        frequency: "MONTHLY",
+   265→   265→        startDate: form.startDate,
+   266→   266→        method: form.method || undefined,
+   267→   267→        notes: form.notes || undefined,
+   268→   268→      }),
+   269→   269→      "Recurring expense created"
+   270→   270→    );
+   271→   271→    if (res.ok) { onOpenChange(false); onDone(); }
+   272→   272→  };
+   273→   273→
+   274→   274→  return (
+   275→   275→    <Dialog open={open} onOpenChange={onOpenChange}>
+   276→   276→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+   277→   277→        <DialogHeader>
+   278→   278→          <DialogTitle>New Recurring Expense</DialogTitle>
+   279→   279→          <DialogDescription>Generated monthly; idempotent per name + month + business.</DialogDescription>
+   280→   280→        </DialogHeader>
+   281→   281→        <div className="grid gap-3 sm:grid-cols-2">
+   282→   282→          <Field label="Name" required className="sm:col-span-2">
+   283→   283→            <Input value={form.name} onChange={(e) => set("name")(e.target.value)} className="h-10" placeholder="e.g. Truck insurance premium" />
+   284→   284→          </Field>
+   285→   285→          <Field label="Business" required>
+   286→   286→            <SelectInput
+   287→   287→              value={form.business}
+   288→   288→              onChange={(v) => setForm((f) => ({ ...f, business: v, categoryId: "" }))}
+   289→   289→              options={[{ label: "Manpower", value: "MANPOWER" }, { label: "Transport", value: "TRANSPORT" }]}
+   290→   290→            />
+   291→   291→          </Field>
+   292→   292→          <Field label="Category">
+   293→   293→            <SelectInput
+   294→   294→              value={form.categoryId}
+   295→   295→              onChange={set("categoryId")}
+   296→   296→              placeholder="Select category…"
+   297→   297→              options={categories.map((c) => ({ label: c.name, value: c.id }))}
+   298→   298→            />
+   299→   299→          </Field>
+   300→   300→          <Field label="Amount (₹ / month)" required>
+   301→   301→            <MoneyInput value={form.amount} onChange={set("amount")} min={1} className="h-10" />
+   302→   302→          </Field>
+   303→   303→          <Field label="Start date" required>
+   304→   304→            <Input type="date" value={form.startDate} onChange={(e) => set("startDate")(e.target.value)} className="h-10" />
+   305→   305→          </Field>
+   306→   306→          <Field label="Method">
+   307→   307→            <SelectInput value={form.method} onChange={set("method")} options={METHOD_OPTIONS} />
+   308→   308→          </Field>
+   309→   309→          <Field label="Frequency">
+   310→   310→            <Input value="Monthly" disabled className="h-10" aria-label="Frequency (monthly)" />
+   311→   311→          </Field>
+   312→   312→          <Field label="Notes" className="sm:col-span-2">
+   313→   313→            <Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} rows={2} placeholder="Optional" />
+   314→   314→          </Field>
+   315→   315→        </div>
+   316→   316→        <DialogFooter className="gap-2">
+   317→   317→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   318→   318→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : "Create"}</Button>
+   319→   319→        </DialogFooter>
+   320→   320→      </DialogContent>
+   321→   321→    </Dialog>
+   322→   322→  );
+   323→   323→}
+   324→   324→
+   325→   325→// ---------------------------------------------------------------------------
+   326→   326→// Main view
+   327→   327→// ---------------------------------------------------------------------------
+   328→   328→
+   329→   329→export default function ExpensesView({ navigate }: ViewProps) {
+   330→   330→  const { lang } = useLang();
+   331→   331→  void navigate; // reserved for future drill-downs
+   332→   332→  const { scope } = useBusiness();
+   333→   333→  const { mutate, saving } = useMutation();
+   334→   334→
+   335→   335→  // Filters — default business follows the global scope when it isn't ALL
+   336→   336→  const [business, setBusiness] = useState(scope === "ALL" ? "" : scope);
+   337→   337→  const [categoryId, setCategoryId] = useState("");
+   338→   338→  const [vehicleId, setVehicleId] = useState("");
+   339→   339→  const [ownerId, setOwnerId] = useState("");
+   340→   340→  const [search, setSearch] = useState("");
+   341→   341→  const searchDeb = useDebounced(search);
+   342→   342→  const [rangeKey, setRangeKey] = useState<RangeKey>("month");
+   343→   343→  const [customFrom, setCustomFrom] = useState("");
+   344→   344→  const [customTo, setCustomTo] = useState("");
+   345→   345→
+   346→   346→  const eff = rangeKey === "custom" ? { from: customFrom, to: customTo } : rangeDates(rangeKey);
+   347→   347→
+   348→   348→  // Static option lists
+   349→   349→  const categories = useAsync<{ items: ExpenseCategoryRec[] }>(
+   350→   350→    () => api.get("/api/expense-categories" + qs({ business: business || undefined })),
+   351→   351→    [business]
+   352→   352→  );
+   353→   353→  const vehicles = useAsync<{ items: VehicleRec[] }>(() => api.get("/api/vehicles"), []);
+   354→   354→  const owners = useAsync<{ items: OwnerRec[] }>(() => api.get("/api/owners"), []);
+   355→   355→
+   356→   356→  // Main list
+   357→   357→  const expenses = useAsync<ListResp<ExpenseRec> & { totals?: { amount: number } }>(
+   358→   358→    () => api.get("/api/expenses" + qs({
+   359→   359→      business: business || undefined,
+   360→   360→      categoryId: categoryId || undefined,
+   361→   361→      vehicleId: vehicleId || undefined,
+   362→   362→      ownerId: ownerId || undefined,
+   363→   363→      from: eff.from || undefined,
+   364→   364→      to: eff.to || undefined,
+   365→   365→      search: searchDeb || undefined,
+   366→   366→      pageSize: 200,
+   367→   367→    })),
+   368→   368→    [business, categoryId, vehicleId, ownerId, eff.from, eff.to, searchDeb]
+   369→   369→  );
+   370→   370→
+   371→   371→  // Recurring section
+   372→   372→  const [recOpen, setRecOpen] = useState(false);
+   373→   373→  const [recAddOpen, setRecAddOpen] = useState(false);
+   374→   374→  const recurring = useAsync<RecurringRow[]>(async () => {
+   375→   375→    const d = await api.get<RecurringRow[] | { items: RecurringRow[] }>("/api/recurring-expenses");
+   376→   376→    return Array.isArray(d) ? d : (d.items ?? []);
+   377→   377→  }, []);
+   378→   378→
+   379→   379→  const items = expenses.data?.items ?? [];
+   380→   380→  const vehicleItems = business === "TRANSPORT" ? vehicles.data?.items ?? [] : [];
+   381→   381→
+   382→   382→  // An undo applied from the global Undo Center may have restored rows — refresh.
+   383→   383→  useEffect(() => {
+   384→   384→    const onUndoApplied = () => void expenses.reload();
+   385→   385→    window.addEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
+   386→   386→    return () => window.removeEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
+   387→   387→  }, [expenses.reload]);
+   388→   388→
+   389→   389→  const breakdown = useMemo(() => {
+   390→   390→    const m = new Map<string, number>();
+   391→   391→    for (const r of items) {
+   392→   392→      const k = r.categoryName || "Uncategorized";
+   393→   393→      m.set(k, (m.get(k) ?? 0) + r.amount);
+   394→   394→    }
+   395→   395→    return [...m.entries()]
+   396→   396→      .map(([label, value]) => ({ label, value }))
+   397→   397→      .sort((a, b) => b.value - a.value)
+   398→   398→      .slice(0, 8);
+   399→   399→  }, [items]);
+   400→   400→
+   401→   401→  const [editTarget, setEditTarget] = useState<ExpenseRec | null>(null);
+   402→   402→  const [addOpen, setAddOpen] = useState(false);
+   403→   403→  const [deleteTarget, setDeleteTarget] = useState<ExpenseRec | null>(null);
+   404→   404→
+   405→   405→  // Bulk selection + delete
+   406→   406→  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+   407→   407→  const [bulkConfirm, setBulkConfirm] = useState(false);
+   408→   408→
+   409→   409→  const onBusinessChange = (v: string) => {
+   410→   410→    setBusiness(v);
+   411→   411→    setCategoryId("");
+   412→   412→    setVehicleId("");
+   413→   413→  };
+   414→   414→
+   415→   415→  const removeExpense = async () => {
+   416→   416→    if (!deleteTarget) return;
+   417→   417→    const res = await mutate(() => api.del(`/api/expenses/${deleteTarget.id}`), "Expense deleted", () => ({ module: "EXPENSE", recordId: deleteTarget.id, onUndo: () => void expenses.reload() }));
+   418→   418→    if (res.ok) void expenses.reload();
+   419→   419→    setDeleteTarget(null);
+   420→   420→  };
+   421→   421→
+   422→   422→  // Bulk delete: one DELETE at a time (allSettled semantics — a failure never
+   423→   423→  // aborts the rest), then a single toast + one Undo action that reverses every
+   424→   424→  // deleted row via the audit log.
+   425→   425→  const bulkDelete = async () => {
+   426→   426→    const ids = items.filter((r) => selectedIds.has(r.id)).map((r) => r.id);
+   427→   427→    if (ids.length === 0) { setBulkConfirm(false); return; }
+   428→   428→    setBulkConfirm(false);
+   429→   429→    const results: PromiseSettledResult<unknown>[] = [];
+   430→   430→    for (const id of ids) {
+   431→   431→      try {
+   432→   432→        results.push({ status: "fulfilled", value: await api.del(`/api/expenses/${id}`) });
+   433→   433→      } catch (e) {
+   434→   434→        results.push({ status: "rejected", reason: e });
+   435→   435→      }
+   436→   436→    }
+   437→   437→    const okIds = ids.filter((_, i) => results[i].status === "fulfilled");
+   438→   438→    if (okIds.length > 0) {
+   439→   439→      toast.success(`Deleted ${okIds.length} of ${ids.length} expense${ids.length === 1 ? "" : "s"}`, {
+   440→   440→        duration: 8000,
+   441→   441→        action: {
+   442→   442→          label: "Undo",
+   443→   443→          onClick: () => {
+   444→   444→            void (async () => {
+   445→   445→              for (const id of okIds) {
+   446→   446→                await undoRequest({ module: "EXPENSE", recordId: id, onUndo: () => void expenses.reload() });
+   447→   447→              }
+   448→   448→            })();
+   449→   449→          },
+   450→   450→        },
+   451→   451→      });
+   452→   452→    } else {
+   453→   453→      toast.error("Could not delete the selected expenses");
+   454→   454→    }
+   455→   455→    setSelectedIds(new Set());
+   456→   456→    void expenses.reload();
+   457→   457→  };
+   458→   458→
+   459→   459→  const toggleRecurring = async (row: RecurringRow, next: boolean) => {
+   460→   460→    const res = await mutate(() => api.put(`/api/recurring-expenses/${row.id}/toggle`, { active: next }));
+   461→   461→    if (res.ok) {
+   462→   462→      toast.success(next ? `"${row.name}" activated` : `"${row.name}" paused`);
+   463→   463→      void recurring.reload();
+   464→   464→    }
+   465→   465→  };
+   466→   466→
+   467→   467→  const runRecurring = async (row: RecurringRow) => {
+   468→   468→    let created = 0;
+   469→   469→    const res = await mutate(async () => {
+   470→   470→      const d = await api.post<{ created: number }>(`/api/recurring-expenses/${row.id}/run`);
+   471→   471→      created = d.created ?? 0;
+   472→   472→      return d;
+   473→   473→    });
+   474→   474→    if (res.ok) {
+   475→   475→      toast.success(`Created ${created} expenses from "${row.name}"`);
+   476→   476→      void recurring.reload();
+   477→   477→      void expenses.reload();
+   478→   478→    }
+   479→   479→  };
+   480→   480→
+   481→   481→  const columns: Column<ExpenseRec>[] = [
+   482→   482→    {
+   483→   483→      key: "description", label: t(lang, "col.expense"), primary: true,
+   484→   484→      render: (r) => (
+   485→   485→        <div className="min-w-0">
+   486→   486→          <p className="truncate font-medium">{r.description || r.categoryName || "Untitled expense"}</p>
+   487→   487→          <p className="truncate text-[11px] text-muted-foreground">{fmtDay(r.date)} · {r.categoryName ?? "Uncategorized"}</p>
+   488→   488→        </div>
+   489→   489→      ),
+   490→   490→      value: (r) => r.description || r.categoryName || "Untitled expense",
+   491→   491→    },
+   492→   492→    { key: "date", label: t(lang, "col.date"), value: (r) => fmtDay(r.date), hideOnMobile: true },
+   493→   493→    { key: "business", label: t(lang, "col.business"), render: (r) => <BusinessBadge business={r.business} />, value: (r) => r.business },
+   494→   494→    { key: "category", label: t(lang, "col.category"), value: (r) => r.categoryName ?? "—", hideOnMobile: true },
+   495→   495→    { key: "vehicle", label: t(lang, "col.vehicle"), value: (r) => r.vehicleName ?? "—", hideOnMobile: true },
+   496→   496→    { key: "spentBy", label: t(lang, "col.spentBy"), value: (r) => r.spentByName ?? "—", hideOnMobile: true },
+   497→   497→    {
+   498→   498→      key: "amount", label: t(lang, "col.amount"), className: "text-right",
+   499→   499→      render: (r) => <span className="font-semibold tabular-nums">{formatINR(r.amount)}</span>,
+   500→   500→      value: (r) => formatINR(r.amount),
+   501→   501→    },
+   502→   502→    {
+   503→   503→      key: "actions", label: "", className: "w-14",
+   504→   504→      render: (r) => (
+   505→   505→        <div className="flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
+   506→   506→          <DropdownMenu>
+   507→   507→            <DropdownMenuTrigger asChild>
+   508→   508→              <Button variant="ghost" size="icon" className="h-9 w-9 sm:h-8 sm:w-8" aria-label={`Actions for ${r.description || "expense"}`}>
+   509→   509→                <MoreHorizontal className="h-4 w-4" />
+   510→   510→              </Button>
+   511→   511→            </DropdownMenuTrigger>
+   512→   512→            <DropdownMenuContent align="end" className="w-36">
+   513→   513→              <DropdownMenuItem onClick={() => setEditTarget(r)}>
+   514→   514→                <Pencil className="h-3.5 w-3.5" />Edit
+   515→   515→              </DropdownMenuItem>
+   516→   516→              <DropdownMenuItem className="text-red-600 dark:text-red-400" onClick={() => setDeleteTarget(r)}>
+   517→   517→                <Trash2 className="h-3.5 w-3.5" />Delete
+   518→   518→              </DropdownMenuItem>
+   519→   519→            </DropdownMenuContent>
+   520→   520→          </DropdownMenu>
+   521→   521→        </div>
+   522→   522→      ),
+   523→   523→      value: () => "",
+   524→   524→    },
+   525→   525→  ];
+   526→   526→
+   527→   527→  return (
+   528→   528→    <div className="space-y-4">
+   529→   529→      <PageHeader
+   530→   530→        title={t(lang, "page.expenses")}
+   531→   531→        subtitle={t(lang, "page.expenses.sub")}
+   532→   532→        actions={
+   533→   533→          <Button size="sm" className="h-9 gap-1.5" onClick={() => setAddOpen(true)}>
+   534→   534→            <Plus className="h-4 w-4" aria-hidden />Add Expense
+   535→   535→          </Button>
+   536→   536→        }
+   537→   537→      />
+   538→   538→
+   539→   539→      {/* Filters */}
+   540→   540→      <Card>
+   541→   541→        <CardContent className="space-y-3 p-3 sm:p-4">
+   542→   542→          <div className="grid grid-cols-2 gap-2.5 sm:gap-3 sm:grid-cols-2 xl:grid-cols-4">
+   543→   543→            <SelectInput value={business} onChange={onBusinessChange} options={BUSINESS_OPTIONS} placeholder="All businesses" />
+   544→   544→            <SelectInput
+   545→   545→              value={categoryId}
+   546→   546→              onChange={setCategoryId}
+   547→   547→              options={[{ label: "All categories", value: "" }, ...(categories.data?.items ?? []).map((c) => ({ label: c.name, value: c.id }))]}
+   548→   548→              placeholder="All categories"
+   549→   549→            />
+   550→   550→            {business === "TRANSPORT" && (
+   551→   551→              <SelectInput
+   552→   552→                value={vehicleId}
+   553→   553→                onChange={setVehicleId}
+   554→   554→                options={[{ label: "All vehicles", value: "" }, ...vehicleItems.map((v) => ({ label: v.name, value: v.id }))]}
+   555→   555→                placeholder="All vehicles"
+   556→   556→              />
+   557→   557→            )}
+   558→   558→            <SelectInput
+   559→   559→              value={ownerId}
+   560→   560→              onChange={setOwnerId}
+   561→   561→              options={[{ label: "All owners", value: "" }, ...(owners.data?.items ?? []).map((o) => ({ label: o.name, value: o.id }))]}
+   562→   562→              placeholder="All owners"
+   563→   563→            />
+   564→   564→          </div>
+   565→   565→          <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center">
+   566→   566→            <div className="flex w-full items-center gap-2 overflow-hidden">
+   567→   567→              <RangeSelector
+   568→   568→                value={rangeKey}
+   569→   569→                onChange={(r) => { setRangeKey(r); }}
+   570→   570→                className="flex-1"
+   571→   571→              />
+   572→   572→              <Button
+   573→   573→                size="sm"
+   574→   574→                variant={rangeKey === "custom" ? "default" : "outline"}
+   575→   575→                className="h-8 shrink-0 rounded-full px-3 text-xs"
+   576→   576→                onClick={() => {
+   577→   577→                  if (rangeKey === "custom") { setRangeKey("month"); setCustomFrom(""); setCustomTo(""); }
+   578→   578→                  else setRangeKey("custom");
+   579→   579→                }}
+   580→   580→              >
+   581→   581→                Custom
+   582→   582→              </Button>
+   583→   583→            </div>
+   584→   584→            <SearchInput value={search} onChange={setSearch} placeholder="Search description…" className="lg:w-64" />
+   585→   585→          </div>
+   586→   586→          {rangeKey === "custom" && (
+   587→   587→            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed p-2.5">
+   588→   588→              <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="h-9 w-full sm:w-40" aria-label="From date" />
+   589→   589→              <span className="text-xs text-muted-foreground">to</span>
+   590→   590→              <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-9 w-full sm:w-40" aria-label="To date" />
+   591→   591→            </div>
+   592→   592→          )}
+   593→   593→        </CardContent>
+   594→   594→      </Card>
+   595→   595→
+   596→   596→      <StatGrid cols={2}>
+   597→   597→        <StatCard label="Total expenses (filtered)" value={formatINR(expenses.data?.totals?.amount ?? 0)} icon={Wallet} tone="negative" />
+   598→   598→        <StatCard label="Records" value={String(expenses.data?.total ?? items.length)} icon={Hash} hint="Matching current filters" />
+   599→   599→      </StatGrid>
+   600→   600→
+   601→   601→      <div className="grid gap-4 xl:grid-cols-3">
+   602→   602→        {/* List */}
+   603→   603→        <Card className="xl:col-span-2">
+   604→   604→          <CardContent className="p-3 sm:p-4">
+   605→   605→            {expenses.error ? (
+   606→   606→              <ErrorState message={expenses.error} onRetry={() => void expenses.reload()} />
+   607→   607→            ) : (
+   608→   608→              <DataTable
+   609→   609→                columns={columns}
+   610→   610→                rows={items}
+   611→   611→                rowKey={(r) => r.id}
+   612→   612→                exportName="expenses"
+   613→   613→                loading={expenses.loading}
+   614→   614→                emptyIcon={Receipt}
+   615→   615→                emptyTitle="No expenses match"
+   616→   616→                emptyDescription="Try widening the date range or clearing filters."
+   617→   617→                selectKey={(r) => r.id}
+   618→   618→                selectedIds={selectedIds}
+   619→   619→                onSelectedChange={setSelectedIds}
+   620→   620→                bulkBar={(ids) => (
+   621→   621→                  <>
+   622→   622→                    <span className="px-1.5 text-xs font-semibold tabular-nums whitespace-nowrap">
+   623→   623→                      {ids.length} selected
+   624→   624→                    </span>
+   625→   625→                    <Button
+   626→   626→                      variant="outline"
+   627→   627→                      size="sm"
+   628→   628→                      className="h-8 gap-1.5 text-xs"
+   629→   629→                      onClick={() =>
+   630→   630→                        downloadCsv(
+   631→   631→                          "expenses-selected",
+   632→   632→                          columns,
+   633→   633→                          items.filter((r) => ids.includes(r.id))
+   634→   634→                        )
+   635→   635→                      }
+   636→   636→                      aria-label={`Export ${ids.length} selected expenses as CSV`}
+   637→   637→                    >
+   638→   638→                      <Download className="h-3.5 w-3.5" aria-hidden />Export CSV
+   639→   639→                    </Button>
+   640→   640→                    <Button
+   641→   641→                      variant="destructive"
+   642→   642→                      size="sm"
+   643→   643→                      className="h-8 gap-1.5 text-xs"
+   644→   644→                      onClick={() => setBulkConfirm(true)}
+   645→   645→                      aria-label={`Delete ${ids.length} selected expenses`}
+   646→   646→                    >
+   647→   647→                      <Trash2 className="h-3.5 w-3.5" aria-hidden />Delete
+   648→   648→                    </Button>
+   649→   649→                  </>
+   650→   650→                )}
+   651→   651→              />
+   652→   652→            )}
+   653→   653→          </CardContent>
+   654→   654→        </Card>
+   655→   655→
+   656→   656→        {/* Side: breakdown + recurring */}
+   657→   657→        <div className="space-y-4">
+   658→   658→          <Card>
+   659→   659→            <CardContent className="p-3 sm:p-4">
+   660→   660→              <p className="mb-3 text-sm font-semibold">Category breakdown</p>
+   661→   661→              {expenses.loading ? (
+   662→   662→                <div className="space-y-2.5">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-8 rounded-lg bg-muted animate-pulse" />)}</div>
+   663→   663→              ) : (
+   664→   664→                <MiniBars rows={breakdown.map((b) => ({ ...b, color: CHART_COLORS.amber }))} />
+   665→   665→              )}
+   666→   666→            </CardContent>
+   667→   667→          </Card>
+   668→   668→
+   669→   669→          <Card>
+   670→   670→            <CardContent className="p-3 sm:p-4">
+   671→   671→              <div
+   672→   672→                role="button"
+   673→   673→                tabIndex={0}
+   674→   674→                className="flex w-full cursor-pointer items-center justify-between gap-2"
+   675→   675→                onClick={() => setRecOpen((o) => !o)}
+   676→   676→                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setRecOpen((o) => !o); } }}
+   677→   677→                aria-expanded={recOpen}
+   678→   678→                aria-label="Toggle recurring expenses"
+   679→   679→              >
+   680→   680→                <span className="flex items-center gap-2 text-sm font-semibold">
+   681→   681→                  <Repeat className="h-4 w-4 text-primary" aria-hidden />Recurring
+   682→   682→                  <Badge variant="outline" className="text-[10px]">{recurring.data?.length ?? 0}</Badge>
+   683→   683→                </span>
+   684→   684→                <span className="flex items-center gap-1.5">
+   685→   685→                  <Button
+   686→   686→                    size="sm" variant="outline" className="h-8 gap-1 text-xs"
+   687→   687→                    onClick={(e) => { e.stopPropagation(); setRecAddOpen(true); }}
+   688→   688→                  >
+   689→   689→                    <Plus className="h-3 w-3" aria-hidden />New
+   690→   690→                  </Button>
+   691→   691→                  <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", recOpen && "rotate-180")} aria-hidden />
+   692→   692→                </span>
+   693→   693→              </div>
+   694→   694→
+   695→   695→              {recOpen && (
+   696→   696→                <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-0.5">
+   697→   697→                  {recurring.loading && <div className="h-16 animate-pulse rounded-lg bg-muted" />}
+   698→   698→                  {!recurring.loading && (recurring.data ?? []).length === 0 && (
+   699→   699→                    <p className="py-4 text-center text-xs text-muted-foreground">No recurring expenses yet</p>
+   700→   700→                  )}
+   701→   701→                  {(recurring.data ?? []).map((row) => (
+   702→   702→                    <div key={row.id} className="rounded-xl border p-2.5">
+   703→   703→                      <div className="flex items-start justify-between gap-2">
+   704→   704→                        <div className="min-w-0">
+   705→   705→                          <p className="truncate text-sm font-medium">{row.name}</p>
+   706→   706→                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+   707→   707→                            {formatINR(row.amount)} · {row.frequency?.toLowerCase() || "monthly"} · Last: {row.lastGeneratedMonth ?? "—"}
+   708→   708→                          </p>
+   709→   709→                        </div>
+   710→   710→                        <BusinessBadge business={row.business} />
+   711→   711→                      </div>
+   712→   712→                      <div className="mt-2 flex items-center justify-between gap-2">
+   713→   713→                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+   714→   714→                          <Switch checked={row.active ?? false} onCheckedChange={(v) => void toggleRecurring(row, v)} disabled={saving} aria-label={`Toggle ${row.name}`} />
+   715→   715→                          {row.active === false ? "Paused" : "Active"}
+   716→   716→                        </label>
+   717→   717→                        <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={() => void runRecurring(row)} disabled={saving}>
+   718→   718→                          <Play className="h-3 w-3" aria-hidden />Run now
+   719→   719→                        </Button>
+   720→   720→                      </div>
+   721→   721→                    </div>
+   722→   722→                  ))}
+   723→   723→                </div>
+   724→   724→              )}
+   725→   725→            </CardContent>
+   726→   726→          </Card>
+   727→   727→        </div>
+   728→   728→      </div>
+   729→   729→
+   730→   730→      <ExpenseFormDialog open={addOpen} onOpenChange={setAddOpen} expense={null} vehicles={vehicles.data?.items ?? []} onDone={() => void expenses.reload()} />
+   731→   731→
+   732→   732→      {/* Mobile FAB — alternate trigger for Add Expense (hidden while bulk rows
+   733→   733→          are selected so the sticky bulk bar stays unobstructed) */}
+   734→   734→      {selectedIds.size === 0 && (
+   735→   735→        <ViewFab icon={Plus} label="Add expense" onClick={() => setAddOpen(true)} />
+   736→   736→      )}
+   737→   737→      <ExpenseFormDialog open={Boolean(editTarget)} onOpenChange={(v) => !v && setEditTarget(null)} expense={editTarget} vehicles={vehicles.data?.items ?? []} onDone={() => void expenses.reload()} />
+   738→   738→      <RecurringFormDialog open={recAddOpen} onOpenChange={setRecAddOpen} onDone={() => { void recurring.reload(); void expenses.reload(); }} />
+   739→   739→
+   740→   740→      <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(v) => !v && setDeleteTarget(null)}>
+   741→   741→        <AlertDialogContent>
+   742→   742→          <AlertDialogHeader>
+   743→   743→            <AlertDialogTitle>Delete this expense?</AlertDialogTitle>
+   744→   744→            <AlertDialogDescription>
+   745→   745→              {deleteTarget?.description || deleteTarget?.categoryName || "Expense"} · {formatINR(deleteTarget?.amount ?? 0)} on {deleteTarget ? fmtDay(deleteTarget.date) : ""}.
+   746→   746→              This is permanent and audit-logged.
+   747→   747→            </AlertDialogDescription>
+   748→   748→          </AlertDialogHeader>
+   749→   749→          <AlertDialogFooter>
+   750→   750→            <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
+   751→   751→            <AlertDialogAction
+   752→   752→              className="min-h-10 bg-red-600 text-white hover:bg-red-700"
+   753→   753→              onClick={(e) => { e.preventDefault(); void removeExpense(); }}
+   754→   754→            >
+   755→   755→              {saving ? "Deleting…" : "Delete"}
+   756→   756→            </AlertDialogAction>
+   757→   757→          </AlertDialogFooter>
+   758→   758→        </AlertDialogContent>
+   759→   759→      </AlertDialog>
+   760→   760→
+   761→   761→      <AlertDialog open={bulkConfirm} onOpenChange={setBulkConfirm}>
+   762→   762→        <AlertDialogContent>
+   763→   763→          <AlertDialogHeader>
+   764→   764→            <AlertDialogTitle>Delete {selectedIds.size} selected expense{selectedIds.size === 1 ? "" : "s"}?</AlertDialogTitle>
+   765→   765→            <AlertDialogDescription>
+   766→   766→              Each deleted expense is audit-logged — a single Undo action after deleting restores every row from the audit trail.
+   767→   767→            </AlertDialogDescription>
+   768→   768→          </AlertDialogHeader>
+   769→   769→          <AlertDialogFooter>
+   770→   770→            <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
+   771→   771→            <AlertDialogAction
+   772→   772→              className="min-h-10 bg-red-600 text-white hover:bg-red-700"
+   773→   773→              onClick={(e) => { e.preventDefault(); void bulkDelete(); }}
+   774→   774→            >
+   775→   775→              Delete {selectedIds.size}
+   776→   776→            </AlertDialogAction>
+   777→   777→          </AlertDialogFooter>
+   778→   778→        </AlertDialogContent>
+   779→   779→      </AlertDialog>
+   780→   780→    </div>
+   781→   781→  );
+   782→   782→}
+   783→   783→

@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -31,11 +32,12 @@ import { cn } from "@/lib/utils";
 import { useLang, t } from "@/lib/i18n";
 import {
   Receipt, Plus, MoreHorizontal, Pencil, Trash2, Repeat, ChevronDown, Play, Wallet, Hash, Download,
+  Users, HandCoins, ArrowDownToLine, ArrowUpFromLine, Crown, Landmark, Building2, Check,
 } from "lucide-react";
 import {
   type ExpenseRec, type VehicleRec, type Option, SelectInput, Field, ErrorState, MiniBars, MoneyInput,
-  CHART_COLORS, type ListResp, useAsync, useMutation, useDebounced, fmtDay, todayStr, undoRequest,
-  UNDO_APPLIED_EVENT,
+  AreaTrend, BarsCompare, CHART_COLORS, type ListResp, useAsync, useMutation, useDebounced, fmtDay,
+  todayStr, undoRequest, UNDO_APPLIED_EVENT,
 } from "./_shared";
 
 interface ExpenseCategoryRec { id: string; name: string; business: string; kind?: string }
@@ -53,6 +55,25 @@ interface RecurringRow {
   notes?: string | null;
   active?: boolean;
   lastGeneratedMonth?: string | null;
+}
+
+interface OwnerBreakdownData {
+  range: { from: string; to: string };
+  business: string | null;
+  owners: {
+    id: string; name: string;
+    deposits: number; withdrawals: number; advances: number; spent: number;
+    manpower: number; transport: number; net: number;
+    categories: { name: string; amount: number }[];
+  }[];
+  common: { total: number; manpower: number; transport: number; categories: { name: string; amount: number }[] };
+  unattributed: { total: number; manpower: number; transport: number; categories: { name: string; amount: number }[] };
+  totals: {
+    deposits: number; withdrawals: number; advances: number; commonTotal: number;
+    unattributed: number; operating: number; capital: number; grand: number; netPosition: number;
+  };
+  daily: { day: string; deposits: number; withdrawals: number; operating: number; common: number }[];
+  byCategory: { name: string; amount: number; kind: string }[];
 }
 
 const BUSINESS_OPTIONS: Option[] = [
@@ -81,11 +102,29 @@ function BusinessBadge({ business }: { business: string }) {
       variant="outline"
       className={cn(
         "font-medium text-[11px] px-2 py-0.5 whitespace-nowrap",
-        b === "MANPOWER" && "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 border-emerald-200",
-        b === "TRANSPORT" && "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300 border-amber-200"
+        b === "MANPOWER" && "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900",
+        b === "TRANSPORT" && "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300 border-amber-200 dark:border-amber-900"
       )}
     >
       {b || "—"}
+    </Badge>
+  );
+}
+
+/** Chip shown on owner-capital rows (contributions / withdrawals). */
+function CapitalBadge() {
+  return (
+    <Badge variant="outline" className="border-violet-200 bg-violet-50 text-[10px] font-medium text-violet-700 dark:border-violet-900 dark:bg-violet-950 dark:text-violet-300">
+      Capital
+    </Badge>
+  );
+}
+
+/** "Common — shared by all owners" chip. */
+function CommonBadge() {
+  return (
+    <Badge variant="outline" className="border-sky-200 bg-sky-50 text-[10px] font-medium text-sky-700 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-300">
+      <Users className="mr-1 h-3 w-3" aria-hidden />Common
     </Badge>
   );
 }
@@ -104,9 +143,13 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
   const editing = Boolean(expense);
   const [form, setForm] = useState({
     date: todayStr(), business: "MANPOWER", categoryId: "", amount: "", method: "Cash",
-    description: "", vehicleId: "", notes: "",
+    description: "", vehicleId: "", notes: "", reason: "", spentById: "",
   });
   const [categories, setCategories] = useState<ExpenseCategoryRec[]>([]);
+  const [owners, setOwners] = useState<OwnerRec[]>([]);
+  const [meId, setMeId] = useState("");
+  const [newCatOpen, setNewCatOpen] = useState(false);
+  const [newCatName, setNewCatName] = useState("");
   const { mutate, saving } = useMutation();
 
   // Reset form each time the dialog opens (render-time state adjustment).
@@ -114,6 +157,8 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
   if (open !== prevOpen) {
     setPrevOpen(open);
     if (open) {
+      setNewCatOpen(false);
+      setNewCatName("");
       setForm({
         date: expense?.date?.slice(0, 10) ?? todayStr(),
         business: expense?.business ?? "MANPOWER",
@@ -123,6 +168,8 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
         description: expense?.description ?? "",
         vehicleId: expense?.vehicleId ?? "",
         notes: expense?.notes ?? "",
+        reason: expense?.reason ?? "",
+        spentById: expense ? (expense.isCommon ? "COMMON" : (expense.spentById ?? "")) : "",
       });
     }
   }
@@ -136,7 +183,35 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
     return () => { cancelled = true; };
   }, [open, form.business]);
 
+  // Owners (who is taking out the money) + the acting user (default attribution).
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    api.get<{ items: OwnerRec[] }>("/api/owners")
+      .then((d) => { if (!cancelled) setOwners(d.items ?? []); })
+      .catch(() => { /* non-fatal */ });
+    api.get<OwnerRec>("/api/auth/me")
+      .then((d) => { if (!cancelled) setMeId(d?.id ?? ""); })
+      .catch(() => { /* non-fatal */ });
+    return () => { cancelled = true; };
+  }, [open]);
+
   const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  const createCategory = async () => {
+    const name = newCatName.trim();
+    if (!name) { toast.error("Enter a category name"); return; }
+    const res = await mutate(
+      () => api.post<ExpenseCategoryRec>("/api/expense-categories", { name, business: form.business }),
+      `Category "${name}" created`
+    );
+    if (res.ok && res.data) {
+      setCategories((cs) => [...cs, res.data as ExpenseCategoryRec]);
+      setForm((f) => ({ ...f, categoryId: (res.data as ExpenseCategoryRec).id }));
+      setNewCatOpen(false);
+      setNewCatName("");
+    }
+  };
 
   const submit = async () => {
     const amt = parseAmount(form.amount);
@@ -150,6 +225,9 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
       method: form.method || undefined,
       description: form.description || undefined,
       notes: form.notes || undefined,
+      reason: form.reason || undefined,
+      // "" → attribute to the acting user (API default); "COMMON" → shared by all owners.
+      spentById: form.spentById || meId || undefined,
       vehicleId: form.business === "TRANSPORT" && form.vehicleId ? form.vehicleId : undefined,
     };
     const res = editing
@@ -158,12 +236,16 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
     if (res.ok) { onOpenChange(false); onDone(); }
   };
 
+  const selectedOwnerLabel = form.spentById === "COMMON"
+    ? "Common — all owners"
+    : (owners.find((o) => o.id === form.spentById)?.name ?? "You");
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{editing ? "Edit Expense" : "Add Expense"}</DialogTitle>
-          <DialogDescription>Expenses are tracked separately for each business.</DialogDescription>
+          <DialogDescription>Track who took the money, why, and which business it belongs to.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Date" required>
@@ -176,6 +258,30 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
               options={[{ label: "Manpower", value: "MANPOWER" }, { label: "Transport", value: "TRANSPORT" }]}
             />
           </Field>
+          <Field
+            label="Paid by / Owner"
+            required
+            hint={form.spentById === "COMMON" ? "Shared equally by all owners & the business" : `Attributed to ${selectedOwnerLabel}`}
+            className="sm:col-span-2"
+          >
+            <SelectInput
+              value={form.spentById}
+              onChange={set("spentById")}
+              placeholder={meId ? "Select who is taking the money…" : "Loading…"}
+              options={[
+                { label: "Common — shared by all owners & business", value: "COMMON" },
+                ...owners.map((o) => ({ label: o.name, value: o.id })),
+              ]}
+            />
+          </Field>
+          <Field label="Reason" hint="Why the money was taken / spent" className="sm:col-span-2">
+            <Input
+              value={form.reason}
+              onChange={(e) => set("reason")(e.target.value)}
+              className="h-10"
+              placeholder="e.g. Diesel for generator · Salary withdrawal · Office tea"
+            />
+          </Field>
           <Field label="Category">
             <SelectInput
               value={form.categoryId}
@@ -184,6 +290,35 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone }: {
               options={categories.map((c) => ({ label: c.name, value: c.id }))}
             />
           </Field>
+          <div className="sm:col-span-1 sm:row-start-auto">
+            {!newCatOpen ? (
+              <Button
+                type="button" variant="outline" size="sm"
+                className="mt-1 h-9 w-full gap-1 text-xs sm:mt-6"
+                onClick={() => setNewCatOpen(true)}
+              >
+                <Plus className="h-3.5 w-3.5" aria-hidden />New category
+              </Button>
+            ) : (
+              <div className="mt-1 flex gap-1.5 sm:mt-6">
+                <Input
+                  value={newCatName}
+                  onChange={(e) => setNewCatName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void createCategory(); } }}
+                  className="h-9 text-xs"
+                  placeholder={`Category for ${form.business === "TRANSPORT" ? "Transport" : "Manpower"}`}
+                  aria-label="New category name"
+                  autoFocus
+                />
+                <Button type="button" size="sm" className="h-9 shrink-0 px-2.5" onClick={() => void createCategory()} disabled={saving} aria-label="Create category">
+                  <Check className="h-3.5 w-3.5" aria-hidden />
+                </Button>
+                <Button type="button" size="sm" variant="ghost" className="h-9 shrink-0 px-2.5" onClick={() => { setNewCatOpen(false); setNewCatName(""); }} aria-label="Cancel category creation">
+                  ✕
+                </Button>
+              </div>
+            )}
+          </div>
           <Field label="Amount (₹)" required>
             <MoneyInput value={form.amount} onChange={set("amount")} min={1} className="h-10" />
           </Field>
@@ -323,6 +458,370 @@ function RecurringFormDialog({ open, onOpenChange, onDone }: {
 }
 
 // ---------------------------------------------------------------------------
+// Owner expense breakdown — detailed dashboard
+// ---------------------------------------------------------------------------
+
+function NetPositionChip({ net }: { net: number }) {
+  if (net < 0) {
+    return (
+      <Badge variant="outline" className="border-amber-200 bg-amber-50 text-[10px] font-medium text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+        Needs to deposit {formatINR(Math.abs(net))} again
+      </Badge>
+    );
+  }
+  if (net > 0) {
+    return (
+      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
+        In credit {formatINR(net)}
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="text-[10px] font-medium text-muted-foreground">
+      Settled — no balance
+    </Badge>
+  );
+}
+
+function OwnerBreakdownSection({ business, from, to }: { business: string; from: string; to: string }) {
+  const [mode, setMode] = useState<"all" | "single">("all");
+  const [focusId, setFocusId] = useState("");
+
+  const data = useAsync<OwnerBreakdownData>(
+    () => api.get("/api/expenses/owner-breakdown" + qs({ from, to, business: business || undefined })),
+    [from, to, business]
+  );
+
+  const owners = data.data?.owners ?? [];
+  const focus = owners.find((o) => o.id === focusId) ?? null;
+
+  const ownerBars = useMemo(
+    () =>
+      owners.map((o) => ({
+        name: o.name.length > 9 ? `${o.name.slice(0, 9)}…` : o.name,
+        Deposits: o.deposits,
+        Withdrawals: o.withdrawals,
+        "Business spend": o.advances,
+      })),
+    [owners]
+  );
+
+  const dailySeries = useMemo(
+    () =>
+      (data.data?.daily ?? []).map((d) => ({
+        day: d.day.slice(5), // MM-DD keeps the axis readable on phones
+        Expenses: d.operating,
+        Deposits: d.deposits,
+        Withdrawals: d.withdrawals,
+      })),
+    [data.data?.daily]
+  );
+
+  const categoryRows = useMemo(() => {
+    const rows = mode === "single" && focus ? focus.categories : (data.data?.byCategory ?? []).map((c) => ({ name: c.name, amount: c.amount }));
+    return rows
+      .slice()
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 8)
+      .map((r) => ({ label: r.name, value: r.amount, color: CHART_COLORS.amber }));
+  }, [mode, focus, data.data?.byCategory]);
+
+  const totals = data.data?.totals;
+
+  return (
+    <div className="space-y-4" aria-busy={data.loading}>
+      {data.error ? (
+        <ErrorState message={data.error} onRetry={() => void data.reload()} />
+      ) : (
+        <>
+          {/* Focus switch: all owners combined vs a single owner */}
+          <Card>
+            <CardContent className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+              <div
+                role="group"
+                aria-label="Owner expense focus"
+                className="grid w-full grid-cols-2 gap-1 rounded-xl bg-muted p-1 sm:w-auto"
+              >
+                <button
+                  type="button"
+                  className={cn(
+                    "min-h-9 rounded-lg px-3 text-xs font-medium transition-colors",
+                    mode === "all" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => setMode("all")}
+                  aria-pressed={mode === "all"}
+                >
+                  <Users className="mr-1.5 inline h-3.5 w-3.5" aria-hidden />All owners combined
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "min-h-9 rounded-lg px-3 text-xs font-medium transition-colors",
+                    mode === "single" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => { if (!focusId && owners[0]) setFocusId(owners[0].id); setMode("single"); }}
+                  aria-pressed={mode === "single"}
+                >
+                  <Crown className="mr-1.5 inline h-3.5 w-3.5" aria-hidden />Single owner
+                </button>
+              </div>
+              {mode === "single" && (
+                <div className="w-full sm:w-56">
+                  <SelectInput
+                    value={focusId}
+                    onChange={setFocusId}
+                    placeholder="Choose owner…"
+                    options={owners.map((o) => ({ label: o.name, value: o.id }))}
+                  />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Headline numbers */}
+          <StatGrid cols={2}>
+            <StatCard
+              label="Owner deposits (in)"
+              value={formatINR(totals?.deposits ?? 0)}
+              icon={ArrowDownToLine}
+              tone="positive"
+              hint="Money owners put into the business"
+            />
+            <StatCard
+              label="Owner withdrawals (out)"
+              value={formatINR(totals?.withdrawals ?? 0)}
+              icon={ArrowUpFromLine}
+              tone="negative"
+              hint="Money owners took for themselves"
+            />
+            <StatCard
+              label="Business spend by owners"
+              value={formatINR(totals?.advances ?? 0)}
+              icon={HandCoins}
+              hint="Operating expenses owners paid on behalf of the business"
+            />
+            <StatCard
+              label="Common (shared) expenses"
+              value={formatINR(totals?.commonTotal ?? 0)}
+              icon={Users}
+              hint="Shared equally by all owners & the business"
+            />
+            <StatCard
+              label="Net owner position"
+              value={formatINR(totals?.netPosition ?? 0)}
+              icon={Landmark}
+              tone={(totals?.netPosition ?? 0) >= 0 ? "positive" : "warning"}
+              hint="Deposits − withdrawals"
+            />
+            <StatCard
+              label="Operating expenses"
+              value={formatINR(totals?.operating ?? 0)}
+              icon={Receipt}
+              tone="negative"
+              hint="Feeds profit — owner deposits/withdrawals excluded"
+            />
+          </StatGrid>
+
+          {/* Single-owner focus card */}
+          {mode === "single" && (
+            focus ? (
+              <Card className="border-primary/30">
+                <CardContent className="space-y-4 p-4 sm:p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary" aria-hidden>
+                        <Crown className="h-4.5 w-4.5" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{focus.name}</p>
+                        <p className="text-[11px] text-muted-foreground">Owner expense ledger — this range</p>
+                      </div>
+                    </div>
+                    <NetPositionChip net={focus.net} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                    <div className="rounded-xl border p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Deposits in</p>
+                      <p className="mt-1 text-sm font-bold tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(focus.deposits)}</p>
+                    </div>
+                    <div className="rounded-xl border p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Took out</p>
+                      <p className="mt-1 text-sm font-bold tabular-nums text-red-600 dark:text-red-400">{formatINR(focus.withdrawals)}</p>
+                    </div>
+                    <div className="rounded-xl border p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Business spend</p>
+                      <p className="mt-1 text-sm font-bold tabular-nums">{formatINR(focus.advances)}</p>
+                    </div>
+                    <div className="rounded-xl border p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Net position</p>
+                      <p className={cn("mt-1 text-sm font-bold tabular-nums", focus.net < 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400")}>{formatINR(focus.net)}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">Business split:</span>
+                    <BusinessBadge business="MANPOWER" />
+                    <span className="font-semibold tabular-nums">{formatINR(focus.manpower)}</span>
+                    <BusinessBadge business="TRANSPORT" />
+                    <span className="font-semibold tabular-nums">{formatINR(focus.transport)}</span>
+                  </div>
+                  <div>
+                    <p className="mb-2 text-sm font-semibold">What they spent on</p>
+                    {focus.categories.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No expense rows in this range.</p>
+                    ) : (
+                      <MiniBars rows={focus.categories.slice().sort((a, b) => b.amount - a.amount).slice(0, 8).map((c) => ({ label: c.name, value: c.amount, color: CHART_COLORS.emerald }))} />
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardContent className="p-6 text-center text-sm text-muted-foreground">
+                  No active owners found. Add owners from the Owners page.
+                </CardContent>
+              </Card>
+            )
+          )}
+
+          {/* Charts — combined view */}
+          {mode === "all" && (
+            <div className="grid gap-4 xl:grid-cols-2">
+              <Card>
+                <CardContent className="p-3 sm:p-4">
+                  <p className="mb-1 text-sm font-semibold">Deposits vs withdrawals — by owner</p>
+                  <p className="mb-2 text-[11px] text-muted-foreground">Who put money in, who took money out, and whose card the business spend ran on</p>
+                  {ownerBars.length === 0 ? (
+                    <p className="flex h-44 items-center justify-center text-xs text-muted-foreground sm:h-52">No owner activity in this range</p>
+                  ) : (
+                    <BarsCompare
+                      data={ownerBars}
+                      xKey="name"
+                      showValues
+                      series={[
+                        { key: "Deposits", label: "Deposits", color: CHART_COLORS.emerald },
+                        { key: "Withdrawals", label: "Withdrawals", color: CHART_COLORS.red },
+                        { key: "Business spend", label: "Business spend", color: CHART_COLORS.amber },
+                      ]}
+                    />
+                  )}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-3 sm:p-4">
+                  <p className="mb-1 text-sm font-semibold">Daily flow</p>
+                  <p className="mb-2 text-[11px] text-muted-foreground">Operating expenses vs owner deposits & withdrawals per day</p>
+                  {dailySeries.length === 0 ? (
+                    <p className="flex h-44 items-center justify-center text-xs text-muted-foreground sm:h-52">No activity in this range</p>
+                  ) : (
+                    <AreaTrend
+                      data={dailySeries}
+                      xKey="day"
+                      series={[
+                        { key: "Expenses", label: "Operating expenses", color: CHART_COLORS.amber },
+                        { key: "Deposits", label: "Deposits", color: CHART_COLORS.emerald },
+                        { key: "Withdrawals", label: "Withdrawals", color: CHART_COLORS.red },
+                      ]}
+                    />
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {/* Category breakdown for the current focus */}
+          <div className="grid gap-4 xl:grid-cols-3">
+            <Card className="xl:col-span-1">
+              <CardContent className="p-3 sm:p-4">
+                <p className="mb-3 text-sm font-semibold">{mode === "single" ? `${focus?.name ?? "Owner"} — categories` : "All categories"}</p>
+                {data.loading ? (
+                  <div className="space-y-2.5">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-8 animate-pulse rounded-lg bg-muted" />)}</div>
+                ) : categoryRows.length === 0 ? (
+                  <p className="py-4 text-center text-xs text-muted-foreground">Nothing in this range</p>
+                ) : (
+                  <MiniBars rows={categoryRows} />
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Common (shared) expenses card */}
+            <Card className="border-sky-200/70 dark:border-sky-900 xl:col-span-1">
+              <CardContent className="space-y-3 p-3 sm:p-4">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-950 dark:text-sky-400" aria-hidden>
+                    <Users className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold">Common expenses</p>
+                    <p className="text-[11px] text-muted-foreground">For all owners & the business equally</p>
+                  </div>
+                </div>
+                <p className="text-2xl font-bold tabular-nums">{formatINR(data.data?.common.total ?? 0)}</p>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <BusinessBadge business="MANPOWER" />
+                  <span className="font-semibold tabular-nums text-foreground">{formatINR(data.data?.common.manpower ?? 0)}</span>
+                  <BusinessBadge business="TRANSPORT" />
+                  <span className="font-semibold tabular-nums text-foreground">{formatINR(data.data?.common.transport ?? 0)}</span>
+                </div>
+                {(data.data?.common.categories ?? []).length > 0 && (
+                  <MiniBars
+                    rows={(data.data?.common.categories ?? []).slice().sort((a, b) => b.amount - a.amount).slice(0, 6).map((c) => ({ label: c.name, value: c.amount, color: CHART_COLORS.teal }))}
+                  />
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Per-owner ledger table */}
+            <Card className="xl:col-span-1">
+              <CardContent className="p-3 sm:p-4">
+                <p className="mb-3 text-sm font-semibold">Owner ledger</p>
+                <div className="max-h-96 space-y-2 overflow-y-auto pr-0.5">
+                  {owners.length === 0 && !data.loading && (
+                    <p className="py-4 text-center text-xs text-muted-foreground">No owners yet</p>
+                  )}
+                  {owners.map((o) => (
+                    <button
+                      key={o.id}
+                      type="button"
+                      className={cn(
+                        "w-full rounded-xl border p-2.5 text-left transition-colors hover:bg-muted/50",
+                        mode === "single" && focusId === o.id && "border-primary/50 bg-primary/5"
+                      )}
+                      onClick={() => { setFocusId(o.id); setMode("single"); }}
+                      aria-label={`Focus ${o.name}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate text-sm font-medium">{o.name}</p>
+                        <NetPositionChip net={o.net} />
+                      </div>
+                      <div className="mt-1.5 grid grid-cols-3 gap-1.5 text-[11px]">
+                        <span className="text-muted-foreground">In <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(o.deposits, { compact: true })}</span></span>
+                        <span className="text-muted-foreground">Out <span className="font-semibold tabular-nums text-red-600 dark:text-red-400">{formatINR(o.withdrawals, { compact: true })}</span></span>
+                        <span className="text-muted-foreground">Spend <span className="font-semibold tabular-nums">{formatINR(o.advances, { compact: true })}</span></span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                {(data.data?.unattributed.total ?? 0) > 0 && (
+                  <p className="mt-3 rounded-lg border border-dashed p-2 text-[11px] text-muted-foreground">
+                    {formatINR(data.data!.unattributed.total)} of older expenses has no owner attribution (recorded before owner tracking).
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Reconciliation note — makes the zero-mismatch guarantee visible */}
+          <p className="px-1 text-[11px] text-muted-foreground">
+            Reconciliation: operating {formatINR(totals?.operating ?? 0)} + owner capital {formatINR(totals?.capital ?? 0)} = all expense rows {formatINR(totals?.grand ?? 0)}.
+            Dashboards, reports and net profit count <span className="font-semibold text-foreground">operating expenses only</span> — owner deposits & withdrawals are capital, never P&amp;L expenses.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main view
 // ---------------------------------------------------------------------------
 
@@ -354,7 +853,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
   const owners = useAsync<{ items: OwnerRec[] }>(() => api.get("/api/owners"), []);
 
   // Main list
-  const expenses = useAsync<ListResp<ExpenseRec> & { totals?: { amount: number } }>(
+  const expenses = useAsync<ListResp<ExpenseRec> & { totals?: { amount: number; operating?: number; capital?: number; common?: number } }>(
     () => api.get("/api/expenses" + qs({
       business: business || undefined,
       categoryId: categoryId || undefined,
@@ -483,8 +982,13 @@ export default function ExpensesView({ navigate }: ViewProps) {
       key: "description", label: t(lang, "col.expense"), primary: true,
       render: (r) => (
         <div className="min-w-0">
-          <p className="truncate font-medium">{r.description || r.categoryName || "Untitled expense"}</p>
-          <p className="truncate text-[11px] text-muted-foreground">{fmtDay(r.date)} · {r.categoryName ?? "Uncategorized"}</p>
+          <p className="flex items-center gap-1.5 truncate font-medium">
+            {r.description || r.categoryName || "Untitled expense"}
+            {r.kind === "CAPITAL" && <CapitalBadge />}
+          </p>
+          <p className="truncate text-[11px] text-muted-foreground">
+            {fmtDay(r.date)} · {r.categoryName ?? "Uncategorized"}{r.reason ? ` · ${r.reason}` : ""}
+          </p>
         </div>
       ),
       value: (r) => r.description || r.categoryName || "Untitled expense",
@@ -493,7 +997,21 @@ export default function ExpensesView({ navigate }: ViewProps) {
     { key: "business", label: t(lang, "col.business"), render: (r) => <BusinessBadge business={r.business} />, value: (r) => r.business },
     { key: "category", label: t(lang, "col.category"), value: (r) => r.categoryName ?? "—", hideOnMobile: true },
     { key: "vehicle", label: t(lang, "col.vehicle"), value: (r) => r.vehicleName ?? "—", hideOnMobile: true },
-    { key: "spentBy", label: t(lang, "col.spentBy"), value: (r) => r.spentByName ?? "—", hideOnMobile: true },
+    {
+      key: "spentBy", label: t(lang, "col.spentBy"),
+      render: (r) =>
+        r.isCommon ? (
+          <CommonBadge />
+        ) : (
+          <span className="flex items-center gap-1 text-sm"><Crown className="h-3 w-3 shrink-0 text-amber-500" aria-hidden />{r.spentByName ?? "—"}</span>
+        ),
+      value: (r) => (r.isCommon ? "Common — all owners" : (r.spentByName ?? "—")),
+    },
+    {
+      key: "reason", label: "Reason", hideOnMobile: true,
+      render: (r) => <span className="text-xs text-muted-foreground">{r.reason ?? "—"}</span>,
+      value: (r) => r.reason ?? "",
+    },
     {
       key: "amount", label: t(lang, "col.amount"), className: "text-right",
       render: (r) => <span className="font-semibold tabular-nums">{formatINR(r.amount)}</span>,
@@ -524,6 +1042,10 @@ export default function ExpensesView({ navigate }: ViewProps) {
     },
   ];
 
+  const totals = expenses.data?.totals;
+  const operating = totals?.operating ?? 0;
+  const capital = totals?.capital ?? 0;
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -536,196 +1058,242 @@ export default function ExpensesView({ navigate }: ViewProps) {
         }
       />
 
-      {/* Filters */}
-      <Card>
-        <CardContent className="space-y-3 p-3 sm:p-4">
-          <div className="grid grid-cols-2 gap-2.5 sm:gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <SelectInput value={business} onChange={onBusinessChange} options={BUSINESS_OPTIONS} placeholder="All businesses" />
-            <SelectInput
-              value={categoryId}
-              onChange={setCategoryId}
-              options={[{ label: "All categories", value: "" }, ...(categories.data?.items ?? []).map((c) => ({ label: c.name, value: c.id }))]}
-              placeholder="All categories"
-            />
-            {business === "TRANSPORT" && (
-              <SelectInput
-                value={vehicleId}
-                onChange={setVehicleId}
-                options={[{ label: "All vehicles", value: "" }, ...vehicleItems.map((v) => ({ label: v.name, value: v.id }))]}
-                placeholder="All vehicles"
-              />
-            )}
-            <SelectInput
-              value={ownerId}
-              onChange={setOwnerId}
-              options={[{ label: "All owners", value: "" }, ...(owners.data?.items ?? []).map((o) => ({ label: o.name, value: o.id }))]}
-              placeholder="All owners"
-            />
-          </div>
-          <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center">
-            <div className="flex w-full items-center gap-2 overflow-hidden">
-              <RangeSelector
-                value={rangeKey}
-                onChange={(r) => { setRangeKey(r); }}
-                className="flex-1"
-              />
-              <Button
-                size="sm"
-                variant={rangeKey === "custom" ? "default" : "outline"}
-                className="h-8 shrink-0 rounded-full px-3 text-xs"
-                onClick={() => {
-                  if (rangeKey === "custom") { setRangeKey("month"); setCustomFrom(""); setCustomTo(""); }
-                  else setRangeKey("custom");
-                }}
-              >
-                Custom
-              </Button>
-            </div>
-            <SearchInput value={search} onChange={setSearch} placeholder="Search description…" className="lg:w-64" />
-          </div>
-          {rangeKey === "custom" && (
-            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed p-2.5">
-              <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="h-9 w-full sm:w-40" aria-label="From date" />
-              <span className="text-xs text-muted-foreground">to</span>
-              <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-9 w-full sm:w-40" aria-label="To date" />
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <Tabs defaultValue="expenses">
+        <TabsList className="h-10 w-full sm:w-auto" aria-label="Expense sections">
+          <TabsTrigger value="expenses" className="flex-1 gap-1.5 sm:flex-none sm:px-4">
+            <Receipt className="h-3.5 w-3.5" aria-hidden />Expenses
+          </TabsTrigger>
+          <TabsTrigger value="owners" className="flex-1 gap-1.5 sm:flex-none sm:px-4">
+            <Crown className="h-3.5 w-3.5" aria-hidden />Owner Breakdown
+          </TabsTrigger>
+        </TabsList>
 
-      <StatGrid cols={2}>
-        <StatCard label="Total expenses (filtered)" value={formatINR(expenses.data?.totals?.amount ?? 0)} icon={Wallet} tone="negative" />
-        <StatCard label="Records" value={String(expenses.data?.total ?? items.length)} icon={Hash} hint="Matching current filters" />
-      </StatGrid>
-
-      <div className="grid gap-4 xl:grid-cols-3">
-        {/* List */}
-        <Card className="xl:col-span-2">
-          <CardContent className="p-3 sm:p-4">
-            {expenses.error ? (
-              <ErrorState message={expenses.error} onRetry={() => void expenses.reload()} />
-            ) : (
-              <DataTable
-                columns={columns}
-                rows={items}
-                rowKey={(r) => r.id}
-                exportName="expenses"
-                loading={expenses.loading}
-                emptyIcon={Receipt}
-                emptyTitle="No expenses match"
-                emptyDescription="Try widening the date range or clearing filters."
-                selectKey={(r) => r.id}
-                selectedIds={selectedIds}
-                onSelectedChange={setSelectedIds}
-                bulkBar={(ids) => (
-                  <>
-                    <span className="px-1.5 text-xs font-semibold tabular-nums whitespace-nowrap">
-                      {ids.length} selected
-                    </span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 gap-1.5 text-xs"
-                      onClick={() =>
-                        downloadCsv(
-                          "expenses-selected",
-                          columns,
-                          items.filter((r) => ids.includes(r.id))
-                        )
-                      }
-                      aria-label={`Export ${ids.length} selected expenses as CSV`}
-                    >
-                      <Download className="h-3.5 w-3.5" aria-hidden />Export CSV
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="h-8 gap-1.5 text-xs"
-                      onClick={() => setBulkConfirm(true)}
-                      aria-label={`Delete ${ids.length} selected expenses`}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" aria-hidden />Delete
-                    </Button>
-                  </>
+        {/* ------------------------- Expenses tab ------------------------- */}
+        <TabsContent value="expenses" className="mt-4 space-y-4">
+          {/* Filters */}
+          <Card>
+            <CardContent className="space-y-3 p-3 sm:p-4">
+              <div className="grid grid-cols-2 gap-2.5 sm:gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <SelectInput value={business} onChange={onBusinessChange} options={BUSINESS_OPTIONS} placeholder="All businesses" />
+                <SelectInput
+                  value={categoryId}
+                  onChange={setCategoryId}
+                  options={[{ label: "All categories", value: "" }, ...(categories.data?.items ?? []).map((c) => ({ label: c.name, value: c.id }))]}
+                  placeholder="All categories"
+                />
+                {business === "TRANSPORT" && (
+                  <SelectInput
+                    value={vehicleId}
+                    onChange={setVehicleId}
+                    options={[{ label: "All vehicles", value: "" }, ...vehicleItems.map((v) => ({ label: v.name, value: v.id }))]}
+                    placeholder="All vehicles"
+                  />
                 )}
-              />
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Side: breakdown + recurring */}
-        <div className="space-y-4">
-          <Card>
-            <CardContent className="p-3 sm:p-4">
-              <p className="mb-3 text-sm font-semibold">Category breakdown</p>
-              {expenses.loading ? (
-                <div className="space-y-2.5">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-8 rounded-lg bg-muted animate-pulse" />)}</div>
-              ) : (
-                <MiniBars rows={breakdown.map((b) => ({ ...b, color: CHART_COLORS.amber }))} />
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-3 sm:p-4">
-              <div
-                role="button"
-                tabIndex={0}
-                className="flex w-full cursor-pointer items-center justify-between gap-2"
-                onClick={() => setRecOpen((o) => !o)}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setRecOpen((o) => !o); } }}
-                aria-expanded={recOpen}
-                aria-label="Toggle recurring expenses"
-              >
-                <span className="flex items-center gap-2 text-sm font-semibold">
-                  <Repeat className="h-4 w-4 text-primary" aria-hidden />Recurring
-                  <Badge variant="outline" className="text-[10px]">{recurring.data?.length ?? 0}</Badge>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <Button
-                    size="sm" variant="outline" className="h-8 gap-1 text-xs"
-                    onClick={(e) => { e.stopPropagation(); setRecAddOpen(true); }}
-                  >
-                    <Plus className="h-3 w-3" aria-hidden />New
-                  </Button>
-                  <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", recOpen && "rotate-180")} aria-hidden />
-                </span>
+                <SelectInput
+                  value={ownerId}
+                  onChange={setOwnerId}
+                  options={[
+                    { label: "All owners", value: "" },
+                    { label: "Common — shared by all", value: "COMMON" },
+                    ...((owners.data?.items ?? []).map((o) => ({ label: o.name, value: o.id }))),
+                  ]}
+                  placeholder="All owners"
+                />
               </div>
-
-              {recOpen && (
-                <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-0.5">
-                  {recurring.loading && <div className="h-16 animate-pulse rounded-lg bg-muted" />}
-                  {!recurring.loading && (recurring.data ?? []).length === 0 && (
-                    <p className="py-4 text-center text-xs text-muted-foreground">No recurring expenses yet</p>
-                  )}
-                  {(recurring.data ?? []).map((row) => (
-                    <div key={row.id} className="rounded-xl border p-2.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">{row.name}</p>
-                          <p className="mt-0.5 text-[11px] text-muted-foreground">
-                            {formatINR(row.amount)} · {row.frequency?.toLowerCase() || "monthly"} · Last: {row.lastGeneratedMonth ?? "—"}
-                          </p>
-                        </div>
-                        <BusinessBadge business={row.business} />
-                      </div>
-                      <div className="mt-2 flex items-center justify-between gap-2">
-                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Switch checked={row.active ?? false} onCheckedChange={(v) => void toggleRecurring(row, v)} disabled={saving} aria-label={`Toggle ${row.name}`} />
-                          {row.active === false ? "Paused" : "Active"}
-                        </label>
-                        <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={() => void runRecurring(row)} disabled={saving}>
-                          <Play className="h-3 w-3" aria-hidden />Run now
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
+              <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center">
+                <div className="flex w-full items-center gap-2 overflow-hidden">
+                  <RangeSelector
+                    value={rangeKey}
+                    onChange={(r) => { setRangeKey(r); }}
+                    className="flex-1"
+                  />
+                  <Button
+                    size="sm"
+                    variant={rangeKey === "custom" ? "default" : "outline"}
+                    className="h-8 shrink-0 rounded-full px-3 text-xs"
+                    onClick={() => {
+                      if (rangeKey === "custom") { setRangeKey("month"); setCustomFrom(""); setCustomTo(""); }
+                      else setRangeKey("custom");
+                    }}
+                  >
+                    Custom
+                  </Button>
+                </div>
+                <SearchInput value={search} onChange={setSearch} placeholder="Search description…" className="lg:w-64" />
+              </div>
+              {rangeKey === "custom" && (
+                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed p-2.5">
+                  <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="h-9 w-full sm:w-40" aria-label="From date" />
+                  <span className="text-xs text-muted-foreground">to</span>
+                  <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-9 w-full sm:w-40" aria-label="To date" />
                 </div>
               )}
             </CardContent>
           </Card>
-        </div>
-      </div>
+
+          <StatGrid cols={2}>
+            <StatCard
+              label="Operating expenses"
+              value={formatINR(operating)}
+              icon={Wallet}
+              tone="negative"
+              hint="Feeds profit & reports"
+            />
+            <StatCard
+              label="Owner capital"
+              value={formatINR(capital)}
+              icon={Landmark}
+              hint="Deposits + withdrawals (not expenses)"
+            />
+            <StatCard
+              label="Common (shared)"
+              value={formatINR(totals?.common ?? 0)}
+              icon={Users}
+              hint="Shared by all owners & business"
+            />
+            <StatCard label="Records" value={String(expenses.data?.total ?? items.length)} icon={Hash} hint="Matching current filters" />
+          </StatGrid>
+
+          {/* Reconciliation strip — visible guarantee the numbers always add up */}
+          <p className="px-1 text-[11px] text-muted-foreground">
+            Reconciliation: operating {formatINR(operating)} + owner capital {formatINR(capital)} = total {formatINR(totals?.amount ?? 0)} across every surface.
+          </p>
+
+          <div className="grid gap-4 xl:grid-cols-3">
+            {/* List */}
+            <Card className="xl:col-span-2">
+              <CardContent className="p-3 sm:p-4">
+                {expenses.error ? (
+                  <ErrorState message={expenses.error} onRetry={() => void expenses.reload()} />
+                ) : (
+                  <DataTable
+                    columns={columns}
+                    rows={items}
+                    rowKey={(r) => r.id}
+                    exportName="expenses"
+                    loading={expenses.loading}
+                    emptyIcon={Receipt}
+                    emptyTitle="No expenses match"
+                    emptyDescription="Try widening the date range or clearing filters."
+                    selectKey={(r) => r.id}
+                    selectedIds={selectedIds}
+                    onSelectedChange={setSelectedIds}
+                    bulkBar={(ids) => (
+                      <>
+                        <span className="px-1.5 text-xs font-semibold tabular-nums whitespace-nowrap">
+                          {ids.length} selected
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5 text-xs"
+                          onClick={() =>
+                            downloadCsv(
+                              "expenses-selected",
+                              columns,
+                              items.filter((r) => ids.includes(r.id))
+                            )
+                          }
+                          aria-label={`Export ${ids.length} selected expenses as CSV`}
+                        >
+                          <Download className="h-3.5 w-3.5" aria-hidden />Export CSV
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="h-8 gap-1.5 text-xs"
+                          onClick={() => setBulkConfirm(true)}
+                          aria-label={`Delete ${ids.length} selected expenses`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden />Delete
+                        </Button>
+                      </>
+                    )}
+                  />
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Side: breakdown + recurring */}
+            <div className="space-y-4">
+              <Card>
+                <CardContent className="p-3 sm:p-4">
+                  <p className="mb-3 text-sm font-semibold">Category breakdown</p>
+                  {expenses.loading ? (
+                    <div className="space-y-2.5">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-8 rounded-lg bg-muted animate-pulse" />)}</div>
+                  ) : (
+                    <MiniBars rows={breakdown.map((b) => ({ ...b, color: CHART_COLORS.amber }))} />
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="p-3 sm:p-4">
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    className="flex w-full cursor-pointer items-center justify-between gap-2"
+                    onClick={() => setRecOpen((o) => !o)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setRecOpen((o) => !o); } }}
+                    aria-expanded={recOpen}
+                    aria-label="Toggle recurring expenses"
+                  >
+                    <span className="flex items-center gap-2 text-sm font-semibold">
+                      <Repeat className="h-4 w-4 text-primary" aria-hidden />Recurring
+                      <Badge variant="outline" className="text-[10px]">{recurring.data?.length ?? 0}</Badge>
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <Button
+                        size="sm" variant="outline" className="h-8 gap-1 text-xs"
+                        onClick={(e) => { e.stopPropagation(); setRecAddOpen(true); }}
+                      >
+                        <Plus className="h-3 w-3" aria-hidden />New
+                      </Button>
+                      <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", recOpen && "rotate-180")} aria-hidden />
+                    </span>
+                  </div>
+
+                  {recOpen && (
+                    <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-0.5">
+                      {recurring.loading && <div className="h-16 animate-pulse rounded-lg bg-muted" />}
+                      {!recurring.loading && (recurring.data ?? []).length === 0 && (
+                        <p className="py-4 text-center text-xs text-muted-foreground">No recurring expenses yet</p>
+                      )}
+                      {(recurring.data ?? []).map((row) => (
+                        <div key={row.id} className="rounded-xl border p-2.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium">{row.name}</p>
+                              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                                {formatINR(row.amount)} · {row.frequency?.toLowerCase() || "monthly"} · Last: {row.lastGeneratedMonth ?? "—"}
+                              </p>
+                            </div>
+                            <BusinessBadge business={row.business} />
+                          </div>
+                          <div className="mt-2 flex items-center justify-between gap-2">
+                            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Switch checked={row.active ?? false} onCheckedChange={(v) => void toggleRecurring(row, v)} disabled={saving} aria-label={`Toggle ${row.name}`} />
+                              {row.active === false ? "Paused" : "Active"}
+                            </label>
+                            <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={() => void runRecurring(row)} disabled={saving}>
+                              <Play className="h-3 w-3" aria-hidden />Run now
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </TabsContent>
+
+        {/* ---------------------- Owner Breakdown tab ---------------------- */}
+        <TabsContent value="owners" className="mt-4">
+          <OwnerBreakdownSection business={business} from={eff.from} to={eff.to} />
+        </TabsContent>
+      </Tabs>
 
       <ExpenseFormDialog open={addOpen} onOpenChange={setAddOpen} expense={null} vehicles={vehicles.data?.items ?? []} onDone={() => void expenses.reload()} />
 

@@ -24,6 +24,8 @@ export const GET = handleRoute(async ({ req }) => {
       description: true,
       vehicleName: true,
       spentByName: true,
+      isCommon: true,
+      kind: true,
       amount: true,
     },
   });
@@ -34,13 +36,20 @@ export const GET = handleRoute(async ({ req }) => {
     business: e.business,
     categoryName: e.categoryName ?? "Uncategorized",
     description: e.description ?? (e.vehicleName ? `Vehicle: ${e.vehicleName}` : "—"),
-    spentByName: e.spentByName ?? "Unattributed",
+    isCommon: e.isCommon,
+    spentByName: e.isCommon ? "Common — all owners" : (e.spentByName ?? "Unattributed"),
+    kind: e.kind,
     amount: round2(e.amount),
   }));
 
+  const operating = round2(items.filter((r) => r.kind === "OPERATING").reduce((s, r) => s + r.amount, 0));
+  const capital = round2(items.filter((r) => r.kind === "CAPITAL").reduce((s, r) => s + r.amount, 0));
   const totals = {
     amount: round2(items.reduce((s, r) => s + r.amount, 0)),
+    operating,
+    capital,
     count: items.length,
+    note: "Operating expenses feed profit; owner contributions/withdrawals are capital movements.",
   };
 
   return {
@@ -50,6 +59,7 @@ export const GET = handleRoute(async ({ req }) => {
       { key: "categoryName", label: "Category", type: "string" },
       { key: "description", label: "Description", type: "string" },
       { key: "spentByName", label: "Spent By", type: "string" },
+      { key: "kind", label: "Kind", type: "string" },
       { key: "amount", label: "Amount", type: "currency" },
     ],
     rows: items,

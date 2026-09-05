@@ -25,7 +25,7 @@ export const GET = handleRoute(async ({ req }) => {
         })
       : Promise.resolve(null),
     needManpower
-      ? db.expense.aggregate({ where: { business: "MANPOWER", date: { gte: from, lte: to } }, _sum: { amount: true } })
+      ? db.expense.aggregate({ where: { business: "MANPOWER", kind: "OPERATING", date: { gte: from, lte: to } }, _sum: { amount: true } })
       : Promise.resolve(null),
     needTransport
       ? db.trip.findMany({
@@ -34,7 +34,7 @@ export const GET = handleRoute(async ({ req }) => {
         })
       : Promise.resolve([]),
     needTransport
-      ? db.expense.aggregate({ where: { business: "TRANSPORT", date: { gte: from, lte: to } }, _sum: { amount: true } })
+      ? db.expense.aggregate({ where: { business: "TRANSPORT", kind: "OPERATING", date: { gte: from, lte: to } }, _sum: { amount: true } })
       : Promise.resolve(null),
   ]);
 

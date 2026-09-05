@@ -26,7 +26,7 @@ export const GET = handleRoute(async ({ req }) => {
       select: { startAt: true, paidAmount: true },
     }),
     db.expense.findMany({
-      where: { date: { gte: from, lte: to } },
+      where: { kind: "OPERATING", date: { gte: from, lte: to } },
       select: { date: true, amount: true, business: true },
     }),
   ]);

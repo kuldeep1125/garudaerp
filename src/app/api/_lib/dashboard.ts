@@ -58,7 +58,7 @@ export async function manpowerBlock(from: Date, to: Date): Promise<ManpowerBlock
     }),
     db.propertyPayment.aggregate({ where: { date: { gte: from, lte: to } }, _sum: { amount: true } }),
     db.advance.aggregate({ where: { date: { gte: from, lte: to } }, _sum: { amount: true } }),
-    db.expense.aggregate({ where: { business: "MANPOWER", date: { gte: from, lte: to } }, _sum: { amount: true } }),
+    db.expense.aggregate({ where: { business: "MANPOWER", kind: "OPERATING", date: { gte: from, lte: to } }, _sum: { amount: true } }),
     loadAllLedgers(),
   ]);
   const employeeIds = new Set<string>();
@@ -103,7 +103,7 @@ export async function transportBlock(from: Date, to: Date): Promise<TransportBlo
       where: { startAt: { gte: from, lte: to }, status: { not: "CANCELLED" } },
       select: { vehicleId: true, finalAmount: true, agreedAmount: true, extraCharges: true, paidAmount: true },
     }),
-    db.expense.aggregate({ where: { business: "TRANSPORT", date: { gte: from, lte: to } }, _sum: { amount: true } }),
+    db.expense.aggregate({ where: { business: "TRANSPORT", kind: "OPERATING", date: { gte: from, lte: to } }, _sum: { amount: true } }),
     vehicleStatsMap((await db.vehicle.findMany({ select: { id: true } })).map((v) => v.id)),
   ]);
 

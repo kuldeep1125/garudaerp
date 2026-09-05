@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { handleRoute, readBody, parseDate, HttpError } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
-import { requirePositiveAmount } from "@/app/api/_lib/engine";
+import { requirePositiveAmount, resolveExpenseAttribution, expenseKindForCategory } from "@/app/api/_lib/engine";
 
 export const PUT = handleRoute(async ({ owner, params, req }) => {
   const { id } = params;
@@ -16,6 +16,7 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
   if (body.method !== undefined) data.method = body.method === null || body.method === "" ? null : String(body.method);
   if (body.description !== undefined) data.description = body.description === null || body.description === "" ? null : String(body.description);
   if (body.notes !== undefined) data.notes = body.notes === null || body.notes === "" ? null : String(body.notes);
+  if (body.reason !== undefined) data.reason = body.reason === null || body.reason === "" ? null : String(body.reason);
 
   if (body.categoryId !== undefined) {
     if (body.categoryId === null || body.categoryId === "") {
@@ -28,6 +29,11 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
       data.categoryName = cat.name;
     }
   }
+  // Re-stamp capital/operating whenever the category (name) changes.
+  if (data.categoryName !== undefined) {
+    data.kind = expenseKindForCategory(data.categoryName as string | null);
+  }
+
   if (body.vehicleId !== undefined) {
     if (body.vehicleId === null || body.vehicleId === "") {
       data.vehicleId = null;
@@ -39,6 +45,18 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
       data.vehicleName = vehicle.name;
     }
   }
+
+  // Owner attribution: explicit isCommon flag wins; otherwise the selected owner.
+  if (body.isCommon !== undefined || body.spentById !== undefined) {
+    const attribution = await resolveExpenseAttribution(
+      { isCommon: body.isCommon, spentById: body.spentById },
+      owner,
+    );
+    data.isCommon = attribution.isCommon;
+    data.spentById = attribution.spentById;
+    data.spentByName = attribution.spentByName;
+  }
+
   if (!Object.keys(data).length) throw new HttpError(400, "No editable fields provided");
 
   const expense = await db.expense.update({ where: { id }, data });
@@ -48,8 +66,8 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
     module: "EXPENSE",
     recordId: id,
     recordLabel: `${existing.business} ₹${expense.amount.toLocaleString("en-IN")} — ${expense.categoryName ?? "Uncategorized"}`,
-    previousValue: { amount: existing.amount, description: existing.description, categoryName: existing.categoryName, date: existing.date },
-    newValue: { amount: expense.amount, description: expense.description, categoryName: expense.categoryName, date: expense.date },
+    previousValue: { amount: existing.amount, description: existing.description, categoryName: existing.categoryName, date: existing.date, isCommon: existing.isCommon, spentByName: existing.spentByName, reason: existing.reason },
+    newValue: { amount: expense.amount, description: expense.description, categoryName: expense.categoryName, date: expense.date, isCommon: expense.isCommon, spentByName: expense.spentByName, reason: expense.reason },
   });
   return expense;
 });

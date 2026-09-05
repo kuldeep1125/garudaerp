@@ -677,6 +677,7 @@ export default function ReportsView(_props: ViewProps) {
                         data={data.chart}
                         xKey="label"
                         height={260}
+                        showValues
                         series={[
                           { key: "revenue", label: "Revenue", color: CHART_COLORS.emerald },
                           { key: "cost", label: "Est. cost", color: CHART_COLORS.red },

@@ -250,6 +250,9 @@ model Expense {
   vehicleName   String?
   spentById     String?
   spentByName   String?
+  isCommon      Boolean @default(false) // shared by all owners & the business — not one owner's personal spend
+  reason        String? // why the money was taken / spent (owner withdrawals, advances, etc.)
+  kind          String  @default("OPERATING") // OPERATING | CAPITAL (owner contribution / withdrawal — excluded from P&L expenses)
   createdById   String?
   createdByName String?
   reference     String? // idempotency key for auto-generated records (EMI-xxx, MNT-xxx, REC-xxx)
@@ -257,6 +260,7 @@ model Expense {
 
   @@index([business, date])
   @@index([vehicleId])
+  @@index([spentById])
   @@index([date])
 }
 

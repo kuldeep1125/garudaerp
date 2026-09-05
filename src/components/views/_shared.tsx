@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  LabelList,
   BarChart, Bar,
 } from "recharts";
 import {
@@ -159,9 +160,13 @@ export interface ExpenseRec {
   method?: string | null;
   description?: string | null;
   notes?: string | null;
+  reason?: string | null;
   vehicleId?: string | null;
   vehicleName?: string | null;
+  spentById?: string | null;
   spentByName?: string | null;
+  isCommon?: boolean;
+  kind?: string; // OPERATING | CAPITAL
 }
 
 export interface VehicleRec {
@@ -672,12 +677,14 @@ export function AreaTrend({ data, xKey, series, height, className }: {
   );
 }
 
-export function BarsCompare({ data, xKey, series, height, className }: {
+export function BarsCompare({ data, xKey, series, height, className, showValues }: {
   data: Record<string, unknown>[]; xKey: string; series: SeriesDef[];
   /** fixed pixel height — omit to use the responsive height classes */
   height?: number;
   /** responsive height classes (e.g. "h-44 sm:h-52 lg:h-60"); used when `height` is not set */
   className?: string;
+  /** render the ₹ value on top of every bar (themed via .recharts-label-list CSS) */
+  showValues?: boolean;
 }) {
   return (
     <div
@@ -685,14 +692,23 @@ export function BarsCompare({ data, xKey, series, height, className }: {
       style={height === undefined ? undefined : { height }}
     >
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 8, right: 8, left: -14, bottom: 0 }} barCategoryGap="24%">
+        <BarChart data={data} margin={{ top: showValues ? 24 : 8, right: 8, left: -14, bottom: 0 }} barCategoryGap="24%">
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
           <XAxis dataKey={xKey} tick={AXIS_TICK} tickLine={false} axisLine={false} minTickGap={16} />
           <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={56} tickFormatter={(v) => formatINR(Number(v), { compact: true })} />
           <Tooltip formatter={(v) => formatINR(Number(v))} contentStyle={TOOLTIP_STYLE} cursor={{ fill: "var(--muted)", opacity: 0.5 }} />
           {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />}
           {series.map((s) => (
-            <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} radius={[4, 4, 4, 4]} maxBarSize={30} />
+            <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} radius={[4, 4, 4, 4]} maxBarSize={30}>
+              {showValues && (
+                <LabelList
+                  dataKey={s.key}
+                  position="top"
+                  fontSize={10}
+                  formatter={(v: unknown) => (Number(v) > 0 ? formatINR(Number(v), { compact: true }) : "")}
+                />
+              )}
+            </Bar>
           ))}
         </BarChart>
       </ResponsiveContainer>
