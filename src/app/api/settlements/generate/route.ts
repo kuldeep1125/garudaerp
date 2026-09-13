@@ -2,17 +2,20 @@ import { db } from "@/lib/db";
 import { handleRoute, readBody, requireFields, monthBounds } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
-import { startOfDay, salaryOvertimeForMonth } from "@/app/api/_lib/engine";
+import { startOfDay, salariedMonthPay, payValuesOf } from "@/app/api/_lib/engine";
 
 /**
  * Settlement engine:
  * - Deletes previous DRAFT settlements of the month (releasing their linked advances).
  * - FINALIZED/PAID settlements are untouched; those employees are skipped.
  * - Generates DRAFTs for ACTIVE employees (plus non-active employees who worked in
- *   the month) that have billable deployments and/or adjustments. Active SALARIED
- *   employees always get a draft (salary is owed even with zero deployments).
- * - SALARIED gross = monthlySalary + overtime ((deployments − threshold) × rate);
- *   synthetic work lines record the salary and the overtime.
+ *   the month) that have billable deployments and/or adjustments. Salaried-as-of-
+ *   month-end employees always get a draft (salary is owed even with zero deployments).
+ * - SALARIED gross = salary (prorated per active day, resolved through the
+ *   effective-dated pay history — the SAME formula the dashboards accrue) +
+ *   overtime ((deployments − threshold) × rate with the threshold/rate in force
+ *   at month end). Settled months therefore always reconcile with reports, and
+ *   later pay edits can never rewrite a settled month.
  * - Contractor commission (Σ snapshotted cuts on the month's deployments) is
  *   deducted from the employee's net and paid to the contractor.
  * - Advances are deducted FIFO by advance date; partially-consumed advances are linked.
@@ -24,10 +27,11 @@ export const POST = handleRoute(async ({ owner, req }) => {
   const { from, to } = monthBounds(month);
 
   // Candidate employees: ACTIVE, plus anyone non-ACTIVE with billable work in the month.
+  const EMP_SELECT = { id: true, fullName: true, code: true, designation: true, joiningDate: true, status: true, employmentType: true, standardRate: true, monthlySalary: true, overtimeThreshold: true, overtimeRate: true, onBusinessRent: true, rentAmount: true, rentMode: true, hasContractor: true, contractorName: true, contractorRateCut: true } as const;
   const [activeEmployees, nonActiveWorked] = await Promise.all([
     db.employee.findMany({
       where: { status: "ACTIVE" },
-      select: { id: true, fullName: true, code: true, designation: true, employmentType: true, monthlySalary: true, overtimeThreshold: true, overtimeRate: true },
+      select: EMP_SELECT,
     }),
     db.deployment.findMany({
       where: { date: { gte: from, lte: to }, employee: { status: { not: "ACTIVE" } } },
@@ -41,10 +45,18 @@ export const POST = handleRoute(async ({ owner, req }) => {
   if (extraIds.length) {
     const extra = await db.employee.findMany({
       where: { id: { in: extraIds } },
-      select: { id: true, fullName: true, code: true, designation: true, employmentType: true, monthlySalary: true, overtimeThreshold: true, overtimeRate: true },
+      select: EMP_SELECT,
     });
     candidates.push(...extra);
   }
+
+  // Last-ever work date per non-ACTIVE candidate — caps salary accrual at the
+  // day the employee actually left (same rule the dashboards use).
+  const nonActiveIds = candidates.filter((e) => e.status !== "ACTIVE").map((e) => e.id);
+  const lastWorks = nonActiveIds.length
+    ? await db.deployment.groupBy({ by: ["employeeId"], _max: { date: true }, where: { employeeId: { in: nonActiveIds } } })
+    : [];
+  const lastWorkBy = new Map(lastWorks.map((r) => [r.employeeId, r._max.date as Date | null]));
 
   // Bulk-fetch month data once (no N+1).
   const [deps, adjs, existingSettlements] = await Promise.all([
@@ -92,7 +104,19 @@ export const POST = handleRoute(async ({ owner, req }) => {
       if (lockedEmployeeIds.has(emp.id)) continue;
       const empDeps = depsByEmp.get(emp.id) ?? [];
       const additions = adjByEmp.get(emp.id) ?? 0;
-      const isSalaried = emp.employmentType === "SALARIED";
+
+      // Salaried pay via the effective-dated history — aligned 1:1 with the
+      // dashboard accrual. wasSalaried = terms in force at the month's end.
+      const pay = await salariedMonthPay({
+        employeeId: emp.id,
+        month,
+        joiningDate: emp.joiningDate,
+        status: emp.status,
+        lastWork: lastWorkBy.get(emp.id) ?? null,
+        deploymentsInMonth: empDeps.length,
+        current: payValuesOf(emp),
+      });
+      const isSalaried = pay.wasSalaried;
       if (!empDeps.length && Math.abs(additions) < 0.005 && !isSalaried) continue;
 
       // Contractor commission for the month — snapshot Σ of the deployment cuts.
@@ -109,17 +133,16 @@ export const POST = handleRoute(async ({ owner, req }) => {
 
       if (isSalaried) {
         // Salaried pay model — deployments are attendance; salary + overtime are the gross.
-        const so = salaryOvertimeForMonth(emp, empDeps.length);
-        grossEarnings = so.total;
+        grossEarnings = pay.total;
         const monthEnd = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0);
-        lines.push({ date: monthEnd, propertyName: "Monthly salary", shift: "SALARY", rate: so.salary, amount: so.salary });
-        if (so.overtime > 0) {
+        lines.push({ date: monthEnd, propertyName: "Monthly salary", shift: "SALARY", rate: pay.salary, amount: pay.salary });
+        if (pay.overtime > 0) {
           lines.push({
             date: monthEnd,
-            propertyName: `Overtime — ${so.extraDeployments} deployment(s) beyond ${so.threshold}`,
+            propertyName: `Overtime — ${pay.extraDeployments} deployment(s) beyond ${pay.threshold}`,
             shift: "OVERTIME",
-            rate: so.overtime / so.extraDeployments,
-            amount: so.overtime,
+            rate: pay.extraDeployments > 0 ? pay.overtime / pay.extraDeployments : 0,
+            amount: pay.overtime,
           });
         }
       }

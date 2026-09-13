@@ -11,6 +11,9 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
   });
   if (!existing) throw new HttpError(404, "Settlement not found");
   if (existing.status === "DRAFT") throw new HttpError(409, "Finalize the settlement before marking it paid");
+  if (existing.status === "PAID") {
+    throw new HttpError(409, "This settlement is already marked paid — payment records are immutable (audit trail keeps the original date/method).");
+  }
 
   const settlement = await db.settlement.update({
     where: { id },

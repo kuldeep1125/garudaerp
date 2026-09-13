@@ -97,9 +97,39 @@ model Employee {
   advances    Advance[]
   adjustments Adjustment[]
   settlements Settlement[]
+  payHistory  EmployeePayHistory[]
 
   @@index([status])
   @@index([fullName])
+}
+
+/// Effective-dated compensation history — the historical-integrity guarantee.
+/// Every change to salary / rent / contractor / rate fields writes a NEW row
+/// (effectiveFrom = the moment of the change). All accruals (monthly salary,
+/// overtime, rent income) resolve the values effective at each historical
+/// moment, so editing an employee NEVER rewrites past months' reports.
+/// Per-shift money stays safe via Deployment snapshots.
+model EmployeePayHistory {
+  id                String   @id @default(cuid())
+  employeeId        String
+  employee          Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  effectiveFrom     DateTime // moment these terms became effective
+  employmentType    String   @default("NON_SALARIED")
+  standardRate      Float    @default(0)
+  monthlySalary     Float    @default(0)
+  overtimeThreshold Int      @default(30)
+  overtimeRate      Float    @default(0)
+  onBusinessRent    Boolean  @default(false)
+  rentAmount        Float    @default(0)
+  rentMode          String   @default("MONTH")
+  hasContractor     Boolean  @default(false)
+  contractorName    String?
+  contractorRateCut Float    @default(0)
+  changedByName     String?
+  reason            String? // "Initial terms" | "Terms updated" | ...
+  createdAt         DateTime @default(now())
+
+  @@index([employeeId, effectiveFrom])
 }
 
 model Property {

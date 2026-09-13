@@ -1,0 +1,1530 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useEffect, useMemo, useState } from "react";
+     4→     4→import { api, qs } from "@/lib/api-client";
+     5→     5→import { formatINR, parseAmount } from "@/lib/money";
+     6→     6→import type { ViewProps } from "@/components/view-types";
+     7→     7→import { useBusiness } from "@/components/providers";
+     8→     8→import { PageHeader } from "@/components/shared/page-header";
+     9→     9→import { ViewFab } from "@/components/shared/view-fab";
+    10→    10→import { DataTable, downloadCsv, type Column } from "@/components/shared/data-table";
+    11→    11→import { StatCard, StatGrid } from "@/components/shared/stat-card";
+    12→    12→import { RangeSelector, SearchInput, type RangeKey } from "@/components/shared/filters";
+    13→    13→import { Button } from "@/components/ui/button";
+    14→    14→import { Card, CardContent } from "@/components/ui/card";
+    15→    15→import { Input } from "@/components/ui/input";
+    16→    16→import { Textarea } from "@/components/ui/textarea";
+    17→    17→import { Switch } from "@/components/ui/switch";
+    18→    18→import { Badge } from "@/components/ui/badge";
+    19→    19→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    20→    20→import {
+    21→    21→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    22→    22→} from "@/components/ui/dialog";
+    23→    23→import {
+    24→    24→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+    25→    25→  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+    26→    26→} from "@/components/ui/alert-dialog";
+    27→    27→import {
+    28→    28→  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+    29→    29→} from "@/components/ui/dropdown-menu";
+    30→    30→import { toast } from "sonner";
+    31→    31→import { cn } from "@/lib/utils";
+    32→    32→import { useLang, t } from "@/lib/i18n";
+    33→    33→import {
+    34→    34→  Receipt, Plus, MoreHorizontal, Pencil, Trash2, Repeat, ChevronDown, Play, Wallet, Hash, Download,
+    35→    35→  Users, HandCoins, ArrowDownToLine, ArrowUpFromLine, Crown, Landmark, Building2, Check,
+    36→    36→} from "lucide-react";
+    37→    37→import {
+    38→    38→  type ExpenseRec, type VehicleRec, type Option, SelectInput, Field, ErrorState, MiniBars, MoneyInput,
+    39→    39→  AreaTrend, BarsCompare, CHART_COLORS, type ListResp, useAsync, useMutation, useDebounced, fmtDay,
+    40→    40→  todayStr, undoRequest, UNDO_APPLIED_EVENT,
+    41→    41→} from "./_shared";
+    42→    42→
+    43→    43→interface ExpenseCategoryRec { id: string; name: string; business: string; kind?: string }
+    44→    44→interface OwnerRec { id: string; name: string }
+    45→    45→interface RecurringRow {
+    46→    46→  id: string;
+    47→    47→  name: string;
+    48→    48→  business: string;
+    49→    49→  categoryId?: string | null;
+    50→    50→  categoryName?: string | null;
+    51→    51→  amount: number;
+    52→    52→  frequency: string;
+    53→    53→  startDate: string;
+    54→    54→  method?: string | null;
+    55→    55→  notes?: string | null;
+    56→    56→  active?: boolean;
+    57→    57→  lastGeneratedMonth?: string | null;
+    58→    58→}
+    59→    59→
+    60→    60→interface OwnerBreakdownData {
+    61→    61→  range: { from: string; to: string };
+    62→    62→  business: string | null;
+    63→    63→  owners: {
+    64→    64→    id: string; name: string;
+    65→    65→    deposits: number; withdrawals: number; advances: number; spent: number;
+    66→    66→    manpower: number; transport: number; net: number;
+    67→    67→    categories: { name: string; amount: number }[];
+    68→    68→  }[];
+    69→    69→  common: { total: number; manpower: number; transport: number; categories: { name: string; amount: number }[] };
+    70→    70→  unattributed: { total: number; manpower: number; transport: number; categories: { name: string; amount: number }[] };
+    71→    71→  totals: {
+    72→    72→    deposits: number; withdrawals: number; advances: number; commonTotal: number;
+    73→    73→    unattributed: number; operating: number; capital: number; grand: number; netPosition: number;
+    74→    74→  };
+    75→    75→  daily: { day: string; deposits: number; withdrawals: number; operating: number; common: number }[];
+    76→    76→  byCategory: { name: string; amount: number; kind: string }[];
+    77→    77→  transactions: {
+    78→    78→    id: string; date: string; ownerId: string | null; ownerName: string;
+    79→    79→    type: "IN" | "OUT"; category: string; reason: string | null; method: string | null;
+    80→    80→    description: string | null; business: string; amount: number; balanceAfter: number;
+    81→    81→  }[];
+    82→    82→}
+    83→    83→
+    84→    84→const BUSINESS_OPTIONS: Option[] = [
+    85→    85→  { label: "All businesses", value: "" },
+    86→    86→  { label: "Manpower", value: "MANPOWER" },
+    87→    87→  { label: "Transport", value: "TRANSPORT" },
+    88→    88→];
+    89→    89→
+    90→    90→const METHOD_OPTIONS: Option[] = ["Cash", "UPI", "Bank", "Card", "Cheque", "Other"].map((m) => ({ label: m, value: m }));
+    91→    91→
+    92→    92→function rangeDates(r: RangeKey): { from: string; to: string } {
+    93→    93→  const now = new Date();
+    94→    94→  const f = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    95→    95→  if (r === "today") { const t = f(now); return { from: t, to: t }; }
+    96→    96→  if (r === "yesterday") return { from: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)), to: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)) };
+    97→    97→  if (r === "week") return { from: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6)), to: f(now) };
+    98→    98→  if (r === "lastweek") return { from: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 13)), to: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7)) };
+    99→    99→  if (r === "lastmonth") return { from: f(new Date(now.getFullYear(), now.getMonth() - 1, 1)), to: f(new Date(now.getFullYear(), now.getMonth(), 0)) };
+   100→   100→  return { from: f(new Date(now.getFullYear(), now.getMonth(), 1)), to: f(new Date(now.getFullYear(), now.getMonth() + 1, 0)) };
+   101→   101→}
+   102→   102→
+   103→   103→function BusinessBadge({ business }: { business: string }) {
+   104→   104→  const b = String(business ?? "").toUpperCase();
+   105→   105→  return (
+   106→   106→    <Badge
+   107→   107→      variant="outline"
+   108→   108→      className={cn(
+   109→   109→        "font-medium text-[11px] px-2 py-0.5 whitespace-nowrap",
+   110→   110→        b === "MANPOWER" && "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900",
+   111→   111→        b === "TRANSPORT" && "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300 border-amber-200 dark:border-amber-900"
+   112→   112→      )}
+   113→   113→    >
+   114→   114→      {b || "—"}
+   115→   115→    </Badge>
+   116→   116→  );
+   117→   117→}
+   118→   118→
+   119→   119→/** Chip shown on owner-capital rows (contributions / withdrawals). */
+   120→   120→function CapitalBadge() {
+   121→   121→  return (
+   122→   122→    <Badge variant="outline" className="border-violet-200 bg-violet-50 text-[10px] font-medium text-violet-700 dark:border-violet-900 dark:bg-violet-950 dark:text-violet-300">
+   123→   123→      Capital
+   124→   124→    </Badge>
+   125→   125→  );
+   126→   126→}
+   127→   127→
+   128→   128→/** "Common — shared by all owners" chip. */
+   129→   129→function CommonBadge() {
+   130→   130→  return (
+   131→   131→    <Badge variant="outline" className="border-sky-200 bg-sky-50 text-[10px] font-medium text-sky-700 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-300">
+   132→   132→      <Users className="mr-1 h-3 w-3" aria-hidden />Common
+   133→   133→    </Badge>
+   134→   134→  );
+   135→   135→}
+   136→   136→
+   137→   137→// ---------------------------------------------------------------------------
+   138→   138→// Add / edit expense dialog
+   139→   139→// ---------------------------------------------------------------------------
+   140→   140→
+   141→   141→function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, preset }: {
+   142→   142→  open: boolean;
+   143→   143→  onOpenChange: (v: boolean) => void;
+   144→   144→  expense: ExpenseRec | null;
+   145→   145→  vehicles: VehicleRec[];
+   146→   146→  onDone: () => void;
+   147→   147→  /** Optional pre-fill for quick actions (e.g. "Add deposit" opens the form with the Owner Contribution category). */
+   148→   148→  preset?: { categoryName?: string; spentById?: string } | null;
+   149→   149→}) {
+   150→   150→  const editing = Boolean(expense);
+   151→   151→  const [form, setForm] = useState({
+   152→   152→    date: todayStr(), business: "MANPOWER", categoryId: "", amount: "", method: "Cash",
+   153→   153→    description: "", vehicleId: "", notes: "", reason: "", spentById: "",
+   154→   154→  });
+   155→   155→  const [categories, setCategories] = useState<ExpenseCategoryRec[]>([]);
+   156→   156→  const [owners, setOwners] = useState<OwnerRec[]>([]);
+   157→   157→  const [meId, setMeId] = useState("");
+   158→   158→  const [newCatOpen, setNewCatOpen] = useState(false);
+   159→   159→  const [newCatName, setNewCatName] = useState("");
+   160→   160→  const { mutate, saving } = useMutation();
+   161→   161→
+   162→   162→  // Reset form each time the dialog opens (render-time state adjustment).
+   163→   163→  const [prevOpen, setPrevOpen] = useState(open);
+   164→   164→  if (open !== prevOpen) {
+   165→   165→    setPrevOpen(open);
+   166→   166→    if (open) {
+   167→   167→      setNewCatOpen(false);
+   168→   168→      setNewCatName("");
+   169→   169→      setForm({
+   170→   170→        date: expense?.date?.slice(0, 10) ?? todayStr(),
+   171→   171→        business: expense?.business ?? "MANPOWER",
+   172→   172→        categoryId: expense?.categoryId ?? "",
+   173→   173→        amount: expense ? String(expense.amount) : "",
+   174→   174→        method: expense?.method ?? "Cash",
+   175→   175→        description: expense?.description ?? "",
+   176→   176→        vehicleId: expense?.vehicleId ?? "",
+   177→   177→        notes: expense?.notes ?? "",
+   178→   178→        reason: expense?.reason ?? "",
+   179→   179→        spentById: expense ? (expense.isCommon ? "COMMON" : (expense.spentById ?? "")) : (preset?.spentById || ""),
+   180→   180→      });
+   181→   181→    }
+   182→   182→  }
+   183→   183→
+   184→   184→  useEffect(() => {
+   185→   185→    if (!open) return;
+   186→   186→    let cancelled = false;
+   187→   187→    api.get<{ items: ExpenseCategoryRec[] }>("/api/expense-categories" + qs({ business: form.business || undefined }))
+   188→   188→      .then((d) => { if (!cancelled) setCategories(d.items ?? []); })
+   189→   189→      .catch(() => { if (!cancelled) setCategories([]); });
+   190→   190→    return () => { cancelled = true; };
+   191→   191→  }, [open, form.business]);
+   192→   192→
+   193→   193→  // Owners (who is taking out the money) + the acting user (default attribution).
+   194→   194→  useEffect(() => {
+   195→   195→    if (!open) return;
+   196→   196→    let cancelled = false;
+   197→   197→    api.get<{ items: OwnerRec[] }>("/api/owners")
+   198→   198→      .then((d) => { if (!cancelled) setOwners(d.items ?? []); })
+   199→   199→      .catch(() => { /* non-fatal */ });
+   200→   200→    api.get<OwnerRec>("/api/auth/me")
+   201→   201→      .then((d) => { if (!cancelled) setMeId(d?.id ?? ""); })
+   202→   202→      .catch(() => { /* non-fatal */ });
+   203→   203→    return () => { cancelled = true; };
+   204→   204→  }, [open]);
+   205→   205→
+   206→   206→  // Quick-action preset: resolve the pre-filled category by NAME (render-time
+   207→   207→  // derivation — no setState inside an effect). Only for brand-new expenses.
+   208→   208→  const presetCategoryId = useMemo(() => {
+   209→   209→    if (editing || !preset?.categoryName) return "";
+   210→   210→    return categories.find((c) => c.name.toUpperCase() === preset.categoryName!.toUpperCase())?.id ?? "";
+   211→   211→  }, [editing, preset, categories]);
+   212→   212→
+   213→   213→  const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+   214→   214→
+   215→   215→  const createCategory = async () => {
+   216→   216→    const name = newCatName.trim();
+   217→   217→    if (!name) { toast.error("Enter a category name"); return; }
+   218→   218→    const res = await mutate(
+   219→   219→      () => api.post<ExpenseCategoryRec>("/api/expense-categories", { name, business: form.business }),
+   220→   220→      `Category "${name}" created`
+   221→   221→    );
+   222→   222→    if (res.ok && res.data) {
+   223→   223→      setCategories((cs) => [...cs, res.data as ExpenseCategoryRec]);
+   224→   224→      setForm((f) => ({ ...f, categoryId: (res.data as ExpenseCategoryRec).id }));
+   225→   225→      setNewCatOpen(false);
+   226→   226→      setNewCatName("");
+   227→   227→    }
+   228→   228→  };
+   229→   229→
+   230→   230→  const submit = async () => {
+   231→   231→    const amt = parseAmount(form.amount);
+   232→   232→    if (amt <= 0) { toast.error("Enter a valid amount"); return; }
+   233→   233→    if (!form.date) { toast.error("Date is required"); return; }
+   234→   234→    const body = {
+   235→   235→      date: form.date,
+   236→   236→      business: form.business,
+   237→   237→      categoryId: form.categoryId || presetCategoryId || undefined,
+   238→   238→      amount: amt,
+   239→   239→      method: form.method || undefined,
+   240→   240→      description: form.description || undefined,
+   241→   241→      notes: form.notes || undefined,
+   242→   242→      reason: form.reason || undefined,
+   243→   243→      // "" → attribute to the acting user (API default); "COMMON" → shared by all owners.
+   244→   244→      spentById: form.spentById || meId || undefined,
+   245→   245→      vehicleId: form.business === "TRANSPORT" && form.vehicleId ? form.vehicleId : undefined,
+   246→   246→    };
+   247→   247→    const res = editing
+   248→   248→      ? await mutate(() => api.put(`/api/expenses/${expense!.id}`, body), "Expense updated", () => ({ module: "EXPENSE", recordId: expense!.id, onUndo: onDone }))
+   249→   249→      : await mutate(() => api.post("/api/expenses", body), "Expense recorded", (data) => ({ module: "EXPENSE", recordId: (data as { id: string }).id, onUndo: onDone }));
+   250→   250→    if (res.ok) { onOpenChange(false); onDone(); }
+   251→   251→  };
+   252→   252→
+   253→   253→  const selectedOwnerLabel = form.spentById === "COMMON"
+   254→   254→    ? "Common — all owners"
+   255→   255→    : (owners.find((o) => o.id === form.spentById)?.name ?? "You");
+   256→   256→
+   257→   257→  return (
+   258→   258→    <Dialog open={open} onOpenChange={onOpenChange}>
+   259→   259→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+   260→   260→        <DialogHeader>
+   261→   261→          <DialogTitle>{editing ? "Edit Expense" : "Add Expense"}</DialogTitle>
+   262→   262→          <DialogDescription>Track who took the money, why, and which business it belongs to.</DialogDescription>
+   263→   263→        </DialogHeader>
+   264→   264→        <div className="grid gap-3 sm:grid-cols-2">
+   265→   265→          <Field label="Date" required>
+   266→   266→            <Input type="date" value={form.date} onChange={(e) => set("date")(e.target.value)} className="h-10" />
+   267→   267→          </Field>
+   268→   268→          <Field label="Business" required>
+   269→   269→            <SelectInput
+   270→   270→              value={form.business}
+   271→   271→              onChange={(v) => setForm((f) => ({ ...f, business: v, categoryId: "", vehicleId: "" }))}
+   272→   272→              options={[{ label: "Manpower", value: "MANPOWER" }, { label: "Transport", value: "TRANSPORT" }]}
+   273→   273→            />
+   274→   274→          </Field>
+   275→   275→          <Field
+   276→   276→            label="Paid by / Owner"
+   277→   277→            required
+   278→   278→            hint={form.spentById === "COMMON" ? "Shared equally by all owners & the business" : `Attributed to ${selectedOwnerLabel}`}
+   279→   279→            className="sm:col-span-2"
+   280→   280→          >
+   281→   281→            <SelectInput
+   282→   282→              value={form.spentById}
+   283→   283→              onChange={set("spentById")}
+   284→   284→              placeholder={meId ? "Select who is taking the money…" : "Loading…"}
+   285→   285→              options={[
+   286→   286→                { label: "Common — shared by all owners & business", value: "COMMON" },
+   287→   287→                ...owners.map((o) => ({ label: o.name, value: o.id })),
+   288→   288→              ]}
+   289→   289→            />
+   290→   290→          </Field>
+   291→   291→          <Field label="Reason" hint="Why the money was taken / spent" className="sm:col-span-2">
+   292→   292→            <Input
+   293→   293→              value={form.reason}
+   294→   294→              onChange={(e) => set("reason")(e.target.value)}
+   295→   295→              className="h-10"
+   296→   296→              placeholder="e.g. Diesel for generator · Salary withdrawal · Office tea"
+   297→   297→            />
+   298→   298→          </Field>
+   299→   299→          <Field label="Category">
+   300→   300→            <SelectInput
+   301→   301→              value={form.categoryId || presetCategoryId}
+   302→   302→              onChange={set("categoryId")}
+   303→   303→              placeholder="Select category…"
+   304→   304→              options={categories.map((c) => ({ label: c.name, value: c.id }))}
+   305→   305→            />
+   306→   306→          </Field>
+   307→   307→          <div className="sm:col-span-1 sm:row-start-auto">
+   308→   308→            {!newCatOpen ? (
+   309→   309→              <Button
+   310→   310→                type="button" variant="outline" size="sm"
+   311→   311→                className="mt-1 h-9 w-full gap-1 text-xs sm:mt-6"
+   312→   312→                onClick={() => setNewCatOpen(true)}
+   313→   313→              >
+   314→   314→                <Plus className="h-3.5 w-3.5" aria-hidden />New category
+   315→   315→              </Button>
+   316→   316→            ) : (
+   317→   317→              <div className="mt-1 flex gap-1.5 sm:mt-6">
+   318→   318→                <Input
+   319→   319→                  value={newCatName}
+   320→   320→                  onChange={(e) => setNewCatName(e.target.value)}
+   321→   321→                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void createCategory(); } }}
+   322→   322→                  className="h-9 text-xs"
+   323→   323→                  placeholder={`Category for ${form.business === "TRANSPORT" ? "Transport" : "Manpower"}`}
+   324→   324→                  aria-label="New category name"
+   325→   325→                  autoFocus
+   326→   326→                />
+   327→   327→                <Button type="button" size="sm" className="h-9 shrink-0 px-2.5" onClick={() => void createCategory()} disabled={saving} aria-label="Create category">
+   328→   328→                  <Check className="h-3.5 w-3.5" aria-hidden />
+   329→   329→                </Button>
+   330→   330→                <Button type="button" size="sm" variant="ghost" className="h-9 shrink-0 px-2.5" onClick={() => { setNewCatOpen(false); setNewCatName(""); }} aria-label="Cancel category creation">
+   331→   331→                  ✕
+   332→   332→                </Button>
+   333→   333→              </div>
+   334→   334→            )}
+   335→   335→          </div>
+   336→   336→          <Field label="Amount (₹)" required>
+   337→   337→            <MoneyInput value={form.amount} onChange={set("amount")} min={1} className="h-10" />
+   338→   338→          </Field>
+   339→   339→          <Field label="Method">
+   340→   340→            <SelectInput value={form.method} onChange={set("method")} options={METHOD_OPTIONS} />
+   341→   341→          </Field>
+   342→   342→          {form.business === "TRANSPORT" && (
+   343→   343→            <Field label="Vehicle">
+   344→   344→              <SelectInput
+   345→   345→                value={form.vehicleId}
+   346→   346→                onChange={set("vehicleId")}
+   347→   347→                placeholder="No specific vehicle"
+   348→   348→                options={[{ label: "No specific vehicle", value: "" }, ...vehicles.map((v) => ({ label: v.name, value: v.id }))]}
+   349→   349→              />
+   350→   350→            </Field>
+   351→   351→          )}
+   352→   352→          <Field label="Description" className="sm:col-span-2">
+   353→   353→            <Input value={form.description} onChange={(e) => set("description")(e.target.value)} className="h-10" placeholder="What was this expense for?" />
+   354→   354→          </Field>
+   355→   355→          <Field label="Notes" className="sm:col-span-2">
+   356→   356→            <Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} rows={2} placeholder="Optional" />
+   357→   357→          </Field>
+   358→   358→        </div>
+   359→   359→        <DialogFooter className="gap-2">
+   360→   360→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   361→   361→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>
+   362→   362→            {saving ? "Saving…" : editing ? "Save changes" : "Add expense"}
+   363→   363→          </Button>
+   364→   364→        </DialogFooter>
+   365→   365→      </DialogContent>
+   366→   366→    </Dialog>
+   367→   367→  );
+   368→   368→}
+   369→   369→
+   370→   370→// ---------------------------------------------------------------------------
+   371→   371→// New recurring expense dialog
+   372→   372→// ---------------------------------------------------------------------------
+   373→   373→
+   374→   374→function RecurringFormDialog({ open, onOpenChange, onDone }: {
+   375→   375→  open: boolean;
+   376→   376→  onOpenChange: (v: boolean) => void;
+   377→   377→  onDone: () => void;
+   378→   378→}) {
+   379→   379→  const [form, setForm] = useState({ name: "", business: "MANPOWER", categoryId: "", amount: "", startDate: todayStr(), method: "Bank", notes: "" });
+   380→   380→  const [categories, setCategories] = useState<ExpenseCategoryRec[]>([]);
+   381→   381→  const { mutate, saving } = useMutation();
+   382→   382→
+   383→   383→  const [prevOpen, setPrevOpen] = useState(open);
+   384→   384→  if (open !== prevOpen) {
+   385→   385→    setPrevOpen(open);
+   386→   386→    if (open) {
+   387→   387→      setForm({ name: "", business: "MANPOWER", categoryId: "", amount: "", startDate: todayStr(), method: "Bank", notes: "" });
+   388→   388→    }
+   389→   389→  }
+   390→   390→
+   391→   391→  useEffect(() => {
+   392→   392→    if (!open) return;
+   393→   393→    let cancelled = false;
+   394→   394→    api.get<{ items: ExpenseCategoryRec[] }>("/api/expense-categories" + qs({ business: form.business || undefined }))
+   395→   395→      .then((d) => { if (!cancelled) setCategories(d.items ?? []); })
+   396→   396→      .catch(() => { if (!cancelled) setCategories([]); });
+   397→   397→    return () => { cancelled = true; };
+   398→   398→  }, [open, form.business]);
+   399→   399→
+   400→   400→  const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+   401→   401→
+   402→   402→  const submit = async () => {
+   403→   403→    if (!form.name.trim()) { toast.error("Name is required"); return; }
+   404→   404→    const amt = parseAmount(form.amount);
+   405→   405→    if (amt <= 0) { toast.error("Enter a valid amount"); return; }
+   406→   406→    if (!form.startDate) { toast.error("Start date is required"); return; }
+   407→   407→    const res = await mutate(
+   408→   408→      () => api.post("/api/recurring-expenses", {
+   409→   409→        name: form.name.trim(),
+   410→   410→        business: form.business,
+   411→   411→        categoryId: form.categoryId || undefined,
+   412→   412→        amount: amt,
+   413→   413→        frequency: "MONTHLY",
+   414→   414→        startDate: form.startDate,
+   415→   415→        method: form.method || undefined,
+   416→   416→        notes: form.notes || undefined,
+   417→   417→      }),
+   418→   418→      "Recurring expense created"
+   419→   419→    );
+   420→   420→    if (res.ok) { onOpenChange(false); onDone(); }
+   421→   421→  };
+   422→   422→
+   423→   423→  return (
+   424→   424→    <Dialog open={open} onOpenChange={onOpenChange}>
+   425→   425→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+   426→   426→        <DialogHeader>
+   427→   427→          <DialogTitle>New Recurring Expense</DialogTitle>
+   428→   428→          <DialogDescription>Generated monthly; idempotent per name + month + business.</DialogDescription>
+   429→   429→        </DialogHeader>
+   430→   430→        <div className="grid gap-3 sm:grid-cols-2">
+   431→   431→          <Field label="Name" required className="sm:col-span-2">
+   432→   432→            <Input value={form.name} onChange={(e) => set("name")(e.target.value)} className="h-10" placeholder="e.g. Truck insurance premium" />
+   433→   433→          </Field>
+   434→   434→          <Field label="Business" required>
+   435→   435→            <SelectInput
+   436→   436→              value={form.business}
+   437→   437→              onChange={(v) => setForm((f) => ({ ...f, business: v, categoryId: "" }))}
+   438→   438→              options={[{ label: "Manpower", value: "MANPOWER" }, { label: "Transport", value: "TRANSPORT" }]}
+   439→   439→            />
+   440→   440→          </Field>
+   441→   441→          <Field label="Category">
+   442→   442→            <SelectInput
+   443→   443→              value={form.categoryId}
+   444→   444→              onChange={set("categoryId")}
+   445→   445→              placeholder="Select category…"
+   446→   446→              options={categories.map((c) => ({ label: c.name, value: c.id }))}
+   447→   447→            />
+   448→   448→          </Field>
+   449→   449→          <Field label="Amount (₹ / month)" required>
+   450→   450→            <MoneyInput value={form.amount} onChange={set("amount")} min={1} className="h-10" />
+   451→   451→          </Field>
+   452→   452→          <Field label="Start date" required>
+   453→   453→            <Input type="date" value={form.startDate} onChange={(e) => set("startDate")(e.target.value)} className="h-10" />
+   454→   454→          </Field>
+   455→   455→          <Field label="Method">
+   456→   456→            <SelectInput value={form.method} onChange={set("method")} options={METHOD_OPTIONS} />
+   457→   457→          </Field>
+   458→   458→          <Field label="Frequency">
+   459→   459→            <Input value="Monthly" disabled className="h-10" aria-label="Frequency (monthly)" />
+   460→   460→          </Field>
+   461→   461→          <Field label="Notes" className="sm:col-span-2">
+   462→   462→            <Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} rows={2} placeholder="Optional" />
+   463→   463→          </Field>
+   464→   464→        </div>
+   465→   465→        <DialogFooter className="gap-2">
+   466→   466→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   467→   467→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : "Create"}</Button>
+   468→   468→        </DialogFooter>
+   469→   469→      </DialogContent>
+   470→   470→    </Dialog>
+   471→   471→  );
+   472→   472→}
+   473→   473→
+   474→   474→// ---------------------------------------------------------------------------
+   475→   475→// Owner expense breakdown — detailed dashboard
+   476→   476→// ---------------------------------------------------------------------------
+   477→   477→
+   478→   478→function NetPositionChip({ net }: { net: number }) {
+   479→   479→  if (net < 0) {
+   480→   480→    return (
+   481→   481→      <Badge variant="outline" className="border-amber-200 bg-amber-50 text-[10px] font-medium text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+   482→   482→        Needs to deposit {formatINR(Math.abs(net))} again
+   483→   483→      </Badge>
+   484→   484→    );
+   485→   485→  }
+   486→   486→  if (net > 0) {
+   487→   487→    return (
+   488→   488→      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
+   489→   489→        In credit {formatINR(net)}
+   490→   490→      </Badge>
+   491→   491→    );
+   492→   492→  }
+   493→   493→  return (
+   494→   494→    <Badge variant="outline" className="text-[10px] font-medium text-muted-foreground">
+   495→   495→      Settled — no balance
+   496→   496→    </Badge>
+   497→   497→  );
+   498→   498→}
+   499→   499→
+   500→   500→type QuickCapitalKind = "deposit" | "withdrawal";
+   501→   501→
+   502→   502→function OwnerBreakdownSection({ business, from, to, onQuickAction, refreshKey }: {
+   503→   503→  business: string; from: string; to: string;
+   504→   504→  onQuickAction?: (kind: QuickCapitalKind, ownerId?: string) => void;
+   505→   505→  /** Bumped by the parent whenever expense data changes — keeps this section's numbers fresh. */
+   506→   506→  refreshKey?: number;
+   507→   507→}) {
+   508→   508→  const [mode, setMode] = useState<"all" | "single">("all");
+   509→   509→  const [focusId, setFocusId] = useState("");
+   510→   510→
+   511→   511→  const data = useAsync<OwnerBreakdownData>(
+   512→   512→    () => api.get("/api/expenses/owner-breakdown" + qs({ from, to, business: business || undefined })),
+   513→   513→    [from, to, business, refreshKey]
+   514→   514→  );
+   515→   515→
+   516→   516→  const owners = data.data?.owners ?? [];
+   517→   517→  const focus = owners.find((o) => o.id === focusId) ?? null;
+   518→   518→
+   519→   519→  const ownerBars = useMemo(
+   520→   520→    () =>
+   521→   521→      owners.map((o) => ({
+   522→   522→        name: o.name.length > 9 ? `${o.name.slice(0, 9)}…` : o.name,
+   523→   523→        Deposits: o.deposits,
+   524→   524→        Withdrawals: o.withdrawals,
+   525→   525→        "Business spend": o.advances,
+   526→   526→      })),
+   527→   527→    [owners]
+   528→   528→  );
+   529→   529→
+   530→   530→  const dailySeries = useMemo(
+   531→   531→    () =>
+   532→   532→      (data.data?.daily ?? []).map((d) => ({
+   533→   533→        day: d.day.slice(5), // MM-DD keeps the axis readable on phones
+   534→   534→        Expenses: d.operating,
+   535→   535→        Deposits: d.deposits,
+   536→   536→        Withdrawals: d.withdrawals,
+   537→   537→      })),
+   538→   538→    [data.data?.daily]
+   539→   539→  );
+   540→   540→
+   541→   541→  const categoryRows = useMemo(() => {
+   542→   542→    const rows = mode === "single" && focus ? focus.categories : (data.data?.byCategory ?? []).map((c) => ({ name: c.name, amount: c.amount }));
+   543→   543→    return rows
+   544→   544→      .slice()
+   545→   545→      .sort((a, b) => b.amount - a.amount)
+   546→   546→      .slice(0, 8)
+   547→   547→      .map((r) => ({ label: r.name, value: r.amount, color: CHART_COLORS.amber }));
+   548→   548→  }, [mode, focus, data.data?.byCategory]);
+   549→   549→
+   550→   550→  const totals = data.data?.totals;
+   551→   551→
+   552→   552→  // Detailed passbook ledger — every deposit & withdrawal, filtered to the
+   553→   553→  // focused owner in single-owner mode. Newest first (API order).
+   554→   554→  const ledgerRows = useMemo(() => {
+   555→   555→    const all = data.data?.transactions ?? [];
+   556→   556→    return mode === "single" && focus ? all.filter((tx) => tx.ownerId === focus.id) : all;
+   557→   557→  }, [data.data?.transactions, mode, focus]);
+   558→   558→
+   559→   559→  const ledgerColumns: Column<OwnerBreakdownData["transactions"][number]>[] = [
+   560→   560→    {
+   561→   561→      key: "owner", label: "Owner", primary: true,
+   562→   562→      render: (tx) => (
+   563→   563→        <div className="min-w-0">
+   564→   564→          <p className="flex items-center gap-1 truncate font-medium">
+   565→   565→            <Crown className="h-3 w-3 shrink-0 text-amber-500" aria-hidden />{tx.ownerName}
+   566→   566→          </p>
+   567→   567→          <p className="truncate text-[11px] text-muted-foreground">
+   568→   568→            {fmtDay(tx.date)} · {tx.category}{tx.method ? ` · ${tx.method}` : ""}
+   569→   569→          </p>
+   570→   570→        </div>
+   571→   571→      ),
+   572→   572→      value: (tx) => tx.ownerName,
+   573→   573→    },
+   574→   574→    { key: "date", label: "Date", value: (tx) => fmtDay(tx.date), hideOnMobile: true },
+   575→   575→    {
+   576→   576→      key: "type", label: "Type",
+   577→   577→      render: (tx) =>
+   578→   578→        tx.type === "IN" ? (
+   579→   579→          <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] font-semibold text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
+   580→   580→            <ArrowDownToLine className="mr-1 h-3 w-3" aria-hidden />Deposit
+   581→   581→          </Badge>
+   582→   582→        ) : (
+   583→   583→          <Badge variant="outline" className="border-red-200 bg-red-50 text-[10px] font-semibold text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+   584→   584→            <ArrowUpFromLine className="mr-1 h-3 w-3" aria-hidden />Withdrawal
+   585→   585→          </Badge>
+   586→   586→        ),
+   587→   587→      value: (tx) => (tx.type === "IN" ? "Deposit (in)" : "Withdrawal (out)"),
+   588→   588→    },
+   589→   589→    { key: "category", label: "Category", value: (tx) => tx.category, hideOnMobile: true },
+   590→   590→    {
+   591→   591→      key: "reason", label: "Reason", hideOnMobile: true,
+   592→   592→      render: (tx) => <span className="text-xs text-muted-foreground">{tx.reason || tx.description || "—"}</span>,
+   593→   593→      value: (tx) => tx.reason || tx.description || "",
+   594→   594→    },
+   595→   595→    { key: "business", label: "Business", render: (tx) => <BusinessBadge business={tx.business} />, value: (tx) => tx.business, hideOnMobile: true },
+   596→   596→    {
+   597→   597→      key: "amount", label: "Amount", className: "text-right",
+   598→   598→      render: (tx) => (
+   599→   599→        <span className={cn("font-semibold tabular-nums", tx.type === "IN" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+   600→   600→          {tx.type === "IN" ? "+" : "−"}{formatINR(tx.amount)}
+   601→   601→        </span>
+   602→   602→      ),
+   603→   603→      value: (tx) => `${tx.type === "IN" ? "+" : "-"}${formatINR(tx.amount)}`,
+   604→   604→    },
+   605→   605→    {
+   606→   606→      key: "balance", label: "Balance after", className: "text-right",
+   607→   607→      render: (tx) => <span className="tabular-nums text-muted-foreground">{formatINR(tx.balanceAfter)}</span>,
+   608→   608→      value: (tx) => formatINR(tx.balanceAfter),
+   609→   609→      hideOnMobile: true,
+   610→   610→    },
+   611→   611→  ];
+   612→   612→
+   613→   613→  return (
+   614→   614→    <div className="space-y-4" aria-busy={data.loading}>
+   615→   615→      {data.error ? (
+   616→   616→        <ErrorState message={data.error} onRetry={() => void data.reload()} />
+   617→   617→      ) : (
+   618→   618→        <>
+   619→   619→          {/* Focus switch: all owners combined vs a single owner + quick record actions */}
+   620→   620→          <Card>
+   621→   621→            <CardContent className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+   622→   622→              <div
+   623→   623→                role="group"
+   624→   624→                aria-label="Owner expense focus"
+   625→   625→                className="grid w-full grid-cols-2 gap-1 rounded-xl bg-muted p-1 sm:w-auto"
+   626→   626→              >
+   627→   627→                <button
+   628→   628→                  type="button"
+   629→   629→                  className={cn(
+   630→   630→                    "min-h-9 rounded-lg px-3 text-xs font-medium transition-colors",
+   631→   631→                    mode === "all" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+   632→   632→                  )}
+   633→   633→                  onClick={() => setMode("all")}
+   634→   634→                  aria-pressed={mode === "all"}
+   635→   635→                >
+   636→   636→                  <Users className="mr-1.5 inline h-3.5 w-3.5" aria-hidden />All owners combined
+   637→   637→                </button>
+   638→   638→                <button
+   639→   639→                  type="button"
+   640→   640→                  className={cn(
+   641→   641→                    "min-h-9 rounded-lg px-3 text-xs font-medium transition-colors",
+   642→   642→                    mode === "single" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+   643→   643→                  )}
+   644→   644→                  onClick={() => { if (!focusId && owners[0]) setFocusId(owners[0].id); setMode("single"); }}
+   645→   645→                  aria-pressed={mode === "single"}
+   646→   646→                >
+   647→   647→                  <Crown className="mr-1.5 inline h-3.5 w-3.5" aria-hidden />Single owner
+   648→   648→                </button>
+   649→   649→              </div>
+   650→   650→              {mode === "single" && (
+   651→   651→                <div className="w-full sm:w-56">
+   652→   652→                  <SelectInput
+   653→   653→                    value={focusId}
+   654→   654→                    onChange={setFocusId}
+   655→   655→                    placeholder="Choose owner…"
+   656→   656→                    options={owners.map((o) => ({ label: o.name, value: o.id }))}
+   657→   657→                  />
+   658→   658→                </div>
+   659→   659→              )}
+   660→   660→            </CardContent>
+   661→   661→            <CardContent className="flex flex-wrap items-center gap-2 border-t py-2.5 sm:px-4">
+   662→   662→              <span className="mr-auto text-[11px] font-medium text-muted-foreground">Quick record owner money:</span>
+   663→   663→              <Button
+   664→   664→                size="sm" variant="outline"
+   665→   665→                className="h-8 gap-1.5 border-emerald-200 text-xs text-emerald-700 hover:bg-emerald-50 dark:border-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-950"
+   666→   666→                onClick={() => onQuickAction?.("deposit", mode === "single" ? focusId : undefined)}
+   667→   667→                aria-label="Add owner deposit"
+   668→   668→              >
+   669→   669→                <ArrowDownToLine className="h-3.5 w-3.5" aria-hidden />Add deposit
+   670→   670→              </Button>
+   671→   671→              <Button
+   672→   672→                size="sm" variant="outline"
+   673→   673→                className="h-8 gap-1.5 border-red-200 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950"
+   674→   674→                onClick={() => onQuickAction?.("withdrawal", mode === "single" ? focusId : undefined)}
+   675→   675→                aria-label="Add owner withdrawal"
+   676→   676→              >
+   677→   677→                <ArrowUpFromLine className="h-3.5 w-3.5" aria-hidden />Add withdrawal
+   678→   678→              </Button>
+   679→   679→            </CardContent>
+   680→   680→          </Card>
+   681→   681→
+   682→   682→          {/* Headline numbers */}
+   683→   683→          <StatGrid cols={2}>
+   684→   684→            <StatCard
+   685→   685→              label="Owner deposits (in)"
+   686→   686→              value={formatINR(totals?.deposits ?? 0)}
+   687→   687→              icon={ArrowDownToLine}
+   688→   688→              tone="positive"
+   689→   689→              hint="Money owners put into the business"
+   690→   690→            />
+   691→   691→            <StatCard
+   692→   692→              label="Owner withdrawals (out)"
+   693→   693→              value={formatINR(totals?.withdrawals ?? 0)}
+   694→   694→              icon={ArrowUpFromLine}
+   695→   695→              tone="negative"
+   696→   696→              hint="Money owners took for themselves"
+   697→   697→            />
+   698→   698→            <StatCard
+   699→   699→              label="Business spend by owners"
+   700→   700→              value={formatINR(totals?.advances ?? 0)}
+   701→   701→              icon={HandCoins}
+   702→   702→              hint="Operating expenses owners paid on behalf of the business"
+   703→   703→            />
+   704→   704→            <StatCard
+   705→   705→              label="Common (shared) expenses"
+   706→   706→              value={formatINR(totals?.commonTotal ?? 0)}
+   707→   707→              icon={Users}
+   708→   708→              hint="Shared equally by all owners & the business"
+   709→   709→            />
+   710→   710→            <StatCard
+   711→   711→              label="Net owner position"
+   712→   712→              value={formatINR(totals?.netPosition ?? 0)}
+   713→   713→              icon={Landmark}
+   714→   714→              tone={(totals?.netPosition ?? 0) >= 0 ? "positive" : "warning"}
+   715→   715→              hint="Deposits − withdrawals"
+   716→   716→            />
+   717→   717→            <StatCard
+   718→   718→              label="Operating expenses"
+   719→   719→              value={formatINR(totals?.operating ?? 0)}
+   720→   720→              icon={Receipt}
+   721→   721→              tone="negative"
+   722→   722→              hint="Feeds profit — owner deposits/withdrawals excluded"
+   723→   723→            />
+   724→   724→          </StatGrid>
+   725→   725→
+   726→   726→          {/* Single-owner focus card */}
+   727→   727→          {mode === "single" && (
+   728→   728→            focus ? (
+   729→   729→              <Card className="border-primary/30">
+   730→   730→                <CardContent className="space-y-4 p-4 sm:p-5">
+   731→   731→                  <div className="flex flex-wrap items-center justify-between gap-2">
+   732→   732→                    <div className="flex items-center gap-2.5">
+   733→   733→                      <span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary" aria-hidden>
+   734→   734→                        <Crown className="h-4.5 w-4.5" />
+   735→   735→                      </span>
+   736→   736→                      <div className="min-w-0">
+   737→   737→                        <p className="truncate text-sm font-semibold">{focus.name}</p>
+   738→   738→                        <p className="text-[11px] text-muted-foreground">Owner expense ledger — this range</p>
+   739→   739→                      </div>
+   740→   740→                    </div>
+   741→   741→                    <NetPositionChip net={focus.net} />
+   742→   742→                  </div>
+   743→   743→                  <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+   744→   744→                    <div className="rounded-xl border p-3">
+   745→   745→                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Deposits in</p>
+   746→   746→                      <p className="mt-1 text-sm font-bold tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(focus.deposits)}</p>
+   747→   747→                    </div>
+   748→   748→                    <div className="rounded-xl border p-3">
+   749→   749→                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Took out</p>
+   750→   750→                      <p className="mt-1 text-sm font-bold tabular-nums text-red-600 dark:text-red-400">{formatINR(focus.withdrawals)}</p>
+   751→   751→                    </div>
+   752→   752→                    <div className="rounded-xl border p-3">
+   753→   753→                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Business spend</p>
+   754→   754→                      <p className="mt-1 text-sm font-bold tabular-nums">{formatINR(focus.advances)}</p>
+   755→   755→                    </div>
+   756→   756→                    <div className="rounded-xl border p-3">
+   757→   757→                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Net position</p>
+   758→   758→                      <p className={cn("mt-1 text-sm font-bold tabular-nums", focus.net < 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400")}>{formatINR(focus.net)}</p>
+   759→   759→                    </div>
+   760→   760→                  </div>
+   761→   761→                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+   762→   762→                    <span className="font-medium text-foreground">Business split:</span>
+   763→   763→                    <BusinessBadge business="MANPOWER" />
+   764→   764→                    <span className="font-semibold tabular-nums">{formatINR(focus.manpower)}</span>
+   765→   765→                    <BusinessBadge business="TRANSPORT" />
+   766→   766→                    <span className="font-semibold tabular-nums">{formatINR(focus.transport)}</span>
+   767→   767→                  </div>
+   768→   768→                  <div>
+   769→   769→                    <p className="mb-2 text-sm font-semibold">What they spent on</p>
+   770→   770→                    {focus.categories.length === 0 ? (
+   771→   771→                      <p className="text-xs text-muted-foreground">No expense rows in this range.</p>
+   772→   772→                    ) : (
+   773→   773→                      <MiniBars rows={focus.categories.slice().sort((a, b) => b.amount - a.amount).slice(0, 8).map((c) => ({ label: c.name, value: c.amount, color: CHART_COLORS.emerald }))} />
+   774→   774→                    )}
+   775→   775→                  </div>
+   776→   776→                </CardContent>
+   777→   777→              </Card>
+   778→   778→            ) : (
+   779→   779→              <Card>
+   780→   780→                <CardContent className="p-6 text-center text-sm text-muted-foreground">
+   781→   781→                  No active owners found. Add owners from the Owners page.
+   782→   782→                </CardContent>
+   783→   783→              </Card>
+   784→   784→            )
+   785→   785→          )}
+   786→   786→
+   787→   787→          {/* Charts — combined view */}
+   788→   788→          {mode === "all" && (
+   789→   789→            <div className="grid gap-4 xl:grid-cols-2">
+   790→   790→              <Card>
+   791→   791→                <CardContent className="p-3 sm:p-4">
+   792→   792→                  <p className="mb-1 text-sm font-semibold">Deposits vs withdrawals — by owner</p>
+   793→   793→                  <p className="mb-2 text-[11px] text-muted-foreground">Who put money in, who took money out, and whose card the business spend ran on</p>
+   794→   794→                  {ownerBars.length === 0 ? (
+   795→   795→                    <p className="flex h-44 items-center justify-center text-xs text-muted-foreground sm:h-52">No owner activity in this range</p>
+   796→   796→                  ) : (
+   797→   797→                    <BarsCompare
+   798→   798→                      data={ownerBars}
+   799→   799→                      xKey="name"
+   800→   800→                      showValues
+   801→   801→                      series={[
+   802→   802→                        { key: "Deposits", label: "Deposits", color: CHART_COLORS.emerald },
+   803→   803→                        { key: "Withdrawals", label: "Withdrawals", color: CHART_COLORS.red },
+   804→   804→                        { key: "Business spend", label: "Business spend", color: CHART_COLORS.amber },
+   805→   805→                      ]}
+   806→   806→                    />
+   807→   807→                  )}
+   808→   808→                </CardContent>
+   809→   809→              </Card>
+   810→   810→              <Card>
+   811→   811→                <CardContent className="p-3 sm:p-4">
+   812→   812→                  <p className="mb-1 text-sm font-semibold">Daily flow</p>
+   813→   813→                  <p className="mb-2 text-[11px] text-muted-foreground">Operating expenses vs owner deposits & withdrawals per day</p>
+   814→   814→                  {dailySeries.length === 0 ? (
+   815→   815→                    <p className="flex h-44 items-center justify-center text-xs text-muted-foreground sm:h-52">No activity in this range</p>
+   816→   816→                  ) : (
+   817→   817→                    <AreaTrend
+   818→   818→                      data={dailySeries}
+   819→   819→                      xKey="day"
+   820→   820→                      series={[
+   821→   821→                        { key: "Expenses", label: "Operating expenses", color: CHART_COLORS.amber },
+   822→   822→                        { key: "Deposits", label: "Deposits", color: CHART_COLORS.emerald },
+   823→   823→                        { key: "Withdrawals", label: "Withdrawals", color: CHART_COLORS.red },
+   824→   824→                      ]}
+   825→   825→                    />
+   826→   826→                  )}
+   827→   827→                </CardContent>
+   828→   828→              </Card>
+   829→   829→            </div>
+   830→   830→          )}
+   831→   831→
+   832→   832→          {/* Category breakdown for the current focus */}
+   833→   833→          <div className="grid gap-4 xl:grid-cols-3">
+   834→   834→            <Card className="xl:col-span-1">
+   835→   835→              <CardContent className="p-3 sm:p-4">
+   836→   836→                <p className="mb-3 text-sm font-semibold">{mode === "single" ? `${focus?.name ?? "Owner"} — categories` : "All categories"}</p>
+   837→   837→                {data.loading ? (
+   838→   838→                  <div className="space-y-2.5">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-8 animate-pulse rounded-lg bg-muted" />)}</div>
+   839→   839→                ) : categoryRows.length === 0 ? (
+   840→   840→                  <p className="py-4 text-center text-xs text-muted-foreground">Nothing in this range</p>
+   841→   841→                ) : (
+   842→   842→                  <MiniBars rows={categoryRows} />
+   843→   843→                )}
+   844→   844→              </CardContent>
+   845→   845→            </Card>
+   846→   846→
+   847→   847→            {/* Common (shared) expenses card */}
+   848→   848→            <Card className="border-sky-200/70 dark:border-sky-900 xl:col-span-1">
+   849→   849→              <CardContent className="space-y-3 p-3 sm:p-4">
+   850→   850→                <div className="flex items-center gap-2">
+   851→   851→                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-950 dark:text-sky-400" aria-hidden>
+   852→   852→                    <Users className="h-4 w-4" />
+   853→   853→                  </span>
+   854→   854→                  <div className="min-w-0">
+   855→   855→                    <p className="text-sm font-semibold">Common expenses</p>
+   856→   856→                    <p className="text-[11px] text-muted-foreground">For all owners & the business equally</p>
+   857→   857→                  </div>
+   858→   858→                </div>
+   859→   859→                <p className="text-2xl font-bold tabular-nums">{formatINR(data.data?.common.total ?? 0)}</p>
+   860→   860→                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+   861→   861→                  <BusinessBadge business="MANPOWER" />
+   862→   862→                  <span className="font-semibold tabular-nums text-foreground">{formatINR(data.data?.common.manpower ?? 0)}</span>
+   863→   863→                  <BusinessBadge business="TRANSPORT" />
+   864→   864→                  <span className="font-semibold tabular-nums text-foreground">{formatINR(data.data?.common.transport ?? 0)}</span>
+   865→   865→                </div>
+   866→   866→                {(data.data?.common.categories ?? []).length > 0 && (
+   867→   867→                  <MiniBars
+   868→   868→                    rows={(data.data?.common.categories ?? []).slice().sort((a, b) => b.amount - a.amount).slice(0, 6).map((c) => ({ label: c.name, value: c.amount, color: CHART_COLORS.teal }))}
+   869→   869→                  />
+   870→   870→                )}
+   871→   871→              </CardContent>
+   872→   872→            </Card>
+   873→   873→
+   874→   874→            {/* Per-owner ledger table */}
+   875→   875→            <Card className="xl:col-span-1">
+   876→   876→              <CardContent className="p-3 sm:p-4">
+   877→   877→                <p className="mb-3 text-sm font-semibold">Owner ledger</p>
+   878→   878→                <div className="max-h-96 space-y-2 overflow-y-auto pr-0.5">
+   879→   879→                  {owners.length === 0 && !data.loading && (
+   880→   880→                    <p className="py-4 text-center text-xs text-muted-foreground">No owners yet</p>
+   881→   881→                  )}
+   882→   882→                  {owners.map((o) => (
+   883→   883→                    <button
+   884→   884→                      key={o.id}
+   885→   885→                      type="button"
+   886→   886→                      className={cn(
+   887→   887→                        "w-full rounded-xl border p-2.5 text-left transition-colors hover:bg-muted/50",
+   888→   888→                        mode === "single" && focusId === o.id && "border-primary/50 bg-primary/5"
+   889→   889→                      )}
+   890→   890→                      onClick={() => { setFocusId(o.id); setMode("single"); }}
+   891→   891→                      aria-label={`Focus ${o.name}`}
+   892→   892→                    >
+   893→   893→                      <div className="flex items-center justify-between gap-2">
+   894→   894→                        <p className="truncate text-sm font-medium">{o.name}</p>
+   895→   895→                        <NetPositionChip net={o.net} />
+   896→   896→                      </div>
+   897→   897→                      <div className="mt-1.5 grid grid-cols-3 gap-1.5 text-[11px]">
+   898→   898→                        <span className="text-muted-foreground">In <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(o.deposits, { compact: true })}</span></span>
+   899→   899→                        <span className="text-muted-foreground">Out <span className="font-semibold tabular-nums text-red-600 dark:text-red-400">{formatINR(o.withdrawals, { compact: true })}</span></span>
+   900→   900→                        <span className="text-muted-foreground">Spend <span className="font-semibold tabular-nums">{formatINR(o.advances, { compact: true })}</span></span>
+   901→   901→                      </div>
+   902→   902→                    </button>
+   903→   903→                  ))}
+   904→   904→                </div>
+   905→   905→                {(data.data?.unattributed.total ?? 0) > 0 && (
+   906→   906→                  <p className="mt-3 rounded-lg border border-dashed p-2 text-[11px] text-muted-foreground">
+   907→   907→                    {formatINR(data.data!.unattributed.total)} of older expenses has no owner attribution (recorded before owner tracking).
+   908→   908→                  </p>
+   909→   909→                )}
+   910→   910→              </CardContent>
+   911→   911→            </Card>
+   912→   912→          </div>
+   913→   913→
+   914→   914→          {/* Detailed passbook ledger — every deposit & withdrawal, one row each */}
+   915→   915→          <Card>
+   916→   916→            <CardContent className="p-3 sm:p-4">
+   917→   917→              <div className="mb-3 flex items-center justify-between gap-2">
+   918→   918→                <div className="min-w-0">
+   919→   919→                  <p className="text-sm font-semibold">Detailed ledger — deposits &amp; withdrawals</p>
+   920→   920→                  <p className="text-[11px] text-muted-foreground">
+   921→   921→                    Every owner money movement in this range, newest first, with the running balance{mode === "single" && focus ? ` — ${focus.name} only` : " of all owners combined"}
+   922→   922→                  </p>
+   923→   923→                </div>
+   924→   924→                <Badge variant="outline" className="shrink-0 text-[10px]">{ledgerRows.length} {ledgerRows.length === 1 ? "entry" : "entries"}</Badge>
+   925→   925→              </div>
+   926→   926→              {data.loading ? (
+   927→   927→                <div className="space-y-2.5">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-10 animate-pulse rounded-lg bg-muted" />)}</div>
+   928→   928→              ) : ledgerRows.length === 0 ? (
+   929→   929→                <div className="rounded-xl border border-dashed p-6 text-center">
+   930→   930→                  <p className="text-sm font-medium">No deposits or withdrawals in this range yet</p>
+   931→   931→                  <p className="mt-1 text-xs text-muted-foreground">Use “Add deposit” / “Add withdrawal” above — each entry then appears here with date, reason and running balance.</p>
+   932→   932→                </div>
+   933→   933→              ) : (
+   934→   934→                <DataTable
+   935→   935→                  columns={ledgerColumns}
+   936→   936→                  rows={ledgerRows}
+   937→   937→                  rowKey={(tx) => tx.id}
+   938→   938→                  exportName="owner-deposits-withdrawals"
+   939→   939→                  emptyIcon={Landmark}
+   940→   940→                  emptyTitle="No movements"
+   941→   941→                  emptyDescription="No deposits or withdrawals match this range."
+   942→   942→                />
+   943→   943→              )}
+   944→   944→            </CardContent>
+   945→   945→          </Card>
+   946→   946→
+   947→   947→          {/* Reconciliation note — makes the zero-mismatch guarantee visible */}
+   948→   948→          <p className="px-1 text-[11px] text-muted-foreground">
+   949→   949→            Reconciliation: operating {formatINR(totals?.operating ?? 0)} + owner capital {formatINR(totals?.capital ?? 0)} = all expense rows {formatINR(totals?.grand ?? 0)}.
+   950→   950→            Dashboards, reports and net profit count <span className="font-semibold text-foreground">operating expenses only</span> — owner deposits & withdrawals are capital, never P&amp;L expenses.
+   951→   951→          </p>
+   952→   952→        </>
+   953→   953→      )}
+   954→   954→    </div>
+   955→   955→  );
+   956→   956→}
+   957→   957→
+   958→   958→// ---------------------------------------------------------------------------
+   959→   959→// Main view
+   960→   960→// ---------------------------------------------------------------------------
+   961→   961→
+   962→   962→export default function ExpensesView({ navigate }: ViewProps) {
+   963→   963→  const { lang } = useLang();
+   964→   964→  void navigate; // reserved for future drill-downs
+   965→   965→  const { scope } = useBusiness();
+   966→   966→  const { mutate, saving } = useMutation();
+   967→   967→
+   968→   968→  // Filters — default business follows the global scope when it isn't ALL
+   969→   969→  const [business, setBusiness] = useState(scope === "ALL" ? "" : scope);
+   970→   970→  const [categoryId, setCategoryId] = useState("");
+   971→   971→  const [vehicleId, setVehicleId] = useState("");
+   972→   972→  const [ownerId, setOwnerId] = useState("");
+   973→   973→  const [search, setSearch] = useState("");
+   974→   974→  const searchDeb = useDebounced(search);
+   975→   975→  const [rangeKey, setRangeKey] = useState<RangeKey>("month");
+   976→   976→  const [customFrom, setCustomFrom] = useState("");
+   977→   977→  const [customTo, setCustomTo] = useState("");
+   978→   978→
+   979→   979→  const eff = rangeKey === "custom" ? { from: customFrom, to: customTo } : rangeDates(rangeKey);
+   980→   980→
+   981→   981→  // Static option lists
+   982→   982→  const categories = useAsync<{ items: ExpenseCategoryRec[] }>(
+   983→   983→    () => api.get("/api/expense-categories" + qs({ business: business || undefined })),
+   984→   984→    [business]
+   985→   985→  );
+   986→   986→  const vehicles = useAsync<{ items: VehicleRec[] }>(() => api.get("/api/vehicles"), []);
+   987→   987→  const owners = useAsync<{ items: OwnerRec[] }>(() => api.get("/api/owners"), []);
+   988→   988→
+   989→   989→  // Main list
+   990→   990→  const expenses = useAsync<ListResp<ExpenseRec> & { totals?: { amount: number; operating?: number; capital?: number; common?: number } }>(
+   991→   991→    () => api.get("/api/expenses" + qs({
+   992→   992→      business: business || undefined,
+   993→   993→      categoryId: categoryId || undefined,
+   994→   994→      vehicleId: vehicleId || undefined,
+   995→   995→      ownerId: ownerId || undefined,
+   996→   996→      from: eff.from || undefined,
+   997→   997→      to: eff.to || undefined,
+   998→   998→      search: searchDeb || undefined,
+   999→   999→      pageSize: 200,
+  1000→  1000→    })),
+  1001→  1001→    [business, categoryId, vehicleId, ownerId, eff.from, eff.to, searchDeb]
+  1002→  1002→  );
+  1003→  1003→
+  1004→  1004→  // Recurring section
+  1005→  1005→  const [recOpen, setRecOpen] = useState(false);
+  1006→  1006→  const [recAddOpen, setRecAddOpen] = useState(false);
+  1007→  1007→  const recurring = useAsync<RecurringRow[]>(async () => {
+  1008→  1008→    const d = await api.get<RecurringRow[] | { items: RecurringRow[] }>("/api/recurring-expenses");
+  1009→  1009→    return Array.isArray(d) ? d : (d.items ?? []);
+  1010→  1010→  }, []);
+  1011→  1011→
+  1012→  1012→  const items = expenses.data?.items ?? [];
+  1013→  1013→  const vehicleItems = business === "TRANSPORT" ? vehicles.data?.items ?? [] : [];
+  1014→  1014→
+  1015→  1015→  const [editTarget, setEditTarget] = useState<ExpenseRec | null>(null);
+  1016→  1016→  const [addOpen, setAddOpen] = useState(false);
+  1017→  1017→  const [deleteTarget, setDeleteTarget] = useState<ExpenseRec | null>(null);
+  1018→  1018→
+  1019→  1019→  // Quick actions from the Owner Breakdown tab open the Add Expense dialog
+  1020→  1020→  // pre-filled with the right capital category (and owner when focused).
+  1021→  1021→  const [addPreset, setAddPreset] = useState<{ categoryName: string; spentById?: string } | null>(null);
+  1022→  1022→  const openQuickCapital = (kind: QuickCapitalKind, ownerId?: string) => {
+  1023→  1023→    setAddPreset({ categoryName: kind === "deposit" ? "Owner Contribution" : "Owner Withdrawal", spentById: ownerId || undefined });
+  1024→  1024→    setAddOpen(true);
+  1025→  1025→  };
+  1026→  1026→
+  1027→  1027→  // Expenses tab ↔ Owner Breakdown tab (controlled so the hint strip can link across).
+  1028→  1028→  const [tab, setTab] = useState("expenses");
+  1029→  1029→
+  1030→  1030→  // Version bump whenever expense data changes — the Owner Breakdown section
+  1031→  1031→  // includes it in its fetch deps so its numbers NEVER go stale after a
+  1032→  1032→  // quick-action deposit/withdrawal, delete, edit or undo.
+  1033→  1033→  const [bdVersion, setBdVersion] = useState(0);
+  1034→  1034→  const reloadExpenses = () => { void expenses.reload(); setBdVersion((v) => v + 1); };
+  1035→  1035→
+  1036→  1036→  // An undo applied from the global Undo Center may have restored rows — refresh.
+  1037→  1037→  useEffect(() => {
+  1038→  1038→    const onUndoApplied = () => reloadExpenses();
+  1039→  1039→    window.addEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
+  1040→  1040→    return () => window.removeEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
+  1041→  1041→  }, [expenses.reload]);
+  1042→  1042→
+  1043→  1043→  const breakdown = useMemo(() => {
+  1044→  1044→    const m = new Map<string, number>();
+  1045→  1045→    for (const r of items) {
+  1046→  1046→      const k = r.categoryName || "Uncategorized";
+  1047→  1047→      m.set(k, (m.get(k) ?? 0) + r.amount);
+  1048→  1048→    }
+  1049→  1049→    return [...m.entries()]
+  1050→  1050→      .map(([label, value]) => ({ label, value }))
+  1051→  1051→      .sort((a, b) => b.value - a.value)
+  1052→  1052→      .slice(0, 8);
+  1053→  1053→  }, [items]);
+  1054→  1054→
+  1055→  1055→  // Bulk selection + delete
+  1056→  1056→  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  1057→  1057→  const [bulkConfirm, setBulkConfirm] = useState(false);
+  1058→  1058→
+  1059→  1059→  const onBusinessChange = (v: string) => {
+  1060→  1060→    setBusiness(v);
+  1061→  1061→    setCategoryId("");
+  1062→  1062→    setVehicleId("");
+  1063→  1063→  };
+  1064→  1064→
+  1065→  1065→  const removeExpense = async () => {
+  1066→  1066→    if (!deleteTarget) return;
+  1067→  1067→    const res = await mutate(() => api.del(`/api/expenses/${deleteTarget.id}`), "Expense deleted", () => ({ module: "EXPENSE", recordId: deleteTarget.id, onUndo: () => reloadExpenses() }));
+  1068→  1068→    if (res.ok) reloadExpenses();
+  1069→  1069→    setDeleteTarget(null);
+  1070→  1070→  };
+  1071→  1071→
+  1072→  1072→  // Bulk delete: one DELETE at a time (allSettled semantics — a failure never
+  1073→  1073→  // aborts the rest), then a single toast + one Undo action that reverses every
+  1074→  1074→  // deleted row via the audit log.
+  1075→  1075→  const bulkDelete = async () => {
+  1076→  1076→    const ids = items.filter((r) => selectedIds.has(r.id)).map((r) => r.id);
+  1077→  1077→    if (ids.length === 0) { setBulkConfirm(false); return; }
+  1078→  1078→    setBulkConfirm(false);
+  1079→  1079→    const results: PromiseSettledResult<unknown>[] = [];
+  1080→  1080→    for (const id of ids) {
+  1081→  1081→      try {
+  1082→  1082→        results.push({ status: "fulfilled", value: await api.del(`/api/expenses/${id}`) });
+  1083→  1083→      } catch (e) {
+  1084→  1084→        results.push({ status: "rejected", reason: e });
+  1085→  1085→      }
+  1086→  1086→    }
+  1087→  1087→    const okIds = ids.filter((_, i) => results[i].status === "fulfilled");
+  1088→  1088→    if (okIds.length > 0) {
+  1089→  1089→      toast.success(`Deleted ${okIds.length} of ${ids.length} expense${ids.length === 1 ? "" : "s"}`, {
+  1090→  1090→        duration: 8000,
+  1091→  1091→        action: {
+  1092→  1092→          label: "Undo",
+  1093→  1093→          onClick: () => {
+  1094→  1094→            void (async () => {
+  1095→  1095→              for (const id of okIds) {
+  1096→  1096→                await undoRequest({ module: "EXPENSE", recordId: id, onUndo: () => reloadExpenses() });
+  1097→  1097→              }
+  1098→  1098→            })();
+  1099→  1099→          },
+  1100→  1100→        },
+  1101→  1101→      });
+  1102→  1102→    } else {
+  1103→  1103→      toast.error("Could not delete the selected expenses");
+  1104→  1104→    }
+  1105→  1105→    setSelectedIds(new Set());
+  1106→  1106→    void reloadExpenses();
+  1107→  1107→  };
+  1108→  1108→
+  1109→  1109→  const toggleRecurring = async (row: RecurringRow, next: boolean) => {
+  1110→  1110→    const res = await mutate(() => api.put(`/api/recurring-expenses/${row.id}/toggle`, { active: next }));
+  1111→  1111→    if (res.ok) {
+  1112→  1112→      toast.success(next ? `"${row.name}" activated` : `"${row.name}" paused`);
+  1113→  1113→      void recurring.reload();
+  1114→  1114→    }
+  1115→  1115→  };
+  1116→  1116→
+  1117→  1117→  const runRecurring = async (row: RecurringRow) => {
+  1118→  1118→    let created = 0;
+  1119→  1119→    const res = await mutate(async () => {
+  1120→  1120→      const d = await api.post<{ created: number }>(`/api/recurring-expenses/${row.id}/run`);
+  1121→  1121→      created = d.created ?? 0;
+  1122→  1122→      return d;
+  1123→  1123→    });
+  1124→  1124→    if (res.ok) {
+  1125→  1125→      toast.success(`Created ${created} expenses from "${row.name}"`);
+  1126→  1126→      void recurring.reload();
+  1127→  1127→      reloadExpenses();
+  1128→  1128→    }
+  1129→  1129→  };
+  1130→  1130→
+  1131→  1131→  const columns: Column<ExpenseRec>[] = [
+  1132→  1132→    {
+  1133→  1133→      key: "description", label: t(lang, "col.expense"), primary: true,
+  1134→  1134→      render: (r) => (
+  1135→  1135→        <div className="min-w-0">
+  1136→  1136→          <p className="flex items-center gap-1.5 truncate font-medium">
+  1137→  1137→            {r.description || r.categoryName || "Untitled expense"}
+  1138→  1138→            {r.kind === "CAPITAL" && <CapitalBadge />}
+  1139→  1139→          </p>
+  1140→  1140→          <p className="truncate text-[11px] text-muted-foreground">
+  1141→  1141→            {fmtDay(r.date)} · {r.categoryName ?? "Uncategorized"}{r.reason ? ` · ${r.reason}` : ""}
+  1142→  1142→          </p>
+  1143→  1143→        </div>
+  1144→  1144→      ),
+  1145→  1145→      value: (r) => r.description || r.categoryName || "Untitled expense",
+  1146→  1146→    },
+  1147→  1147→    { key: "date", label: t(lang, "col.date"), value: (r) => fmtDay(r.date), hideOnMobile: true },
+  1148→  1148→    { key: "business", label: t(lang, "col.business"), render: (r) => <BusinessBadge business={r.business} />, value: (r) => r.business },
+  1149→  1149→    { key: "category", label: t(lang, "col.category"), value: (r) => r.categoryName ?? "—", hideOnMobile: true },
+  1150→  1150→    { key: "vehicle", label: t(lang, "col.vehicle"), value: (r) => r.vehicleName ?? "—", hideOnMobile: true },
+  1151→  1151→    {
+  1152→  1152→      key: "spentBy", label: t(lang, "col.spentBy"),
+  1153→  1153→      render: (r) =>
+  1154→  1154→        r.isCommon ? (
+  1155→  1155→          <CommonBadge />
+  1156→  1156→        ) : (
+  1157→  1157→          <span className="flex items-center gap-1 text-sm"><Crown className="h-3 w-3 shrink-0 text-amber-500" aria-hidden />{r.spentByName ?? "—"}</span>
+  1158→  1158→        ),
+  1159→  1159→      value: (r) => (r.isCommon ? "Common — all owners" : (r.spentByName ?? "—")),
+  1160→  1160→    },
+  1161→  1161→    {
+  1162→  1162→      key: "reason", label: "Reason", hideOnMobile: true,
+  1163→  1163→      render: (r) => <span className="text-xs text-muted-foreground">{r.reason ?? "—"}</span>,
+  1164→  1164→      value: (r) => r.reason ?? "",
+  1165→  1165→    },
+  1166→  1166→    {
+  1167→  1167→      key: "amount", label: t(lang, "col.amount"), className: "text-right",
+  1168→  1168→      render: (r) => <span className="font-semibold tabular-nums">{formatINR(r.amount)}</span>,
+  1169→  1169→      value: (r) => formatINR(r.amount),
+  1170→  1170→    },
+  1171→  1171→    {
+  1172→  1172→      key: "actions", label: "", className: "w-14",
+  1173→  1173→      render: (r) => (
+  1174→  1174→        <div className="flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
+  1175→  1175→          <DropdownMenu>
+  1176→  1176→            <DropdownMenuTrigger asChild>
+  1177→  1177→              <Button variant="ghost" size="icon" className="h-9 w-9 sm:h-8 sm:w-8" aria-label={`Actions for ${r.description || "expense"}`}>
+  1178→  1178→                <MoreHorizontal className="h-4 w-4" />
+  1179→  1179→              </Button>
+  1180→  1180→            </DropdownMenuTrigger>
+  1181→  1181→            <DropdownMenuContent align="end" className="w-36">
+  1182→  1182→              <DropdownMenuItem onClick={() => setEditTarget(r)}>
+  1183→  1183→                <Pencil className="h-3.5 w-3.5" />Edit
+  1184→  1184→              </DropdownMenuItem>
+  1185→  1185→              <DropdownMenuItem className="text-red-600 dark:text-red-400" onClick={() => setDeleteTarget(r)}>
+  1186→  1186→                <Trash2 className="h-3.5 w-3.5" />Delete
+  1187→  1187→              </DropdownMenuItem>
+  1188→  1188→            </DropdownMenuContent>
+  1189→  1189→          </DropdownMenu>
+  1190→  1190→        </div>
+  1191→  1191→      ),
+  1192→  1192→      value: () => "",
+  1193→  1193→    },
+  1194→  1194→  ];
+  1195→  1195→
+  1196→  1196→  const totals = expenses.data?.totals;
+  1197→  1197→  const operating = totals?.operating ?? 0;
+  1198→  1198→  const capital = totals?.capital ?? 0;
+  1199→  1199→
+  1200→  1200→  return (
+  1201→  1201→    <div className="space-y-4">
+  1202→  1202→      <PageHeader
+  1203→  1203→        title={t(lang, "page.expenses")}
+  1204→  1204→        subtitle={t(lang, "page.expenses.sub")}
+  1205→  1205→        actions={
+  1206→  1206→          <Button size="sm" className="h-9 gap-1.5" onClick={() => setAddOpen(true)}>
+  1207→  1207→            <Plus className="h-4 w-4" aria-hidden />Add Expense
+  1208→  1208→          </Button>
+  1209→  1209→        }
+  1210→  1210→      />
+  1211→  1211→
+  1212→  1212→      <Tabs value={tab} onValueChange={setTab}>
+  1213→  1213→        <TabsList className="h-10 w-full sm:w-auto" aria-label="Expense sections">
+  1214→  1214→          <TabsTrigger value="expenses" className="flex-1 gap-1.5 sm:flex-none sm:px-4">
+  1215→  1215→            <Receipt className="h-3.5 w-3.5" aria-hidden />Expenses
+  1216→  1216→          </TabsTrigger>
+  1217→  1217→          <TabsTrigger value="owners" className="flex-1 gap-1.5 sm:flex-none sm:px-4">
+  1218→  1218→            <Crown className="h-3.5 w-3.5" aria-hidden />Owner Breakdown
+  1219→  1219→          </TabsTrigger>
+  1220→  1220→        </TabsList>
+  1221→  1221→
+  1222→  1222→        {/* ------------------------- Expenses tab ------------------------- */}
+  1223→  1223→        <TabsContent value="expenses" className="mt-4 space-y-4">
+  1224→  1224→          {/* Discoverability pointer — owner deposits & withdrawals live in the Owner Breakdown tab */}
+  1225→  1225→          <Card className="border-amber-200/70 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/30">
+  1226→  1226→            <CardContent className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:p-3.5">
+  1227→  1227→              <div className="flex min-w-0 items-start gap-2.5">
+  1228→  1228→                <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300" aria-hidden>
+  1229→  1229→                  <Landmark className="h-4 w-4" />
+  1230→  1230→                </span>
+  1231→  1231→                <p className="text-xs leading-relaxed text-foreground">
+  1232→  1232→                  <span className="font-semibold">Owner money in &amp; out?</span> When recording an expense, choose <span className="font-semibold">who took or put in the money</span> under “Paid by / Owner” — deposits, withdrawals, reasons and the full statement with running balance live in the <span className="font-semibold">Owner Breakdown</span> tab.
+  1233→  1233→                </p>
+  1234→  1234→              </div>
+  1235→  1235→              <Button
+  1236→  1236→                size="sm" variant="outline"
+  1237→  1237→                className="h-8 shrink-0 gap-1.5 border-amber-300 text-xs text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:text-amber-200 dark:hover:bg-amber-900"
+  1238→  1238→                onClick={() => setTab("owners")}
+  1239→  1239→              >
+  1240→  1240→                <Crown className="h-3.5 w-3.5" aria-hidden />Open Owner Breakdown
+  1241→  1241→              </Button>
+  1242→  1242→            </CardContent>
+  1243→  1243→          </Card>
+  1244→  1244→
+  1245→  1245→          {/* Filters */}
+  1246→  1246→          <Card>
+  1247→  1247→            <CardContent className="space-y-3 p-3 sm:p-4">
+  1248→  1248→              <div className="grid grid-cols-2 gap-2.5 sm:gap-3 sm:grid-cols-2 xl:grid-cols-4">
+  1249→  1249→                <SelectInput value={business} onChange={onBusinessChange} options={BUSINESS_OPTIONS} placeholder="All businesses" />
+  1250→  1250→                <SelectInput
+  1251→  1251→                  value={categoryId}
+  1252→  1252→                  onChange={setCategoryId}
+  1253→  1253→                  options={[{ label: "All categories", value: "" }, ...(categories.data?.items ?? []).map((c) => ({ label: c.name, value: c.id }))]}
+  1254→  1254→                  placeholder="All categories"
+  1255→  1255→                />
+  1256→  1256→                {business === "TRANSPORT" && (
+  1257→  1257→                  <SelectInput
+  1258→  1258→                    value={vehicleId}
+  1259→  1259→                    onChange={setVehicleId}
+  1260→  1260→                    options={[{ label: "All vehicles", value: "" }, ...vehicleItems.map((v) => ({ label: v.name, value: v.id }))]}
+  1261→  1261→                    placeholder="All vehicles"
+  1262→  1262→                  />
+  1263→  1263→                )}
+  1264→  1264→                <SelectInput
+  1265→  1265→                  value={ownerId}
+  1266→  1266→                  onChange={setOwnerId}
+  1267→  1267→                  options={[
+  1268→  1268→                    { label: "All owners", value: "" },
+  1269→  1269→                    { label: "Common — shared by all", value: "COMMON" },
+  1270→  1270→                    ...((owners.data?.items ?? []).map((o) => ({ label: o.name, value: o.id }))),
+  1271→  1271→                  ]}
+  1272→  1272→                  placeholder="All owners"
+  1273→  1273→                />
+  1274→  1274→              </div>
+  1275→  1275→              <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center">
+  1276→  1276→                <div className="flex w-full items-center gap-2 overflow-hidden">
+  1277→  1277→                  <RangeSelector
+  1278→  1278→                    value={rangeKey}
+  1279→  1279→                    onChange={(r) => { setRangeKey(r); }}
+  1280→  1280→                    className="flex-1"
+  1281→  1281→                  />
+  1282→  1282→                  <Button
+  1283→  1283→                    size="sm"
+  1284→  1284→                    variant={rangeKey === "custom" ? "default" : "outline"}
+  1285→  1285→                    className="h-8 shrink-0 rounded-full px-3 text-xs"
+  1286→  1286→                    onClick={() => {
+  1287→  1287→                      if (rangeKey === "custom") { setRangeKey("month"); setCustomFrom(""); setCustomTo(""); }
+  1288→  1288→                      else setRangeKey("custom");
+  1289→  1289→                    }}
+  1290→  1290→                  >
+  1291→  1291→                    Custom
+  1292→  1292→                  </Button>
+  1293→  1293→                </div>
+  1294→  1294→                <SearchInput value={search} onChange={setSearch} placeholder="Search description…" className="lg:w-64" />
+  1295→  1295→              </div>
+  1296→  1296→              {rangeKey === "custom" && (
+  1297→  1297→                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed p-2.5">
+  1298→  1298→                  <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="h-9 w-full sm:w-40" aria-label="From date" />
+  1299→  1299→                  <span className="text-xs text-muted-foreground">to</span>
+  1300→  1300→                  <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-9 w-full sm:w-40" aria-label="To date" />
+  1301→  1301→                </div>
+  1302→  1302→              )}
+  1303→  1303→            </CardContent>
+  1304→  1304→          </Card>
+  1305→  1305→
+  1306→  1306→          <StatGrid cols={2}>
+  1307→  1307→            <StatCard
+  1308→  1308→              label="Operating expenses"
+  1309→  1309→              value={formatINR(operating)}
+  1310→  1310→              icon={Wallet}
+  1311→  1311→              tone="negative"
+  1312→  1312→              hint="Feeds profit & reports"
+  1313→  1313→            />
+  1314→  1314→            <StatCard
+  1315→  1315→              label="Owner capital"
+  1316→  1316→              value={formatINR(capital)}
+  1317→  1317→              icon={Landmark}
+  1318→  1318→              hint="Deposits + withdrawals (not expenses)"
+  1319→  1319→            />
+  1320→  1320→            <StatCard
+  1321→  1321→              label="Common (shared)"
+  1322→  1322→              value={formatINR(totals?.common ?? 0)}
+  1323→  1323→              icon={Users}
+  1324→  1324→              hint="Shared by all owners & business"
+  1325→  1325→            />
+  1326→  1326→            <StatCard label="Records" value={String(expenses.data?.total ?? items.length)} icon={Hash} hint="Matching current filters" />
+  1327→  1327→          </StatGrid>
+  1328→  1328→
+  1329→  1329→          {/* Reconciliation strip — visible guarantee the numbers always add up */}
+  1330→  1330→          <p className="px-1 text-[11px] text-muted-foreground">
+  1331→  1331→            Reconciliation: operating {formatINR(operating)} + owner capital {formatINR(capital)} = total {formatINR(totals?.amount ?? 0)} across every surface.
+  1332→  1332→          </p>
+  1333→  1333→
+  1334→  1334→          <div className="grid gap-4 xl:grid-cols-3">
+  1335→  1335→            {/* List */}
+  1336→  1336→            <Card className="xl:col-span-2">
+  1337→  1337→              <CardContent className="p-3 sm:p-4">
+  1338→  1338→                {expenses.error ? (
+  1339→  1339→                  <ErrorState message={expenses.error} onRetry={() => void expenses.reload()} />
+  1340→  1340→                ) : (
+  1341→  1341→                  <DataTable
+  1342→  1342→                    columns={columns}
+  1343→  1343→                    rows={items}
+  1344→  1344→                    rowKey={(r) => r.id}
+  1345→  1345→                    exportName="expenses"
+  1346→  1346→                    loading={expenses.loading}
+  1347→  1347→                    emptyIcon={Receipt}
+  1348→  1348→                    emptyTitle="No expenses match"
+  1349→  1349→                    emptyDescription="Try widening the date range or clearing filters."
+  1350→  1350→                    selectKey={(r) => r.id}
+  1351→  1351→                    selectedIds={selectedIds}
+  1352→  1352→                    onSelectedChange={setSelectedIds}
+  1353→  1353→                    bulkBar={(ids) => (
+  1354→  1354→                      <>
+  1355→  1355→                        <span className="px-1.5 text-xs font-semibold tabular-nums whitespace-nowrap">
+  1356→  1356→                          {ids.length} selected
+  1357→  1357→                        </span>
+  1358→  1358→                        <Button
+  1359→  1359→                          variant="outline"
+  1360→  1360→                          size="sm"
+  1361→  1361→                          className="h-8 gap-1.5 text-xs"
+  1362→  1362→                          onClick={() =>
+  1363→  1363→                            downloadCsv(
+  1364→  1364→                              "expenses-selected",
+  1365→  1365→                              columns,
+  1366→  1366→                              items.filter((r) => ids.includes(r.id))
+  1367→  1367→                            )
+  1368→  1368→                          }
+  1369→  1369→                          aria-label={`Export ${ids.length} selected expenses as CSV`}
+  1370→  1370→                        >
+  1371→  1371→                          <Download className="h-3.5 w-3.5" aria-hidden />Export CSV
+  1372→  1372→                        </Button>
+  1373→  1373→                        <Button
+  1374→  1374→                          variant="destructive"
+  1375→  1375→                          size="sm"
+  1376→  1376→                          className="h-8 gap-1.5 text-xs"
+  1377→  1377→                          onClick={() => setBulkConfirm(true)}
+  1378→  1378→                          aria-label={`Delete ${ids.length} selected expenses`}
+  1379→  1379→                        >
+  1380→  1380→                          <Trash2 className="h-3.5 w-3.5" aria-hidden />Delete
+  1381→  1381→                        </Button>
+  1382→  1382→                      </>
+  1383→  1383→                    )}
+  1384→  1384→                  />
+  1385→  1385→                )}
+  1386→  1386→              </CardContent>
+  1387→  1387→            </Card>
+  1388→  1388→
+  1389→  1389→            {/* Side: breakdown + recurring */}
+  1390→  1390→            <div className="space-y-4">
+  1391→  1391→              <Card>
+  1392→  1392→                <CardContent className="p-3 sm:p-4">
+  1393→  1393→                  <p className="mb-3 text-sm font-semibold">Category breakdown</p>
+  1394→  1394→                  {expenses.loading ? (
+  1395→  1395→                    <div className="space-y-2.5">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-8 rounded-lg bg-muted animate-pulse" />)}</div>
+  1396→  1396→                  ) : (
+  1397→  1397→                    <MiniBars rows={breakdown.map((b) => ({ ...b, color: CHART_COLORS.amber }))} />
+  1398→  1398→                  )}
+  1399→  1399→                </CardContent>
+  1400→  1400→              </Card>
+  1401→  1401→
+  1402→  1402→              <Card>
+  1403→  1403→                <CardContent className="p-3 sm:p-4">
+  1404→  1404→                  <div
+  1405→  1405→                    role="button"
+  1406→  1406→                    tabIndex={0}
+  1407→  1407→                    className="flex w-full cursor-pointer items-center justify-between gap-2"
+  1408→  1408→                    onClick={() => setRecOpen((o) => !o)}
+  1409→  1409→                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setRecOpen((o) => !o); } }}
+  1410→  1410→                    aria-expanded={recOpen}
+  1411→  1411→                    aria-label="Toggle recurring expenses"
+  1412→  1412→                  >
+  1413→  1413→                    <span className="flex items-center gap-2 text-sm font-semibold">
+  1414→  1414→                      <Repeat className="h-4 w-4 text-primary" aria-hidden />Recurring
+  1415→  1415→                      <Badge variant="outline" className="text-[10px]">{recurring.data?.length ?? 0}</Badge>
+  1416→  1416→                    </span>
+  1417→  1417→                    <span className="flex items-center gap-1.5">
+  1418→  1418→                      <Button
+  1419→  1419→                        size="sm" variant="outline" className="h-8 gap-1 text-xs"
+  1420→  1420→                        onClick={(e) => { e.stopPropagation(); setRecAddOpen(true); }}
+  1421→  1421→                      >
+  1422→  1422→                        <Plus className="h-3 w-3" aria-hidden />New
+  1423→  1423→                      </Button>
+  1424→  1424→                      <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", recOpen && "rotate-180")} aria-hidden />
+  1425→  1425→                    </span>
+  1426→  1426→                  </div>
+  1427→  1427→
+  1428→  1428→                  {recOpen && (
+  1429→  1429→                    <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-0.5">
+  1430→  1430→                      {recurring.loading && <div className="h-16 animate-pulse rounded-lg bg-muted" />}
+  1431→  1431→                      {!recurring.loading && (recurring.data ?? []).length === 0 && (
+  1432→  1432→                        <p className="py-4 text-center text-xs text-muted-foreground">No recurring expenses yet</p>
+  1433→  1433→                      )}
+  1434→  1434→                      {(recurring.data ?? []).map((row) => (
+  1435→  1435→                        <div key={row.id} className="rounded-xl border p-2.5">
+  1436→  1436→                          <div className="flex items-start justify-between gap-2">
+  1437→  1437→                            <div className="min-w-0">
+  1438→  1438→                              <p className="truncate text-sm font-medium">{row.name}</p>
+  1439→  1439→                              <p className="mt-0.5 text-[11px] text-muted-foreground">
+  1440→  1440→                                {formatINR(row.amount)} · {row.frequency?.toLowerCase() || "monthly"} · Last: {row.lastGeneratedMonth ?? "—"}
+  1441→  1441→                              </p>
+  1442→  1442→                            </div>
+  1443→  1443→                            <BusinessBadge business={row.business} />
+  1444→  1444→                          </div>
+  1445→  1445→                          <div className="mt-2 flex items-center justify-between gap-2">
+  1446→  1446→                            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+  1447→  1447→                              <Switch checked={row.active ?? false} onCheckedChange={(v) => void toggleRecurring(row, v)} disabled={saving} aria-label={`Toggle ${row.name}`} />
+  1448→  1448→                              {row.active === false ? "Paused" : "Active"}
+  1449→  1449→                            </label>
+  1450→  1450→                            <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={() => void runRecurring(row)} disabled={saving}>
+  1451→  1451→                              <Play className="h-3 w-3" aria-hidden />Run now
+  1452→  1452→                            </Button>
+  1453→  1453→                          </div>
+  1454→  1454→                        </div>
+  1455→  1455→                      ))}
+  1456→  1456→                    </div>
+  1457→  1457→                  )}
+  1458→  1458→                </CardContent>
+  1459→  1459→              </Card>
+  1460→  1460→            </div>
+  1461→  1461→          </div>
+  1462→  1462→        </TabsContent>
+  1463→  1463→
+  1464→  1464→        {/* ---------------------- Owner Breakdown tab ---------------------- */}
+  1465→  1465→        <TabsContent value="owners" className="mt-4">
+  1466→  1466→          <OwnerBreakdownSection business={business} from={eff.from} to={eff.to} onQuickAction={openQuickCapital} refreshKey={bdVersion} />
+  1467→  1467→        </TabsContent>
+  1468→  1468→      </Tabs>
+  1469→  1469→
+  1470→  1470→      <ExpenseFormDialog
+  1471→  1471→        open={addOpen}
+  1472→  1472→        onOpenChange={(v) => { setAddOpen(v); if (!v) setAddPreset(null); }}
+  1473→  1473→        expense={null}
+  1474→  1474→        vehicles={vehicles.data?.items ?? []}
+  1475→  1475→        onDone={() => { reloadExpenses(); }}
+  1476→  1476→        preset={addPreset}
+  1477→  1477→      />
+  1478→  1478→
+  1479→  1479→      {/* Mobile FAB — alternate trigger for Add Expense (hidden while bulk rows
+  1480→  1480→          are selected so the sticky bulk bar stays unobstructed) */}
+  1481→  1481→      {selectedIds.size === 0 && (
+  1482→  1482→        <ViewFab icon={Plus} label="Add expense" onClick={() => setAddOpen(true)} />
+  1483→  1483→      )}
+  1484→  1484→      <ExpenseFormDialog open={Boolean(editTarget)} onOpenChange={(v) => !v && setEditTarget(null)} expense={editTarget} vehicles={vehicles.data?.items ?? []} onDone={() => reloadExpenses()} />
+  1485→  1485→      <RecurringFormDialog open={recAddOpen} onOpenChange={setRecAddOpen} onDone={() => { void recurring.reload(); reloadExpenses(); }} />
+  1486→  1486→
+  1487→  1487→      <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(v) => !v && setDeleteTarget(null)}>
+  1488→  1488→        <AlertDialogContent>
+  1489→  1489→          <AlertDialogHeader>
+  1490→  1490→            <AlertDialogTitle>Delete this expense?</AlertDialogTitle>
+  1491→  1491→            <AlertDialogDescription>
+  1492→  1492→              {deleteTarget?.description || deleteTarget?.categoryName || "Expense"} · {formatINR(deleteTarget?.amount ?? 0)} on {deleteTarget ? fmtDay(deleteTarget.date) : ""}.
+  1493→  1493→              This is permanent and audit-logged.
+  1494→  1494→            </AlertDialogDescription>
+  1495→  1495→          </AlertDialogHeader>
+  1496→  1496→          <AlertDialogFooter>
+  1497→  1497→            <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
+  1498→  1498→            <AlertDialogAction
+  1499→  1499→              className="min-h-10 bg-red-600 text-white hover:bg-red-700"
+  1500→  1500→              onClick={(e) => { e.preventDefault(); void removeExpense(); }}
+  1501→  1501→            >
+  1502→  1502→              {saving ? "Deleting…" : "Delete"}
+  1503→  1503→            </AlertDialogAction>
+  1504→  1504→          </AlertDialogFooter>
+  1505→  1505→        </AlertDialogContent>
+  1506→  1506→      </AlertDialog>
+  1507→  1507→
+  1508→  1508→      <AlertDialog open={bulkConfirm} onOpenChange={setBulkConfirm}>
+  1509→  1509→        <AlertDialogContent>
+  1510→  1510→          <AlertDialogHeader>
+  1511→  1511→            <AlertDialogTitle>Delete {selectedIds.size} selected expense{selectedIds.size === 1 ? "" : "s"}?</AlertDialogTitle>
+  1512→  1512→            <AlertDialogDescription>
+  1513→  1513→              Each deleted expense is audit-logged — a single Undo action after deleting restores every row from the audit trail.
+  1514→  1514→            </AlertDialogDescription>
+  1515→  1515→          </AlertDialogHeader>
+  1516→  1516→          <AlertDialogFooter>
+  1517→  1517→            <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
+  1518→  1518→            <AlertDialogAction
+  1519→  1519→              className="min-h-10 bg-red-600 text-white hover:bg-red-700"
+  1520→  1520→              onClick={(e) => { e.preventDefault(); void bulkDelete(); }}
+  1521→  1521→            >
+  1522→  1522→              Delete {selectedIds.size}
+  1523→  1523→            </AlertDialogAction>
+  1524→  1524→          </AlertDialogFooter>
+  1525→  1525→        </AlertDialogContent>
+  1526→  1526→      </AlertDialog>
+  1527→  1527→    </div>
+  1528→  1528→  );
+  1529→  1529→}
+  1530→  1530→

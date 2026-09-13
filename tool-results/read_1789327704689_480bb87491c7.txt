@@ -1,0 +1,748 @@
+     1→"use client";
+     2→
+     3→import { useState } from "react";
+     4→import { api } from "@/lib/api-client";
+     5→import { formatINR } from "@/lib/money";
+     6→import type { ViewProps } from "@/components/view-types";
+     7→import { MonthPicker, toMonth } from "@/components/shared/month-picker";
+     8→import { PageHeader } from "@/components/shared/page-header";
+     9→import { EmptyState } from "@/components/shared/empty-state";
+    10→import { Card, CardContent } from "@/components/ui/card";
+    11→import { Button } from "@/components/ui/button";
+    12→import { Input } from "@/components/ui/input";
+    13→import { Switch } from "@/components/ui/switch";
+    14→import { Skeleton } from "@/components/ui/skeleton";
+    15→import { cn } from "@/lib/utils";
+    16→import { toast } from "sonner";
+    17→import {
+    18→  CalendarRange, ClipboardCopy, Crown, EllipsisVertical, Info, KeyRound, Mail, MessageCircle, Minus, Pencil,
+    19→  Plus, Send, ShieldCheck, TrendingDown, TrendingUp, UserPlus,
+    20→} from "lucide-react";
+    21→import {
+    22→  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+    23→} from "@/components/ui/dropdown-menu";
+    24→import {
+    25→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    26→  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+    27→} from "@/components/ui/alert-dialog";
+    28→import {
+    29→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    30→} from "@/components/ui/dialog";
+    31→import {
+    32→  Field, InitialAvatar, ListResp, errMessage, fmtDay, useAsync, useMutation,
+    33→} from "./_shared";
+    34→import { useAuth } from "@/components/providers";
+    35→
+    36→// ---------------------------------------------------------------------------
+    37→// Owner row shape (GET /api/owners → { items })
+    38→// ---------------------------------------------------------------------------
+    39→
+    40→interface EmailRow {
+    41→  key: string; label: string; value: number; previous: number;
+    42→  pct: number | null; goodUp: boolean;
+    43→}
+    44→
+    45→interface EmailPreview {
+    46→  owner: { id: string; name: string; username: string; mobile: string | null; isActive: boolean };
+    47→  month: string; prevMonth: string; monthLabel: string; prevMonthLabel: string;
+    48→  subject: string;
+    49→  rows: EmailRow[];
+    50→  activity: { deployments: number; trips: number; advances: number; emi: number };
+    51→  insights: string[];
+    52→  note: string;
+    53→  bodyText: string;
+    54→  disclaimer: string;
+    55→}
+    56→
+    57→interface OwnerRow {
+    58→  id: string;
+    59→  name: string;
+    60→  username: string;
+    61→  mobile?: string | null;
+    62→  isActive: boolean;
+    63→  createdAt?: string;
+    64→  createdRecords?: number;
+    65→}
+    66→
+    67→// ---------------------------------------------------------------------------
+    68→// Monthly summary email dialog (mock send — audit-logged)
+    69→// ---------------------------------------------------------------------------
+    70→
+    71→function EmailDeltaPill({ pct, goodUp }: { pct: number | null; goodUp: boolean }) {
+    72→  if (pct === null) {
+    73→    return <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">new</span>;
+    74→  }
+    75→  if (pct === 0) {
+    76→    return <span className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold text-muted-foreground"><Minus className="h-2.5 w-2.5" aria-hidden />0%</span>;
+    77→  }
+    78→  const up = pct > 0;
+    79→  const good = up === goodUp;
+    80→  const Icon = up ? TrendingUp : TrendingDown;
+    81→  return (
+    82→    <span
+    83→      className={cn(
+    84→        "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-bold tabular-nums",
+    85→        good
+    86→          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+    87→          : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+    88→      )}
+    89→    >
+    90→      <Icon className="h-2.5 w-2.5" aria-hidden />{up ? "+" : ""}{pct}%
+    91→    </span>
+    92→  );
+    93→}
+    94→
+    95→function MonthlyEmailDialog({ target, onClose }: { target: OwnerRow; onClose: () => void }) {
+    96→  const [month, setMonth] = useState<string>(() => toMonth());
+    97→  const { data, loading, error, reload } = useAsync<EmailPreview>(
+    98→    () => api.get<EmailPreview>(`/api/owners/monthly-email?ownerId=${target.id}&month=${month}`),
+    99→    [month, target.id]
+   100→  );
+   101→  const { mutate, saving } = useMutation();
+   102→
+   103→  const copyText = async () => {
+   104→    if (!data) return;
+   105→    try {
+   106→      await navigator.clipboard.writeText(data.bodyText);
+   107→      toast.success("Email text copied to clipboard");
+   108→    } catch {
+   109→      toast.error("Could not copy — clipboard unavailable");
+   110→    }
+   111→  };
+   112→
+   113→  const markSent = async () => {
+   114→    const res = await mutate(
+   115→      () => api.post("/api/owners/monthly-email", { ownerId: target.id, month }),
+   116→      `Summary email logged as sent to ${target.name}`
+   117→    );
+   118→    if (res.ok) onClose();
+   119→  };
+   120→
+   121→  // WhatsApp share — opens WhatsApp with the summary prefilled (mock, no server
+   122→  // delivery). Prefers the owner's mobile number; falls back to a blank share sheet.
+   123→  const waHref = (() => {
+   124→    const digits = (target.mobile ?? "").replace(/\D/g, "");
+   125→    const text = encodeURIComponent(data?.bodyText ?? "");
+   126→    return digits ? `https://wa.me/${digits}?text=${text}` : `https://wa.me/?text=${text}`;
+   127→  })();
+   128→
+   129→  return (
+   130→    <Dialog open onOpenChange={(v) => !v && onClose()}>
+   131→      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-xl">
+   132→        <DialogHeader>
+   133→          <DialogTitle className="flex items-center gap-2">
+   134→            <Mail className="h-4 w-4 text-primary" aria-hidden />
+   135→            Monthly summary — {target.name}
+   136→          </DialogTitle>
+   137→          <DialogDescription>
+   138→            Composed from the same numbers as the dashboard summary card. Sending is a logged mock until Phase 2.
+   139→          </DialogDescription>
+   140→        </DialogHeader>
+   141→
+   142→        <div className="flex flex-wrap items-center justify-between gap-2">
+   143→          <MonthPicker month={month} onChange={setMonth} />
+   144→          {data && (
+   145→            <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={copyText}>
+   146→              <ClipboardCopy className="h-3.5 w-3.5" aria-hidden />Copy text
+   147→            </Button>
+   148→          )}
+   149→        </div>
+   150→
+   151→        {loading && (
+   152→          <div className="space-y-2">
+   153→            <Skeleton className="h-16 rounded-xl" />
+   154→            <Skeleton className="h-40 rounded-xl" />
+   155→          </div>
+   156→        )}
+   157→
+   158→        {error && (
+   159→          <div className="rounded-xl border border-red-200 bg-red-50/60 p-4 text-center dark:border-red-900 dark:bg-red-950/30">
+   160→            <p className="text-xs text-red-700 dark:text-red-300">{error}</p>
+   161→            <Button variant="outline" size="sm" className="mt-2 h-8" onClick={() => void reload()}>Retry</Button>
+   162→          </div>
+   163→        )}
+   164→
+   165→        {data && !loading && (
+   166→          <div className="overflow-hidden rounded-xl border" aria-label="Email preview">
+   167→            {/* Email envelope header */}
+   168→            <div className="space-y-1 border-b bg-muted/40 px-4 py-3 text-xs">
+   169→              <p className="flex gap-2"><span className="w-12 shrink-0 font-semibold text-muted-foreground">From</span><span className="min-w-0 truncate">BizHub &lt;reports@bizhub.app&gt;</span></p>
+   170→              <p className="flex gap-2"><span className="w-12 shrink-0 font-semibold text-muted-foreground">To</span><span className="min-w-0 truncate">{data.owner.name} &lt;{data.owner.mobile || `@${data.owner.username}`}&gt;</span></p>
+   171→              <p className="flex gap-2"><span className="w-12 shrink-0 font-semibold text-muted-foreground">Subject</span><span className="min-w-0 font-semibold text-foreground">{data.subject}</span></p>
+   172→            </div>
+   173→
+   174→            {/* Body */}
+   175→            <div className="space-y-4 px-4 py-4">
+   176→              <p className="text-sm">Hi <span className="font-semibold">{data.owner.name}</span>,</p>
+   177→              <p className="text-xs leading-relaxed text-muted-foreground">
+   178→                Here is your BizHub business summary for <span className="font-semibold text-foreground">{data.monthLabel}</span> (compared with {data.prevMonthLabel}).
+   179→              </p>
+   180→
+   181→              <div className="overflow-hidden rounded-lg border">
+   182→                <p className="border-b bg-muted/40 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Key numbers</p>
+   183→                <div className="divide-y">
+   184→                  {data.rows.map((r) => (
+   185→                    <div
+   186→                      key={r.key}
+   187→                      className={cn(
+   188→                        "flex items-center justify-between gap-2 px-3 py-2 text-xs transition-colors hover:bg-muted/40",
+   189→                        r.key === "net" && "bg-muted/30 font-semibold"
+   190→                      )}
+   191→                    >
+   192→                      <span className={cn("min-w-0 truncate", r.key !== "net" && "text-muted-foreground")}>{r.label}</span>
+   193→                      <span className="flex shrink-0 items-center gap-2">
+   194→                        <span className="font-bold tabular-nums">{formatINR(r.value)}</span>
+   195→                        <span className="hidden text-[10px] tabular-nums text-muted-foreground sm:inline">was {formatINR(r.previous)}</span>
+   196→                        <EmailDeltaPill pct={r.pct} goodUp={r.goodUp} />
+   197→                      </span>
+   198→                    </div>
+   199→                  ))}
+   200→                </div>
+   201→              </div>
+   202→
+   203→              <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+   204→                <span className="rounded-full bg-muted px-2 py-0.5">{data.activity.deployments} deployments</span>
+   205→                <span className="rounded-full bg-muted px-2 py-0.5">{data.activity.trips} trips</span>
+   206→                <span className="rounded-full bg-muted px-2 py-0.5">advances {formatINR(data.activity.advances, { compact: true })}</span>
+   207→                <span className="rounded-full bg-muted px-2 py-0.5">EMI {formatINR(data.activity.emi, { compact: true })}</span>
+   208→              </div>
+   209→
+   210→              {data.insights.length > 0 && (
+   211→                <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2" role="note">
+   212→                  <CalendarRange className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+   213→                  <ul className="min-w-0 space-y-0.5">
+   214→                    {data.insights.map((line) => (
+   215→                      <li key={line} className="text-[11px] leading-relaxed">{line}</li>
+   216→                    ))}
+   217→                  </ul>
+   218→                </div>
+   219→              )}
+   220→
+   221→              <p className="text-[10px] leading-relaxed text-muted-foreground">{data.note}</p>
+   222→              <p className="text-[10px] italic text-muted-foreground">— BizHub · automated summary</p>
+   223→            </div>
+   224→          </div>
+   225→        )}
+   226→
+   227→        {data && (
+   228→          <p className="flex items-start gap-1.5 text-[10px] leading-relaxed text-muted-foreground">
+   229→            <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />{data.disclaimer}
+   230→          </p>
+   231→        )}
+   232→
+   233→        <DialogFooter className="gap-2">
+   234→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={onClose}>Close</Button>
+   235→          {data && (
+   236→            <Button
+   237→              variant="outline"
+   238→              className="min-h-10 flex-1 gap-1.5 border-emerald-300 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950 sm:flex-none"
+   239→              asChild
+   240→            >
+   241→              <a href={waHref} target="_blank" rel="noreferrer" aria-label={`Share this summary with ${target.name} on WhatsApp`}>
+   242→                <MessageCircle className="h-3.5 w-3.5" aria-hidden />WhatsApp
+   243→              </a>
+   244→            </Button>
+   245→          )}
+   246→          <Button className="min-h-10 flex-1 gap-1.5 sm:flex-none" onClick={markSent} disabled={loading || !data || saving}>
+   247→            <Send className="h-3.5 w-3.5" aria-hidden />{saving ? "Logging…" : "Mark as sent"}
+   248→          </Button>
+   249→        </DialogFooter>
+   250→      </DialogContent>
+   251→    </Dialog>
+   252→  );
+   253→}
+   254→
+   255→// ---------------------------------------------------------------------------
+   256→// My account card (change own password)
+   257→// ---------------------------------------------------------------------------
+   258→
+   259→function MyAccountCard() {
+   260→  const { owner: me } = useAuth();
+   261→  const [current, setCurrent] = useState("");
+   262→  const [next, setNext] = useState("");
+   263→  const [confirm, setConfirm] = useState("");
+   264→  const { mutate, saving } = useMutation();
+   265→
+   266→  const submit = async () => {
+   267→    if (!current || !next) {
+   268→      toast.error("Fill in current and new password");
+   269→      return;
+   270→    }
+   271→    if (next.length < 6) {
+   272→      toast.error("New password must be at least 6 characters");
+   273→      return;
+   274→    }
+   275→    if (next !== confirm) {
+   276→      toast.error("New password and confirmation don't match");
+   277→      return;
+   278→    }
+   279→    const res = await mutate(
+   280→      () => api.post("/api/auth/change-password", { currentPassword: current, newPassword: next }),
+   281→      "Password updated"
+   282→    );
+   283→    if (res.ok) {
+   284→      setCurrent("");
+   285→      setNext("");
+   286→      setConfirm("");
+   287→    }
+   288→  };
+   289→
+   290→  return (
+   291→    <Card className="border-primary/30">
+   292→      <CardContent className="p-4">
+   293→        <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+   294→          <div className="flex min-w-0 flex-1 items-start gap-3">
+   295→            <InitialAvatar name={me?.name} className="h-11 w-11 text-base" />
+   296→            <div className="min-w-0">
+   297→              <div className="flex flex-wrap items-center gap-1.5">
+   298→                <p className="truncate text-sm font-bold">{me?.name ?? "My account"}</p>
+   299→                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+   300→                  <ShieldCheck className="h-3 w-3" aria-hidden />You
+   301→                </span>
+   302→              </div>
+   303→              <p className="truncate text-xs text-muted-foreground">@{me?.username ?? "—"}{me?.mobile ? ` · ${me.mobile}` : ""}</p>
+   304→            </div>
+   305→          </div>
+   306→
+   307→          <div className="w-full space-y-2 sm:max-w-sm">
+   308→            <p className="text-xs font-semibold text-foreground">Change my password</p>
+   309→            <Input
+   310→              type="password"
+   311→              value={current}
+   312→              onChange={(e) => setCurrent(e.target.value)}
+   313→              placeholder="Current password"
+   314→              autoComplete="current-password"
+   315→              className="h-10"
+   316→            />
+   317→            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+   318→              <Input
+   319→                type="password"
+   320→                value={next}
+   321→                onChange={(e) => setNext(e.target.value)}
+   322→                placeholder="New password (min 6)"
+   323→                autoComplete="new-password"
+   324→                className="h-10"
+   325→              />
+   326→              <Input
+   327→                type="password"
+   328→                value={confirm}
+   329→                onChange={(e) => setConfirm(e.target.value)}
+   330→                placeholder="Confirm new password"
+   331→                autoComplete="new-password"
+   332→                className="h-10"
+   333→              />
+   334→            </div>
+   335→            <Button className="min-h-10 w-full sm:w-auto" onClick={submit} disabled={saving}>
+   336→              {saving ? "Updating…" : "Update password"}
+   337→            </Button>
+   338→          </div>
+   339→        </div>
+   340→      </CardContent>
+   341→    </Card>
+   342→  );
+   343→}
+   344→
+   345→// ---------------------------------------------------------------------------
+   346→// Owner card
+   347→// ---------------------------------------------------------------------------
+   348→
+   349→function OwnerCard({ owner, isSelf, saving, onEdit, onReset, onToggleActive, onEmail }: {
+   350→  owner: OwnerRow;
+   351→  isSelf: boolean;
+   352→  saving: boolean;
+   353→  onEdit: () => void;
+   354→  onReset: () => void;
+   355→  onToggleActive: (next: boolean) => void;
+   356→  onEmail: () => void;
+   357→}) {
+   358→  return (
+   359→    <Card className="min-w-0 transition-all hover:shadow-sm">
+   360→      <CardContent className="p-4">
+   361→        <div className="flex items-start gap-3">
+   362→          <InitialAvatar name={owner.name} tone={owner.isActive ? "emerald" : "zinc"} className="h-10 w-10 shrink-0" />
+   363→          <div className="min-w-0 flex-1">
+   364→            <div className="flex items-center gap-2">
+   365→              <p className="truncate text-sm font-bold">{owner.name}</p>
+   366→              {isSelf && (
+   367→                <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">
+   368→                  You
+   369→                </span>
+   370→              )}
+   371→            </div>
+   372→            <p className="truncate text-xs text-muted-foreground">@{owner.username}</p>
+   373→            <p className="mt-0.5 truncate text-xs text-muted-foreground tabular-nums">
+   374→              {owner.mobile || "No mobile"}{owner.createdAt ? ` · joined ${fmtDay(owner.createdAt)}` : ""}
+   375→            </p>
+   376→            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+   377→              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+   378→                created {owner.createdRecords ?? 0} records
+   379→              </span>
+   380→              <span
+   381→                className={cn(
+   382→                  "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+   383→                  owner.isActive
+   384→                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+   385→                    : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+   386→                )}
+   387→              >
+   388→                {owner.isActive ? "Active" : "Inactive"}
+   389→              </span>
+   390→            </div>
+   391→          </div>
+   392→
+   393→          <div className="flex shrink-0 items-center gap-1">
+   394→            <Switch
+   395→              checked={owner.isActive}
+   396→              disabled={isSelf || saving}
+   397→              aria-label={`Activate or deactivate ${owner.name}`}
+   398→              onCheckedChange={onToggleActive}
+   399→            />
+   400→            <DropdownMenu>
+   401→              <DropdownMenuTrigger asChild>
+   402→                <Button variant="ghost" size="icon" className="h-9 w-9 sm:h-8 sm:w-8" aria-label={`Actions for ${owner.name}`}>
+   403→                  <EllipsisVertical className="h-4 w-4" />
+   404→                </Button>
+   405→              </DropdownMenuTrigger>
+   406→              <DropdownMenuContent align="end" className="w-48">
+   407→                <DropdownMenuItem onClick={onEmail}>
+   408→                  <Mail className="h-3.5 w-3.5" aria-hidden />Monthly summary email
+   409→                </DropdownMenuItem>
+   410→                <DropdownMenuSeparator />
+   411→                <DropdownMenuItem onClick={onEdit}>
+   412→                  <Pencil className="h-3.5 w-3.5" aria-hidden />Edit details
+   413→                </DropdownMenuItem>
+   414→                <DropdownMenuItem onClick={onReset}>
+   415→                  <KeyRound className="h-3.5 w-3.5" aria-hidden />Reset password
+   416→                </DropdownMenuItem>
+   417→              </DropdownMenuContent>
+   418→            </DropdownMenu>
+   419→          </div>
+   420→        </div>
+   421→        {isSelf && (
+   422→          <p className="mt-2 text-[10px] text-muted-foreground">Your own account stays active — change your password above.</p>
+   423→        )}
+   424→      </CardContent>
+   425→    </Card>
+   426→  );
+   427→}
+   428→
+   429→// ---------------------------------------------------------------------------
+   430→// Add / Edit dialog
+   431→// ---------------------------------------------------------------------------
+   432→
+   433→function OwnerFormDialog({ open, onOpenChange, target, onDone }: {
+   434→  open: boolean;
+   435→  onOpenChange: (v: boolean) => void;
+   436→  target: OwnerRow | null; // null = add
+   437→  onDone: () => void;
+   438→}) {
+   439→  const [form, setForm] = useState({ name: "", username: "", mobile: "", password: "" });
+   440→  const { mutate, saving } = useMutation();
+   441→
+   442→  const [prevOpen, setPrevOpen] = useState(open);
+   443→  if (open !== prevOpen) {
+   444→    setPrevOpen(open);
+   445→    if (open) {
+   446→      setForm(target
+   447→        ? { name: target.name, username: target.username, mobile: target.mobile ?? "", password: "" }
+   448→        : { name: "", username: "", mobile: "", password: "" });
+   449→    }
+   450→  }
+   451→
+   452→  const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+   453→
+   454→  const submit = async () => {
+   455→    if (!form.name.trim()) {
+   456→      toast.error("Name is required");
+   457→      return;
+   458→    }
+   459→    if (!form.username.trim()) {
+   460→      toast.error("Username is required");
+   461→      return;
+   462→    }
+   463→    if (!target && form.password && form.password.length < 6) {
+   464→      toast.error("Password must be at least 6 characters");
+   465→      return;
+   466→    }
+   467→    const res = target
+   468→      ? await mutate(
+   469→          () => api.put(`/api/owners/${target.id}`, { name: form.name.trim(), mobile: form.mobile || undefined }),
+   470→          "Owner updated"
+   471→        )
+   472→      : await mutate(
+   473→          () => api.post("/api/owners", {
+   474→            name: form.name.trim(),
+   475→            username: form.username.trim(),
+   476→            mobile: form.mobile || undefined,
+   477→            password: form.password || undefined,
+   478→          }),
+   479→          "Owner added"
+   480→        );
+   481→    if (res.ok) {
+   482→      onOpenChange(false);
+   483→      onDone();
+   484→    }
+   485→  };
+   486→
+   487→  return (
+   488→    <Dialog open={open} onOpenChange={onOpenChange}>
+   489→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+   490→        <DialogHeader>
+   491→          <DialogTitle>{target ? "Edit owner" : "Add owner"}</DialogTitle>
+   492→          <DialogDescription>
+   493→            {target ? "Update the owner's display details." : "New owners can log in and manage the business."}
+   494→          </DialogDescription>
+   495→        </DialogHeader>
+   496→        <div className="grid gap-3 sm:grid-cols-2">
+   497→          <Field label="Name" required>
+   498→            <Input value={form.name} onChange={(e) => set("name")(e.target.value)} className="h-10" placeholder="e.g. Rahul Sharma" />
+   499→          </Field>
+   500→          <Field label="Mobile" hint="Optional contact number">
+   501→            <Input value={form.mobile} onChange={(e) => set("mobile")(e.target.value)} inputMode="tel" className="h-10" />
+   502→          </Field>
+   503→          <Field
+   504→            label="Username"
+   505→            required
+   506→            className="sm:col-span-2"
+   507→            hint={target ? "Username can't be changed" : "Used to log in — can't be changed later"}
+   508→          >
+   509→            <Input
+   510→              value={form.username}
+   511→              onChange={(e) => set("username")(e.target.value)}
+   512→              className="h-10"
+   513→              placeholder="e.g. rahul"
+   514→              disabled={Boolean(target)}
+   515→            />
+   516→          </Field>
+   517→          {!target && (
+   518→            <Field label="Password" className="sm:col-span-2" hint="Leave blank to use the default: owner123">
+   519→              <Input
+   520→                type="password"
+   521→                value={form.password}
+   522→                onChange={(e) => set("password")(e.target.value)}
+   523→                autoComplete="new-password"
+   524→                className="h-10"
+   525→                placeholder="Default: owner123"
+   526→              />
+   527→            </Field>
+   528→          )}
+   529→        </div>
+   530→        <DialogFooter className="gap-2">
+   531→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   532→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>
+   533→            {saving ? "Saving…" : target ? "Save changes" : "Add owner"}
+   534→          </Button>
+   535→        </DialogFooter>
+   536→      </DialogContent>
+   537→    </Dialog>
+   538→  );
+   539→}
+   540→
+   541→// ---------------------------------------------------------------------------
+   542→// Reset password dialog
+   543→// ---------------------------------------------------------------------------
+   544→
+   545→function ResetPasswordDialog({ open, onOpenChange, target }: {
+   546→  open: boolean;
+   547→  onOpenChange: (v: boolean) => void;
+   548→  target: OwnerRow | null;
+   549→}) {
+   550→  const [password, setPassword] = useState("");
+   551→  const { mutate, saving } = useMutation();
+   552→
+   553→  const [prevOpen, setPrevOpen] = useState(open);
+   554→  if (open !== prevOpen) {
+   555→    setPrevOpen(open);
+   556→    if (open) setPassword("");
+   557→  }
+   558→
+   559→  const submit = async () => {
+   560→    if (!target) return;
+   561→    if (password.length < 6) {
+   562→      toast.error("Password must be at least 6 characters");
+   563→      return;
+   564→    }
+   565→    const res = await mutate(
+   566→      () => api.put(`/api/owners/${target.id}`, { password }),
+   567→      `Password reset for ${target.name}`
+   568→    );
+   569→    if (res.ok) {
+   570→      setPassword("");
+   571→      onOpenChange(false);
+   572→    }
+   573→  };
+   574→
+   575→  return (
+   576→    <Dialog open={open} onOpenChange={onOpenChange}>
+   577→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-sm">
+   578→        <DialogHeader>
+   579→          <DialogTitle>Reset password</DialogTitle>
+   580→          <DialogDescription>
+   581→            Set a new password for <span className="font-medium">@{target?.username ?? ""}</span>. Minimum 6 characters.
+   582→          </DialogDescription>
+   583→        </DialogHeader>
+   584→        <Field label="New password" required>
+   585→          <Input
+   586→            type="password"
+   587→            value={password}
+   588→            onChange={(e) => setPassword(e.target.value)}
+   589→            autoComplete="new-password"
+   590→            className="h-10"
+   591→            placeholder="Min 6 characters"
+   592→          />
+   593→        </Field>
+   594→        <DialogFooter className="gap-2">
+   595→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   596→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>
+   597→            {saving ? "Saving…" : "Reset password"}
+   598→          </Button>
+   599→        </DialogFooter>
+   600→      </DialogContent>
+   601→    </Dialog>
+   602→  );
+   603→}
+   604→
+   605→// ---------------------------------------------------------------------------
+   606→// View
+   607→// ---------------------------------------------------------------------------
+   608→
+   609→export default function OwnersView(_props: ViewProps) {
+   610→  const { owner: me } = useAuth();
+   611→  const { data, loading, error, reload } = useAsync<ListResp<OwnerRow>>(
+   612→    () => api.get<ListResp<OwnerRow>>("/api/owners"),
+   613→    []
+   614→  );
+   615→
+   616→  const [addOpen, setAddOpen] = useState(false);
+   617→  const [editTarget, setEditTarget] = useState<OwnerRow | null>(null);
+   618→  const [resetTarget, setResetTarget] = useState<OwnerRow | null>(null);
+   619→  const [deactivateTarget, setDeactivateTarget] = useState<OwnerRow | null>(null);
+   620→  const [emailTarget, setEmailTarget] = useState<OwnerRow | null>(null);
+   621→  const { mutate, saving } = useMutation();
+   622→
+   623→  const owners = data?.items ?? [];
+   624→
+   625→  const activate = async (row: OwnerRow) => {
+   626→    const res = await mutate(() => api.put(`/api/owners/${row.id}`, { isActive: true }), `${row.name} activated`);
+   627→    if (res.ok) reload();
+   628→  };
+   629→
+   630→  const deactivate = async () => {
+   631→    if (!deactivateTarget) return;
+   632→    const row = deactivateTarget;
+   633→    setDeactivateTarget(null);
+   634→    const res = await mutate(() => api.put(`/api/owners/${row.id}`, { isActive: false }), `${row.name} deactivated`);
+   635→    if (res.ok) reload();
+   636→  };
+   637→
+   638→  const onToggleActive = (row: OwnerRow, next: boolean) => {
+   639→    if (next) void activate(row);
+   640→    else setDeactivateTarget(row);
+   641→  };
+   642→
+   643→  return (
+   644→    <div className="space-y-4">
+   645→      <PageHeader
+   646→        title="Owners"
+   647→        subtitle={`${owners.length} team account${owners.length === 1 ? "" : "s"}`}
+   648→        icon={Crown}
+   649→        actions={
+   650→          <Button size="sm" className="h-9 gap-1.5" onClick={() => setAddOpen(true)}>
+   651→            <Plus className="h-4 w-4" aria-hidden />Add Owner
+   652→          </Button>
+   653→        }
+   654→      />
+   655→
+   656→      <MyAccountCard />
+   657→
+   658→      {error && (
+   659→        <div className="rounded-xl border border-red-200 bg-red-50/60 p-4 text-center dark:border-red-900 dark:bg-red-950/30">
+   660→          <p className="text-xs text-red-700 dark:text-red-300">{error}</p>
+   661→          <Button variant="outline" size="sm" className="mt-2 h-8" onClick={() => void reload()}>Retry</Button>
+   662→        </div>
+   663→      )}
+   664→
+   665→      {loading && !error && (
+   666→        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+   667→          {Array.from({ length: 6 }).map((_, i) => (
+   668→            <Skeleton key={i} className="h-36 rounded-xl" />
+   669→          ))}
+   670→        </div>
+   671→      )}
+   672→
+   673→      {!loading && !error && owners.length === 0 && (
+   674→        <EmptyState
+   675→          icon={UserPlus}
+   676→          title="No owners yet"
+   677→          description="Add team members so they can log in and help manage the business."
+   678→          action={{ label: "Add Owner", onClick: () => setAddOpen(true) }}
+   679→        />
+   680→      )}
+   681→
+   682→      {!loading && !error && owners.length > 0 && (
+   683→        <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-3 [&>*]:min-w-0">
+   684→          {owners.map((o) => (
+   685→            <OwnerCard
+   686→              key={o.id}
+   687→              owner={o}
+   688→              isSelf={o.username === me?.username}
+   689→              saving={saving}
+   690→              onEdit={() => setEditTarget(o)}
+   691→              onReset={() => setResetTarget(o)}
+   692→              onToggleActive={(next) => onToggleActive(o, next)}
+   693→              onEmail={() => setEmailTarget(o)}
+   694→            />
+   695→          ))}
+   696→        </div>
+   697→      )}
+   698→
+   699→      {/* Deactivate confirmation */}
+   700→      <AlertDialog open={Boolean(deactivateTarget)} onOpenChange={(v) => !v && setDeactivateTarget(null)}>
+   701→        <AlertDialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+   702→          <AlertDialogHeader>
+   703→            <AlertDialogTitle>Deactivate @{deactivateTarget?.username ?? ""}?</AlertDialogTitle>
+   704→            <AlertDialogDescription>
+   705→              {deactivateTarget?.name} will lose access immediately. You can reactivate the account anytime with the
+   706→              switch on their card.
+   707→            </AlertDialogDescription>
+   708→          </AlertDialogHeader>
+   709→          <AlertDialogFooter className="gap-2">
+   710→            <AlertDialogCancel className="min-h-10 flex-1 sm:flex-none">Cancel</AlertDialogCancel>
+   711→            <AlertDialogAction
+   712→              className="min-h-10 flex-1 bg-red-600 text-white hover:bg-red-700 sm:flex-none"
+   713→              onClick={(e) => {
+   714→                e.preventDefault();
+   715→                void deactivate();
+   716→              }}
+   717→            >
+   718→              Deactivate
+   719→            </AlertDialogAction>
+   720→          </AlertDialogFooter>
+   721→        </AlertDialogContent>
+   722→      </AlertDialog>
+   723→
+   724→      <OwnerFormDialog
+   725→        open={addOpen || Boolean(editTarget)}
+   726→        onOpenChange={(v) => {
+   727→          if (!v) {
+   728→            setAddOpen(false);
+   729→            setEditTarget(null);
+   730→          }
+   731→        }}
+   732→        target={editTarget}
+   733→        onDone={reload}
+   734→      />
+   735→
+   736→      <ResetPasswordDialog
+   737→        open={Boolean(resetTarget)}
+   738→        onOpenChange={(v) => !v && setResetTarget(null)}
+   739→        target={resetTarget}
+   740→      />
+   741→
+   742→      {emailTarget && (
+   743→        <MonthlyEmailDialog target={emailTarget} onClose={() => setEmailTarget(null)} />
+   744→      )}
+   745→    </div>
+   746→  );
+   747→}
+   748→

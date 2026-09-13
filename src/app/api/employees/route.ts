@@ -166,5 +166,28 @@ export const POST = handleRoute(async ({ owner, req }) => {
       contractor: employee.hasContractor ? `${employee.contractorName} @ ${employee.contractorRateCut}/shift` : "none",
     },
   });
+  // Historical-integrity: seed the effective-dated pay history with the initial
+  // terms. Every later pay change appends a new row (effectiveFrom = change
+  // time); accruals resolve the row in force at each historical moment, so
+  // edits can never rewrite past months.
+  await db.employeePayHistory.create({
+    data: {
+      employeeId: employee.id,
+      effectiveFrom: employee.joiningDate,
+      employmentType: employee.employmentType,
+      standardRate: employee.standardRate,
+      monthlySalary: employee.monthlySalary,
+      overtimeThreshold: employee.overtimeThreshold,
+      overtimeRate: employee.overtimeRate,
+      onBusinessRent: employee.onBusinessRent,
+      rentAmount: employee.rentAmount,
+      rentMode: employee.rentMode,
+      hasContractor: employee.hasContractor,
+      contractorName: employee.contractorName,
+      contractorRateCut: employee.contractorRateCut,
+      changedByName: owner?.name ?? null,
+      reason: "Initial terms",
+    },
+  });
   return { ...employee, advanceBalance: 0 };
 });

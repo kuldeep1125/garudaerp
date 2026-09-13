@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { handleRoute, readBody, HttpError } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
-import { recomputeDeploymentPaid, serializeDeployment, optionalAmount, SHIFT_UNITS, SHIFTS } from "@/app/api/_lib/engine";
+import { recomputeDeploymentPaid, serializeDeployment, optionalAmount, SHIFT_UNITS, SHIFTS, assertDeploymentMonthUnlocked } from "@/app/api/_lib/engine";
 
 export const PUT = handleRoute(async ({ owner, params, req }) => {
   const { id } = params;
@@ -12,6 +12,8 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
     include: { employee: { select: { fullName: true, code: true } }, property: { select: { name: true } } },
   });
   if (!existing) throw new HttpError(404, "Deployment not found");
+  // Historical integrity: a month locked by a FINALIZED/PAID settlement is immutable.
+  await assertDeploymentMonthUnlocked(existing.employeeId, existing.date);
 
   // Shift may be corrected too — amounts always recompute as rate × units so the
   // stored math can never drift from rate + shift + adjustment.
@@ -93,6 +95,8 @@ export const DELETE = handleRoute(async ({ owner, params }) => {
     include: { employee: { select: { fullName: true, code: true } }, property: { select: { name: true } } },
   });
   if (!existing) throw new HttpError(404, "Deployment not found");
+  // Historical integrity: a month locked by a FINALIZED/PAID settlement is immutable.
+  await assertDeploymentMonthUnlocked(existing.employeeId, existing.date);
   const { employee, property, ...row } = existing;
 
   await db.$transaction(async (tx) => {

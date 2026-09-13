@@ -13,8 +13,12 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { TripFormDialog } from "@/components/shared/trip-form-dialog";
 import { Progress } from "@/components/ui/progress";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -26,7 +30,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useLang, t } from "@/lib/i18n";
-import { Route, Plus, IndianRupee, TimerOff, BadgeCheck } from "lucide-react";
+import { Route, Plus, IndianRupee, TimerOff, BadgeCheck, MoreHorizontal, Pencil, Eye } from "lucide-react";
 import {
   type TripRec, type VehicleRec, type ClientRec, type Option, SelectInput, Field, KV, ErrorState, MoneyInput,
   fmtDay, fmtDateTime, useAsync, useMutation, ConfirmAmount,
@@ -47,19 +51,6 @@ const PAY_STATUS_OPTIONS: Option[] = [
   { label: "Pending", value: "PENDING" },
   { label: "Partial", value: "PARTIAL" },
   { label: "Paid", value: "PAID" },
-];
-
-const TRIP_TYPE_OPTIONS: Option[] = [
-  { label: "Rental", value: "RENTAL" },
-  { label: "Trip", value: "TRIP" },
-];
-
-const RENTAL_TYPE_OPTIONS: Option[] = ["DAILY", "WEEKLY", "MONTHLY", "OUTSTATION", "LOCAL"]
-  .map((t) => ({ label: t.charAt(0) + t.slice(1).toLowerCase(), value: t }));
-
-const FUEL_OPTIONS: Option[] = [
-  { label: "Owner pays fuel", value: "OWNER" },
-  { label: "Client pays fuel", value: "CLIENT" },
 ];
 
 const METHOD_OPTIONS: Option[] = ["Cash", "UPI", "Bank", "Cheque", "Other"].map((m) => ({ label: m, value: m }));
@@ -91,135 +82,6 @@ function tripPaidPct(t: TripRec): number {
   const target = tripTotal(t);
   if (target <= 0) return 0;
   return Math.min(100, Math.round(((t.paidAmount ?? 0) / target) * 100));
-}
-
-// ---------------------------------------------------------------------------
-// New rental / trip dialog
-// ---------------------------------------------------------------------------
-
-function NewTripDialog({ open, onOpenChange, vehicles, clients, onDone }: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  vehicles: VehicleRec[];
-  clients: ClientRec[];
-  onDone: () => void;
-}) {
-  const [form, setForm] = useState({
-    vehicleId: "", clientId: "", startAt: nowLocalValue(), endAt: "", tripType: "RENTAL",
-    rentalType: "DAILY", pickup: "", destination: "", driver: "", fuelResponsibility: "CLIENT",
-    agreedAmount: "", advanceReceived: "", notes: "",
-  });
-  const { mutate, saving } = useMutation();
-
-  const [prevOpen, setPrevOpen] = useState(open);
-  if (open !== prevOpen) {
-    setPrevOpen(open);
-    if (open) {
-      setForm({
-        vehicleId: "", clientId: "", startAt: nowLocalValue(), endAt: "", tripType: "RENTAL",
-        rentalType: "DAILY", pickup: "", destination: "", driver: "", fuelResponsibility: "CLIENT",
-        agreedAmount: "", advanceReceived: "", notes: "",
-      });
-    }
-  }
-
-  const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
-
-  const submit = async () => {
-    if (!form.vehicleId) { toast.error("Select a vehicle"); return; }
-    if (!form.clientId) { toast.error("Select a client"); return; }
-    if (!form.startAt) { toast.error("Start date & time is required"); return; }
-    const amt = parseAmount(form.agreedAmount);
-    if (amt <= 0) { toast.error("Enter the agreed amount"); return; }
-    const res = await mutate(
-      () => api.post("/api/trips", {
-        vehicleId: form.vehicleId,
-        clientId: form.clientId,
-        startAt: new Date(form.startAt).toISOString(),
-        endAt: form.endAt ? new Date(form.endAt).toISOString() : undefined,
-        tripType: form.tripType,
-        rentalType: form.rentalType || undefined,
-        pickup: form.pickup || undefined,
-        destination: form.destination || undefined,
-        driver: form.driver || undefined,
-        fuelResponsibility: form.fuelResponsibility || undefined,
-        agreedAmount: amt,
-        advanceReceived: form.advanceReceived ? parseAmount(form.advanceReceived) : undefined,
-        notes: form.notes || undefined,
-      }),
-      "Rental created — vehicle marked as engaged",
-      (data) => ({ module: "TRIP", recordId: (data as { id: string }).id, onUndo: onDone })
-    );
-    if (res.ok) { onOpenChange(false); onDone(); }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>New Rental / Trip</DialogTitle>
-          <DialogDescription>Overlapping bookings for the same vehicle are blocked automatically.</DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Vehicle" required className="sm:col-span-2">
-            <SelectInput
-              value={form.vehicleId}
-              onChange={set("vehicleId")}
-              placeholder="Select vehicle…"
-              options={vehicles.map((v) => ({ label: `${v.name} · ${v.status}`, value: v.id }))}
-            />
-          </Field>
-          <Field label="Client" required className="sm:col-span-2">
-            <SelectInput
-              value={form.clientId}
-              onChange={set("clientId")}
-              placeholder="Select client…"
-              options={clients.map((c) => ({ label: c.company ? `${c.name} (${c.company})` : c.name, value: c.id }))}
-            />
-          </Field>
-          <Field label="Start at" required>
-            <Input type="datetime-local" value={form.startAt} onChange={(e) => set("startAt")(e.target.value)} className="h-10" />
-          </Field>
-          <Field label="End at" hint="Leave empty for an open-ended rental">
-            <Input type="datetime-local" value={form.endAt} onChange={(e) => set("endAt")(e.target.value)} className="h-10" />
-          </Field>
-          <Field label="Type" required>
-            <SelectInput value={form.tripType} onChange={set("tripType")} options={TRIP_TYPE_OPTIONS} />
-          </Field>
-          <Field label="Rental type">
-            <SelectInput value={form.rentalType} onChange={set("rentalType")} options={RENTAL_TYPE_OPTIONS} />
-          </Field>
-          <Field label="Pickup">
-            <Input value={form.pickup} onChange={(e) => set("pickup")(e.target.value)} className="h-10" placeholder="Pickup point" />
-          </Field>
-          <Field label="Destination">
-            <Input value={form.destination} onChange={(e) => set("destination")(e.target.value)} className="h-10" placeholder="Drop point" />
-          </Field>
-          <Field label="Driver">
-            <Input value={form.driver} onChange={(e) => set("driver")(e.target.value)} className="h-10" placeholder="Driver name" />
-          </Field>
-          <Field label="Fuel responsibility">
-            <SelectInput value={form.fuelResponsibility} onChange={set("fuelResponsibility")} options={FUEL_OPTIONS} />
-          </Field>
-          <Field label="Agreed amount (₹)" required>
-            <MoneyInput value={form.agreedAmount} onChange={set("agreedAmount")} min={1} className="h-10" />
-          </Field>
-          <Field label="Advance received (₹)">
-            <MoneyInput value={form.advanceReceived} onChange={set("advanceReceived")} min={0} className="h-10" />
-          </Field>
-          <Field label="Notes" className="sm:col-span-2">
-            <Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} rows={2} placeholder="Optional instructions" />
-          </Field>
-        </div>
-        <DialogFooter className="gap-2">
-          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>
-            {saving ? "Creating…" : "Create rental"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +124,7 @@ export default function TripsView({ params, navigate }: ViewProps) {
   // Dialogs
   const [detailId, setDetailId] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  const [editFor, setEditFor] = useState<TripRec | null>(null);
   const [endFor, setEndFor] = useState<string | null>(null);
   const [endForm, setEndForm] = useState({ endAt: nowLocalValue(), finalAmount: "", extraCharges: "" });
   const [payFor, setPayFor] = useState<string | null>(null);
@@ -374,6 +237,34 @@ export default function TripsView({ params, navigate }: ViewProps) {
       value: (r) => r.paymentStatus,
     },
     { key: "status", label: t(lang, "col.status"), render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+    {
+      key: "actions", label: "", className: "w-14",
+      render: (r) => (
+        <div className="flex items-center justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-9 w-9 sm:h-8 sm:w-8" aria-label={`Actions for ${r.vehicleName ?? "trip"}`}>
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuLabel className="text-xs truncate">{r.vehicleName ?? "Trip"} → {r.clientName ?? "Client"}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setDetailId(r.id)}>
+                <Eye className="h-3.5 w-3.5" />View details
+              </DropdownMenuItem>
+              {/* Edit only while the trip is still changeable — terminal trips are locked forever. */}
+              {(r.status === "CONFIRMED" || r.status === "ACTIVE") && (
+                <DropdownMenuItem onClick={() => setEditFor(r)}>
+                  <Pencil className="h-3.5 w-3.5" />Edit
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ),
+      value: () => "",
+    },
   ];
 
   const detailTrip = detail;
@@ -594,9 +485,20 @@ export default function TripsView({ params, navigate }: ViewProps) {
         </AlertDialogContent>
       </AlertDialog>
 
-      <NewTripDialog
+      <TripFormDialog
         open={newOpen}
         onOpenChange={setNewOpen}
+        trip={null}
+        vehicles={vehicles.data?.items ?? []}
+        clients={clients.data?.items ?? []}
+        onDone={() => void trips.reload()}
+      />
+
+      {/* Edit trip — only openable for CONFIRMED/ACTIVE trips (row actions menu) */}
+      <TripFormDialog
+        open={Boolean(editFor)}
+        onOpenChange={(v) => !v && setEditFor(null)}
+        trip={editFor}
         vehicles={vehicles.data?.items ?? []}
         clients={clients.data?.items ?? []}
         onDone={() => void trips.reload()}

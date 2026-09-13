@@ -1,0 +1,677 @@
+   854→                  <div className="min-w-0">
+   855→                    <p className="text-sm font-semibold">Common expenses</p>
+   856→                    <p className="text-[11px] text-muted-foreground">For all owners & the business equally</p>
+   857→                  </div>
+   858→                </div>
+   859→                <p className="text-2xl font-bold tabular-nums">{formatINR(data.data?.common.total ?? 0)}</p>
+   860→                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+   861→                  <BusinessBadge business="MANPOWER" />
+   862→                  <span className="font-semibold tabular-nums text-foreground">{formatINR(data.data?.common.manpower ?? 0)}</span>
+   863→                  <BusinessBadge business="TRANSPORT" />
+   864→                  <span className="font-semibold tabular-nums text-foreground">{formatINR(data.data?.common.transport ?? 0)}</span>
+   865→                </div>
+   866→                {(data.data?.common.categories ?? []).length > 0 && (
+   867→                  <MiniBars
+   868→                    rows={(data.data?.common.categories ?? []).slice().sort((a, b) => b.amount - a.amount).slice(0, 6).map((c) => ({ label: c.name, value: c.amount, color: CHART_COLORS.teal }))}
+   869→                  />
+   870→                )}
+   871→              </CardContent>
+   872→            </Card>
+   873→
+   874→            {/* Per-owner ledger table */}
+   875→            <Card className="xl:col-span-1">
+   876→              <CardContent className="p-3 sm:p-4">
+   877→                <p className="mb-3 text-sm font-semibold">Owner ledger</p>
+   878→                <div className="max-h-96 space-y-2 overflow-y-auto pr-0.5">
+   879→                  {owners.length === 0 && !data.loading && (
+   880→                    <p className="py-4 text-center text-xs text-muted-foreground">No owners yet</p>
+   881→                  )}
+   882→                  {owners.map((o) => (
+   883→                    <button
+   884→                      key={o.id}
+   885→                      type="button"
+   886→                      className={cn(
+   887→                        "w-full rounded-xl border p-2.5 text-left transition-colors hover:bg-muted/50",
+   888→                        mode === "single" && focusId === o.id && "border-primary/50 bg-primary/5"
+   889→                      )}
+   890→                      onClick={() => { setFocusId(o.id); setMode("single"); }}
+   891→                      aria-label={`Focus ${o.name}`}
+   892→                    >
+   893→                      <div className="flex items-center justify-between gap-2">
+   894→                        <p className="truncate text-sm font-medium">{o.name}</p>
+   895→                        <NetPositionChip net={o.net} />
+   896→                      </div>
+   897→                      <div className="mt-1.5 grid grid-cols-3 gap-1.5 text-[11px]">
+   898→                        <span className="text-muted-foreground">In <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(o.deposits, { compact: true })}</span></span>
+   899→                        <span className="text-muted-foreground">Out <span className="font-semibold tabular-nums text-red-600 dark:text-red-400">{formatINR(o.withdrawals, { compact: true })}</span></span>
+   900→                        <span className="text-muted-foreground">Spend <span className="font-semibold tabular-nums">{formatINR(o.advances, { compact: true })}</span></span>
+   901→                      </div>
+   902→                    </button>
+   903→                  ))}
+   904→                </div>
+   905→                {(data.data?.unattributed.total ?? 0) > 0 && (
+   906→                  <p className="mt-3 rounded-lg border border-dashed p-2 text-[11px] text-muted-foreground">
+   907→                    {formatINR(data.data!.unattributed.total)} of older expenses has no owner attribution (recorded before owner tracking).
+   908→                  </p>
+   909→                )}
+   910→              </CardContent>
+   911→            </Card>
+   912→          </div>
+   913→
+   914→          {/* Detailed passbook ledger — every deposit & withdrawal, one row each */}
+   915→          <Card>
+   916→            <CardContent className="p-3 sm:p-4">
+   917→              <div className="mb-3 flex items-center justify-between gap-2">
+   918→                <div className="min-w-0">
+   919→                  <p className="text-sm font-semibold">Detailed ledger — deposits &amp; withdrawals</p>
+   920→                  <p className="text-[11px] text-muted-foreground">
+   921→                    Every owner money movement in this range, newest first, with the running balance{mode === "single" && focus ? ` — ${focus.name} only` : " of all owners combined"}
+   922→                  </p>
+   923→                </div>
+   924→                <Badge variant="outline" className="shrink-0 text-[10px]">{ledgerRows.length} {ledgerRows.length === 1 ? "entry" : "entries"}</Badge>
+   925→              </div>
+   926→              {data.loading ? (
+   927→                <div className="space-y-2.5">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-10 animate-pulse rounded-lg bg-muted" />)}</div>
+   928→              ) : ledgerRows.length === 0 ? (
+   929→                <div className="rounded-xl border border-dashed p-6 text-center">
+   930→                  <p className="text-sm font-medium">No deposits or withdrawals in this range yet</p>
+   931→                  <p className="mt-1 text-xs text-muted-foreground">Use “Add deposit” / “Add withdrawal” above — each entry then appears here with date, reason and running balance.</p>
+   932→                </div>
+   933→              ) : (
+   934→                <DataTable
+   935→                  columns={ledgerColumns}
+   936→                  rows={ledgerRows}
+   937→                  rowKey={(tx) => tx.id}
+   938→                  exportName="owner-deposits-withdrawals"
+   939→                  emptyIcon={Landmark}
+   940→                  emptyTitle="No movements"
+   941→                  emptyDescription="No deposits or withdrawals match this range."
+   942→                />
+   943→              )}
+   944→            </CardContent>
+   945→          </Card>
+   946→
+   947→          {/* Reconciliation note — makes the zero-mismatch guarantee visible */}
+   948→          <p className="px-1 text-[11px] text-muted-foreground">
+   949→            Reconciliation: operating {formatINR(totals?.operating ?? 0)} + owner capital {formatINR(totals?.capital ?? 0)} = all expense rows {formatINR(totals?.grand ?? 0)}.
+   950→            Dashboards, reports and net profit count <span className="font-semibold text-foreground">operating expenses only</span> — owner deposits & withdrawals are capital, never P&amp;L expenses.
+   951→          </p>
+   952→        </>
+   953→      )}
+   954→    </div>
+   955→  );
+   956→}
+   957→
+   958→// ---------------------------------------------------------------------------
+   959→// Main view
+   960→// ---------------------------------------------------------------------------
+   961→
+   962→export default function ExpensesView({ navigate }: ViewProps) {
+   963→  const { lang } = useLang();
+   964→  void navigate; // reserved for future drill-downs
+   965→  const { scope } = useBusiness();
+   966→  const { mutate, saving } = useMutation();
+   967→
+   968→  // Filters — default business follows the global scope when it isn't ALL
+   969→  const [business, setBusiness] = useState(scope === "ALL" ? "" : scope);
+   970→  const [categoryId, setCategoryId] = useState("");
+   971→  const [vehicleId, setVehicleId] = useState("");
+   972→  const [ownerId, setOwnerId] = useState("");
+   973→  const [search, setSearch] = useState("");
+   974→  const searchDeb = useDebounced(search);
+   975→  const [rangeKey, setRangeKey] = useState<RangeKey>("month");
+   976→  const [customFrom, setCustomFrom] = useState("");
+   977→  const [customTo, setCustomTo] = useState("");
+   978→
+   979→  const eff = rangeKey === "custom" ? { from: customFrom, to: customTo } : rangeDates(rangeKey);
+   980→
+   981→  // Static option lists
+   982→  const categories = useAsync<{ items: ExpenseCategoryRec[] }>(
+   983→    () => api.get("/api/expense-categories" + qs({ business: business || undefined })),
+   984→    [business]
+   985→  );
+   986→  const vehicles = useAsync<{ items: VehicleRec[] }>(() => api.get("/api/vehicles"), []);
+   987→  const owners = useAsync<{ items: OwnerRec[] }>(() => api.get("/api/owners"), []);
+   988→
+   989→  // Main list
+   990→  const expenses = useAsync<ListResp<ExpenseRec> & { totals?: { amount: number; operating?: number; capital?: number; common?: number } }>(
+   991→    () => api.get("/api/expenses" + qs({
+   992→      business: business || undefined,
+   993→      categoryId: categoryId || undefined,
+   994→      vehicleId: vehicleId || undefined,
+   995→      ownerId: ownerId || undefined,
+   996→      from: eff.from || undefined,
+   997→      to: eff.to || undefined,
+   998→      search: searchDeb || undefined,
+   999→      pageSize: 200,
+  1000→    })),
+  1001→    [business, categoryId, vehicleId, ownerId, eff.from, eff.to, searchDeb]
+  1002→  );
+  1003→
+  1004→  // Recurring section
+  1005→  const [recOpen, setRecOpen] = useState(false);
+  1006→  const [recAddOpen, setRecAddOpen] = useState(false);
+  1007→  const recurring = useAsync<RecurringRow[]>(async () => {
+  1008→    const d = await api.get<RecurringRow[] | { items: RecurringRow[] }>("/api/recurring-expenses");
+  1009→    return Array.isArray(d) ? d : (d.items ?? []);
+  1010→  }, []);
+  1011→
+  1012→  const items = expenses.data?.items ?? [];
+  1013→  const vehicleItems = business === "TRANSPORT" ? vehicles.data?.items ?? [] : [];
+  1014→
+  1015→  const [editTarget, setEditTarget] = useState<ExpenseRec | null>(null);
+  1016→  const [addOpen, setAddOpen] = useState(false);
+  1017→  const [deleteTarget, setDeleteTarget] = useState<ExpenseRec | null>(null);
+  1018→
+  1019→  // Quick actions from the Owner Breakdown tab open the Add Expense dialog
+  1020→  // pre-filled with the right capital category (and owner when focused).
+  1021→  const [addPreset, setAddPreset] = useState<{ categoryName: string; spentById?: string } | null>(null);
+  1022→  const openQuickCapital = (kind: QuickCapitalKind, ownerId?: string) => {
+  1023→    setAddPreset({ categoryName: kind === "deposit" ? "Owner Contribution" : "Owner Withdrawal", spentById: ownerId || undefined });
+  1024→    setAddOpen(true);
+  1025→  };
+  1026→
+  1027→  // Expenses tab ↔ Owner Breakdown tab (controlled so the hint strip can link across).
+  1028→  const [tab, setTab] = useState("expenses");
+  1029→
+  1030→  // Version bump whenever expense data changes — the Owner Breakdown section
+  1031→  // includes it in its fetch deps so its numbers NEVER go stale after a
+  1032→  // quick-action deposit/withdrawal, delete, edit or undo.
+  1033→  const [bdVersion, setBdVersion] = useState(0);
+  1034→  const reloadExpenses = () => { void expenses.reload(); setBdVersion((v) => v + 1); };
+  1035→
+  1036→  // An undo applied from the global Undo Center may have restored rows — refresh.
+  1037→  useEffect(() => {
+  1038→    const onUndoApplied = () => reloadExpenses();
+  1039→    window.addEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
+  1040→    return () => window.removeEventListener(UNDO_APPLIED_EVENT, onUndoApplied);
+  1041→  }, [expenses.reload]);
+  1042→
+  1043→  const breakdown = useMemo(() => {
+  1044→    const m = new Map<string, number>();
+  1045→    for (const r of items) {
+  1046→      const k = r.categoryName || "Uncategorized";
+  1047→      m.set(k, (m.get(k) ?? 0) + r.amount);
+  1048→    }
+  1049→    return [...m.entries()]
+  1050→      .map(([label, value]) => ({ label, value }))
+  1051→      .sort((a, b) => b.value - a.value)
+  1052→      .slice(0, 8);
+  1053→  }, [items]);
+  1054→
+  1055→  // Bulk selection + delete
+  1056→  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  1057→  const [bulkConfirm, setBulkConfirm] = useState(false);
+  1058→
+  1059→  const onBusinessChange = (v: string) => {
+  1060→    setBusiness(v);
+  1061→    setCategoryId("");
+  1062→    setVehicleId("");
+  1063→  };
+  1064→
+  1065→  const removeExpense = async () => {
+  1066→    if (!deleteTarget) return;
+  1067→    const res = await mutate(() => api.del(`/api/expenses/${deleteTarget.id}`), "Expense deleted", () => ({ module: "EXPENSE", recordId: deleteTarget.id, onUndo: () => reloadExpenses() }));
+  1068→    if (res.ok) reloadExpenses();
+  1069→    setDeleteTarget(null);
+  1070→  };
+  1071→
+  1072→  // Bulk delete: one DELETE at a time (allSettled semantics — a failure never
+  1073→  // aborts the rest), then a single toast + one Undo action that reverses every
+  1074→  // deleted row via the audit log.
+  1075→  const bulkDelete = async () => {
+  1076→    const ids = items.filter((r) => selectedIds.has(r.id)).map((r) => r.id);
+  1077→    if (ids.length === 0) { setBulkConfirm(false); return; }
+  1078→    setBulkConfirm(false);
+  1079→    const results: PromiseSettledResult<unknown>[] = [];
+  1080→    for (const id of ids) {
+  1081→      try {
+  1082→        results.push({ status: "fulfilled", value: await api.del(`/api/expenses/${id}`) });
+  1083→      } catch (e) {
+  1084→        results.push({ status: "rejected", reason: e });
+  1085→      }
+  1086→    }
+  1087→    const okIds = ids.filter((_, i) => results[i].status === "fulfilled");
+  1088→    if (okIds.length > 0) {
+  1089→      toast.success(`Deleted ${okIds.length} of ${ids.length} expense${ids.length === 1 ? "" : "s"}`, {
+  1090→        duration: 8000,
+  1091→        action: {
+  1092→          label: "Undo",
+  1093→          onClick: () => {
+  1094→            void (async () => {
+  1095→              for (const id of okIds) {
+  1096→                await undoRequest({ module: "EXPENSE", recordId: id, onUndo: () => reloadExpenses() });
+  1097→              }
+  1098→            })();
+  1099→          },
+  1100→        },
+  1101→      });
+  1102→    } else {
+  1103→      toast.error("Could not delete the selected expenses");
+  1104→    }
+  1105→    setSelectedIds(new Set());
+  1106→    void reloadExpenses();
+  1107→  };
+  1108→
+  1109→  const toggleRecurring = async (row: RecurringRow, next: boolean) => {
+  1110→    const res = await mutate(() => api.put(`/api/recurring-expenses/${row.id}/toggle`, { active: next }));
+  1111→    if (res.ok) {
+  1112→      toast.success(next ? `"${row.name}" activated` : `"${row.name}" paused`);
+  1113→      void recurring.reload();
+  1114→    }
+  1115→  };
+  1116→
+  1117→  const runRecurring = async (row: RecurringRow) => {
+  1118→    let created = 0;
+  1119→    const res = await mutate(async () => {
+  1120→      const d = await api.post<{ created: number }>(`/api/recurring-expenses/${row.id}/run`);
+  1121→      created = d.created ?? 0;
+  1122→      return d;
+  1123→    });
+  1124→    if (res.ok) {
+  1125→      toast.success(`Created ${created} expenses from "${row.name}"`);
+  1126→      void recurring.reload();
+  1127→      reloadExpenses();
+  1128→    }
+  1129→  };
+  1130→
+  1131→  const columns: Column<ExpenseRec>[] = [
+  1132→    {
+  1133→      key: "description", label: t(lang, "col.expense"), primary: true,
+  1134→      render: (r) => (
+  1135→        <div className="min-w-0">
+  1136→          <p className="flex items-center gap-1.5 truncate font-medium">
+  1137→            {r.description || r.categoryName || "Untitled expense"}
+  1138→            {r.kind === "CAPITAL" && <CapitalBadge />}
+  1139→          </p>
+  1140→          <p className="truncate text-[11px] text-muted-foreground">
+  1141→            {fmtDay(r.date)} · {r.categoryName ?? "Uncategorized"}{r.reason ? ` · ${r.reason}` : ""}
+  1142→          </p>
+  1143→        </div>
+  1144→      ),
+  1145→      value: (r) => r.description || r.categoryName || "Untitled expense",
+  1146→    },
+  1147→    { key: "date", label: t(lang, "col.date"), value: (r) => fmtDay(r.date), hideOnMobile: true },
+  1148→    { key: "business", label: t(lang, "col.business"), render: (r) => <BusinessBadge business={r.business} />, value: (r) => r.business },
+  1149→    { key: "category", label: t(lang, "col.category"), value: (r) => r.categoryName ?? "—", hideOnMobile: true },
+  1150→    { key: "vehicle", label: t(lang, "col.vehicle"), value: (r) => r.vehicleName ?? "—", hideOnMobile: true },
+  1151→    {
+  1152→      key: "spentBy", label: t(lang, "col.spentBy"),
+  1153→      render: (r) =>
+  1154→        r.isCommon ? (
+  1155→          <CommonBadge />
+  1156→        ) : (
+  1157→          <span className="flex items-center gap-1 text-sm"><Crown className="h-3 w-3 shrink-0 text-amber-500" aria-hidden />{r.spentByName ?? "—"}</span>
+  1158→        ),
+  1159→      value: (r) => (r.isCommon ? "Common — all owners" : (r.spentByName ?? "—")),
+  1160→    },
+  1161→    {
+  1162→      key: "reason", label: "Reason", hideOnMobile: true,
+  1163→      render: (r) => <span className="text-xs text-muted-foreground">{r.reason ?? "—"}</span>,
+  1164→      value: (r) => r.reason ?? "",
+  1165→    },
+  1166→    {
+  1167→      key: "amount", label: t(lang, "col.amount"), className: "text-right",
+  1168→      render: (r) => <span className="font-semibold tabular-nums">{formatINR(r.amount)}</span>,
+  1169→      value: (r) => formatINR(r.amount),
+  1170→    },
+  1171→    {
+  1172→      key: "actions", label: "", className: "w-14",
+  1173→      render: (r) => (
+  1174→        <div className="flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
+  1175→          <DropdownMenu>
+  1176→            <DropdownMenuTrigger asChild>
+  1177→              <Button variant="ghost" size="icon" className="h-9 w-9 sm:h-8 sm:w-8" aria-label={`Actions for ${r.description || "expense"}`}>
+  1178→                <MoreHorizontal className="h-4 w-4" />
+  1179→              </Button>
+  1180→            </DropdownMenuTrigger>
+  1181→            <DropdownMenuContent align="end" className="w-36">
+  1182→              <DropdownMenuItem onClick={() => setEditTarget(r)}>
+  1183→                <Pencil className="h-3.5 w-3.5" />Edit
+  1184→              </DropdownMenuItem>
+  1185→              <DropdownMenuItem className="text-red-600 dark:text-red-400" onClick={() => setDeleteTarget(r)}>
+  1186→                <Trash2 className="h-3.5 w-3.5" />Delete
+  1187→              </DropdownMenuItem>
+  1188→            </DropdownMenuContent>
+  1189→          </DropdownMenu>
+  1190→        </div>
+  1191→      ),
+  1192→      value: () => "",
+  1193→    },
+  1194→  ];
+  1195→
+  1196→  const totals = expenses.data?.totals;
+  1197→  const operating = totals?.operating ?? 0;
+  1198→  const capital = totals?.capital ?? 0;
+  1199→
+  1200→  return (
+  1201→    <div className="space-y-4">
+  1202→      <PageHeader
+  1203→        title={t(lang, "page.expenses")}
+  1204→        subtitle={t(lang, "page.expenses.sub")}
+  1205→        actions={
+  1206→          <Button size="sm" className="h-9 gap-1.5" onClick={() => setAddOpen(true)}>
+  1207→            <Plus className="h-4 w-4" aria-hidden />Add Expense
+  1208→          </Button>
+  1209→        }
+  1210→      />
+  1211→
+  1212→      <Tabs value={tab} onValueChange={setTab}>
+  1213→        <TabsList className="h-10 w-full sm:w-auto" aria-label="Expense sections">
+  1214→          <TabsTrigger value="expenses" className="flex-1 gap-1.5 sm:flex-none sm:px-4">
+  1215→            <Receipt className="h-3.5 w-3.5" aria-hidden />Expenses
+  1216→          </TabsTrigger>
+  1217→          <TabsTrigger value="owners" className="flex-1 gap-1.5 sm:flex-none sm:px-4">
+  1218→            <Crown className="h-3.5 w-3.5" aria-hidden />Owner Breakdown
+  1219→          </TabsTrigger>
+  1220→        </TabsList>
+  1221→
+  1222→        {/* ------------------------- Expenses tab ------------------------- */}
+  1223→        <TabsContent value="expenses" className="mt-4 space-y-4">
+  1224→          {/* Discoverability pointer — owner deposits & withdrawals live in the Owner Breakdown tab */}
+  1225→          <Card className="border-amber-200/70 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/30">
+  1226→            <CardContent className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:p-3.5">
+  1227→              <div className="flex min-w-0 items-start gap-2.5">
+  1228→                <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300" aria-hidden>
+  1229→                  <Landmark className="h-4 w-4" />
+  1230→                </span>
+  1231→                <p className="text-xs leading-relaxed text-foreground">
+  1232→                  <span className="font-semibold">Owner money in &amp; out?</span> When recording an expense, choose <span className="font-semibold">who took or put in the money</span> under “Paid by / Owner” — deposits, withdrawals, reasons and the full statement with running balance live in the <span className="font-semibold">Owner Breakdown</span> tab.
+  1233→                </p>
+  1234→              </div>
+  1235→              <Button
+  1236→                size="sm" variant="outline"
+  1237→                className="h-8 shrink-0 gap-1.5 border-amber-300 text-xs text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:text-amber-200 dark:hover:bg-amber-900"
+  1238→                onClick={() => setTab("owners")}
+  1239→              >
+  1240→                <Crown className="h-3.5 w-3.5" aria-hidden />Open Owner Breakdown
+  1241→              </Button>
+  1242→            </CardContent>
+  1243→          </Card>
+  1244→
+  1245→          {/* Filters */}
+  1246→          <Card>
+  1247→            <CardContent className="space-y-3 p-3 sm:p-4">
+  1248→              <div className="grid grid-cols-2 gap-2.5 sm:gap-3 sm:grid-cols-2 xl:grid-cols-4">
+  1249→                <SelectInput value={business} onChange={onBusinessChange} options={BUSINESS_OPTIONS} placeholder="All businesses" />
+  1250→                <SelectInput
+  1251→                  value={categoryId}
+  1252→                  onChange={setCategoryId}
+  1253→                  options={[{ label: "All categories", value: "" }, ...(categories.data?.items ?? []).map((c) => ({ label: c.name, value: c.id }))]}
+  1254→                  placeholder="All categories"
+  1255→                />
+  1256→                {business === "TRANSPORT" && (
+  1257→                  <SelectInput
+  1258→                    value={vehicleId}
+  1259→                    onChange={setVehicleId}
+  1260→                    options={[{ label: "All vehicles", value: "" }, ...vehicleItems.map((v) => ({ label: v.name, value: v.id }))]}
+  1261→                    placeholder="All vehicles"
+  1262→                  />
+  1263→                )}
+  1264→                <SelectInput
+  1265→                  value={ownerId}
+  1266→                  onChange={setOwnerId}
+  1267→                  options={[
+  1268→                    { label: "All owners", value: "" },
+  1269→                    { label: "Common — shared by all", value: "COMMON" },
+  1270→                    ...((owners.data?.items ?? []).map((o) => ({ label: o.name, value: o.id }))),
+  1271→                  ]}
+  1272→                  placeholder="All owners"
+  1273→                />
+  1274→              </div>
+  1275→              <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center">
+  1276→                <div className="flex w-full items-center gap-2 overflow-hidden">
+  1277→                  <RangeSelector
+  1278→                    value={rangeKey}
+  1279→                    onChange={(r) => { setRangeKey(r); }}
+  1280→                    className="flex-1"
+  1281→                  />
+  1282→                  <Button
+  1283→                    size="sm"
+  1284→                    variant={rangeKey === "custom" ? "default" : "outline"}
+  1285→                    className="h-8 shrink-0 rounded-full px-3 text-xs"
+  1286→                    onClick={() => {
+  1287→                      if (rangeKey === "custom") { setRangeKey("month"); setCustomFrom(""); setCustomTo(""); }
+  1288→                      else setRangeKey("custom");
+  1289→                    }}
+  1290→                  >
+  1291→                    Custom
+  1292→                  </Button>
+  1293→                </div>
+  1294→                <SearchInput value={search} onChange={setSearch} placeholder="Search description…" className="lg:w-64" />
+  1295→              </div>
+  1296→              {rangeKey === "custom" && (
+  1297→                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed p-2.5">
+  1298→                  <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="h-9 w-full sm:w-40" aria-label="From date" />
+  1299→                  <span className="text-xs text-muted-foreground">to</span>
+  1300→                  <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-9 w-full sm:w-40" aria-label="To date" />
+  1301→                </div>
+  1302→              )}
+  1303→            </CardContent>
+  1304→          </Card>
+  1305→
+  1306→          <StatGrid cols={2}>
+  1307→            <StatCard
+  1308→              label="Operating expenses"
+  1309→              value={formatINR(operating)}
+  1310→              icon={Wallet}
+  1311→              tone="negative"
+  1312→              hint="Feeds profit & reports"
+  1313→            />
+  1314→            <StatCard
+  1315→              label="Owner capital"
+  1316→              value={formatINR(capital)}
+  1317→              icon={Landmark}
+  1318→              hint="Deposits + withdrawals (not expenses)"
+  1319→            />
+  1320→            <StatCard
+  1321→              label="Common (shared)"
+  1322→              value={formatINR(totals?.common ?? 0)}
+  1323→              icon={Users}
+  1324→              hint="Shared by all owners & business"
+  1325→            />
+  1326→            <StatCard label="Records" value={String(expenses.data?.total ?? items.length)} icon={Hash} hint="Matching current filters" />
+  1327→          </StatGrid>
+  1328→
+  1329→          {/* Reconciliation strip — visible guarantee the numbers always add up */}
+  1330→          <p className="px-1 text-[11px] text-muted-foreground">
+  1331→            Reconciliation: operating {formatINR(operating)} + owner capital {formatINR(capital)} = total {formatINR(totals?.amount ?? 0)} across every surface.
+  1332→          </p>
+  1333→
+  1334→          <div className="grid gap-4 xl:grid-cols-3">
+  1335→            {/* List */}
+  1336→            <Card className="xl:col-span-2">
+  1337→              <CardContent className="p-3 sm:p-4">
+  1338→                {expenses.error ? (
+  1339→                  <ErrorState message={expenses.error} onRetry={() => void expenses.reload()} />
+  1340→                ) : (
+  1341→                  <DataTable
+  1342→                    columns={columns}
+  1343→                    rows={items}
+  1344→                    rowKey={(r) => r.id}
+  1345→                    exportName="expenses"
+  1346→                    loading={expenses.loading}
+  1347→                    emptyIcon={Receipt}
+  1348→                    emptyTitle="No expenses match"
+  1349→                    emptyDescription="Try widening the date range or clearing filters."
+  1350→                    selectKey={(r) => r.id}
+  1351→                    selectedIds={selectedIds}
+  1352→                    onSelectedChange={setSelectedIds}
+  1353→                    bulkBar={(ids) => (
+  1354→                      <>
+  1355→                        <span className="px-1.5 text-xs font-semibold tabular-nums whitespace-nowrap">
+  1356→                          {ids.length} selected
+  1357→                        </span>
+  1358→                        <Button
+  1359→                          variant="outline"
+  1360→                          size="sm"
+  1361→                          className="h-8 gap-1.5 text-xs"
+  1362→                          onClick={() =>
+  1363→                            downloadCsv(
+  1364→                              "expenses-selected",
+  1365→                              columns,
+  1366→                              items.filter((r) => ids.includes(r.id))
+  1367→                            )
+  1368→                          }
+  1369→                          aria-label={`Export ${ids.length} selected expenses as CSV`}
+  1370→                        >
+  1371→                          <Download className="h-3.5 w-3.5" aria-hidden />Export CSV
+  1372→                        </Button>
+  1373→                        <Button
+  1374→                          variant="destructive"
+  1375→                          size="sm"
+  1376→                          className="h-8 gap-1.5 text-xs"
+  1377→                          onClick={() => setBulkConfirm(true)}
+  1378→                          aria-label={`Delete ${ids.length} selected expenses`}
+  1379→                        >
+  1380→                          <Trash2 className="h-3.5 w-3.5" aria-hidden />Delete
+  1381→                        </Button>
+  1382→                      </>
+  1383→                    )}
+  1384→                  />
+  1385→                )}
+  1386→              </CardContent>
+  1387→            </Card>
+  1388→
+  1389→            {/* Side: breakdown + recurring */}
+  1390→            <div className="space-y-4">
+  1391→              <Card>
+  1392→                <CardContent className="p-3 sm:p-4">
+  1393→                  <p className="mb-3 text-sm font-semibold">Category breakdown</p>
+  1394→                  {expenses.loading ? (
+  1395→                    <div className="space-y-2.5">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-8 rounded-lg bg-muted animate-pulse" />)}</div>
+  1396→                  ) : (
+  1397→                    <MiniBars rows={breakdown.map((b) => ({ ...b, color: CHART_COLORS.amber }))} />
+  1398→                  )}
+  1399→                </CardContent>
+  1400→              </Card>
+  1401→
+  1402→              <Card>
+  1403→                <CardContent className="p-3 sm:p-4">
+  1404→                  <div
+  1405→                    role="button"
+  1406→                    tabIndex={0}
+  1407→                    className="flex w-full cursor-pointer items-center justify-between gap-2"
+  1408→                    onClick={() => setRecOpen((o) => !o)}
+  1409→                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setRecOpen((o) => !o); } }}
+  1410→                    aria-expanded={recOpen}
+  1411→                    aria-label="Toggle recurring expenses"
+  1412→                  >
+  1413→                    <span className="flex items-center gap-2 text-sm font-semibold">
+  1414→                      <Repeat className="h-4 w-4 text-primary" aria-hidden />Recurring
+  1415→                      <Badge variant="outline" className="text-[10px]">{recurring.data?.length ?? 0}</Badge>
+  1416→                    </span>
+  1417→                    <span className="flex items-center gap-1.5">
+  1418→                      <Button
+  1419→                        size="sm" variant="outline" className="h-8 gap-1 text-xs"
+  1420→                        onClick={(e) => { e.stopPropagation(); setRecAddOpen(true); }}
+  1421→                      >
+  1422→                        <Plus className="h-3 w-3" aria-hidden />New
+  1423→                      </Button>
+  1424→                      <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", recOpen && "rotate-180")} aria-hidden />
+  1425→                    </span>
+  1426→                  </div>
+  1427→
+  1428→                  {recOpen && (
+  1429→                    <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-0.5">
+  1430→                      {recurring.loading && <div className="h-16 animate-pulse rounded-lg bg-muted" />}
+  1431→                      {!recurring.loading && (recurring.data ?? []).length === 0 && (
+  1432→                        <p className="py-4 text-center text-xs text-muted-foreground">No recurring expenses yet</p>
+  1433→                      )}
+  1434→                      {(recurring.data ?? []).map((row) => (
+  1435→                        <div key={row.id} className="rounded-xl border p-2.5">
+  1436→                          <div className="flex items-start justify-between gap-2">
+  1437→                            <div className="min-w-0">
+  1438→                              <p className="truncate text-sm font-medium">{row.name}</p>
+  1439→                              <p className="mt-0.5 text-[11px] text-muted-foreground">
+  1440→                                {formatINR(row.amount)} · {row.frequency?.toLowerCase() || "monthly"} · Last: {row.lastGeneratedMonth ?? "—"}
+  1441→                              </p>
+  1442→                            </div>
+  1443→                            <BusinessBadge business={row.business} />
+  1444→                          </div>
+  1445→                          <div className="mt-2 flex items-center justify-between gap-2">
+  1446→                            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+  1447→                              <Switch checked={row.active ?? false} onCheckedChange={(v) => void toggleRecurring(row, v)} disabled={saving} aria-label={`Toggle ${row.name}`} />
+  1448→                              {row.active === false ? "Paused" : "Active"}
+  1449→                            </label>
+  1450→                            <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={() => void runRecurring(row)} disabled={saving}>
+  1451→                              <Play className="h-3 w-3" aria-hidden />Run now
+  1452→                            </Button>
+  1453→                          </div>
+  1454→                        </div>
+  1455→                      ))}
+  1456→                    </div>
+  1457→                  )}
+  1458→                </CardContent>
+  1459→              </Card>
+  1460→            </div>
+  1461→          </div>
+  1462→        </TabsContent>
+  1463→
+  1464→        {/* ---------------------- Owner Breakdown tab ---------------------- */}
+  1465→        <TabsContent value="owners" className="mt-4">
+  1466→          <OwnerBreakdownSection business={business} from={eff.from} to={eff.to} onQuickAction={openQuickCapital} refreshKey={bdVersion} />
+  1467→        </TabsContent>
+  1468→      </Tabs>
+  1469→
+  1470→      <ExpenseFormDialog
+  1471→        open={addOpen}
+  1472→        onOpenChange={(v) => { setAddOpen(v); if (!v) setAddPreset(null); }}
+  1473→        expense={null}
+  1474→        vehicles={vehicles.data?.items ?? []}
+  1475→        onDone={() => { reloadExpenses(); }}
+  1476→        preset={addPreset}
+  1477→      />
+  1478→
+  1479→      {/* Mobile FAB — alternate trigger for Add Expense (hidden while bulk rows
+  1480→          are selected so the sticky bulk bar stays unobstructed) */}
+  1481→      {selectedIds.size === 0 && (
+  1482→        <ViewFab icon={Plus} label="Add expense" onClick={() => setAddOpen(true)} />
+  1483→      )}
+  1484→      <ExpenseFormDialog open={Boolean(editTarget)} onOpenChange={(v) => !v && setEditTarget(null)} expense={editTarget} vehicles={vehicles.data?.items ?? []} onDone={() => reloadExpenses()} />
+  1485→      <RecurringFormDialog open={recAddOpen} onOpenChange={setRecAddOpen} onDone={() => { void recurring.reload(); reloadExpenses(); }} />
+  1486→
+  1487→      <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(v) => !v && setDeleteTarget(null)}>
+  1488→        <AlertDialogContent>
+  1489→          <AlertDialogHeader>
+  1490→            <AlertDialogTitle>Delete this expense?</AlertDialogTitle>
+  1491→            <AlertDialogDescription>
+  1492→              {deleteTarget?.description || deleteTarget?.categoryName || "Expense"} · {formatINR(deleteTarget?.amount ?? 0)} on {deleteTarget ? fmtDay(deleteTarget.date) : ""}.
+  1493→              This is permanent and audit-logged.
+  1494→            </AlertDialogDescription>
+  1495→          </AlertDialogHeader>
+  1496→          <AlertDialogFooter>
+  1497→            <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
+  1498→            <AlertDialogAction
+  1499→              className="min-h-10 bg-red-600 text-white hover:bg-red-700"
+  1500→              onClick={(e) => { e.preventDefault(); void removeExpense(); }}
+  1501→            >
+  1502→              {saving ? "Deleting…" : "Delete"}
+  1503→            </AlertDialogAction>
+  1504→          </AlertDialogFooter>
+  1505→        </AlertDialogContent>
+  1506→      </AlertDialog>
+  1507→
+  1508→      <AlertDialog open={bulkConfirm} onOpenChange={setBulkConfirm}>
+  1509→        <AlertDialogContent>
+  1510→          <AlertDialogHeader>
+  1511→            <AlertDialogTitle>Delete {selectedIds.size} selected expense{selectedIds.size === 1 ? "" : "s"}?</AlertDialogTitle>
+  1512→            <AlertDialogDescription>
+  1513→              Each deleted expense is audit-logged — a single Undo action after deleting restores every row from the audit trail.
+  1514→            </AlertDialogDescription>
+  1515→          </AlertDialogHeader>
+  1516→          <AlertDialogFooter>
+  1517→            <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
+  1518→            <AlertDialogAction
+  1519→              className="min-h-10 bg-red-600 text-white hover:bg-red-700"
+  1520→              onClick={(e) => { e.preventDefault(); void bulkDelete(); }}
+  1521→            >
+  1522→              Delete {selectedIds.size}
+  1523→            </AlertDialogAction>
+  1524→          </AlertDialogFooter>
+  1525→        </AlertDialogContent>
+  1526→      </AlertDialog>
+  1527→    </div>
+  1528→  );
+  1529→}
+  1530→

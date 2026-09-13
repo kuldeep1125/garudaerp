@@ -1,0 +1,573 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useState } from "react";
+     4→import { api, qs } from "@/lib/api-client";
+     5→import { formatINR, parseAmount } from "@/lib/money";
+     6→import type { ViewProps } from "@/components/view-types";
+     7→import { useNav } from "@/components/providers";
+     8→import { PageHeader } from "@/components/shared/page-header";
+     9→import { DataTable, type Column } from "@/components/shared/data-table";
+    10→import { StatCard, StatGrid } from "@/components/shared/stat-card";
+    11→import { StatusBadge } from "@/components/shared/status-badge";
+    12→import { Button } from "@/components/ui/button";
+    13→import { Card, CardContent } from "@/components/ui/card";
+    14→import { Input } from "@/components/ui/input";
+    15→import { Textarea } from "@/components/ui/textarea";
+    16→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    17→import {
+    18→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    19→} from "@/components/ui/dialog";
+    20→import { toast } from "sonner";
+    21→import { cn } from "@/lib/utils";
+    22→import {
+    23→  CarFront, Plus, Route, Receipt, CalendarClock, Wrench, IndianRupee, BadgeCheck, ShieldAlert,
+    24→} from "lucide-react";
+    25→import {
+    26→  type VehicleRec, type TripRec, type ExpenseRec, type Option, SelectInput, Field, ErrorState, MoneyInput,
+    27→  useAsync, useMutation, fmtDay, todayStr,
+    28→} from "./_shared";
+    29→
+    30→interface EmiRec { id: string; vehicleId: string; month: string; dueDate: string; amount: number; paidDate?: string | null; status: string; reference?: string | null }
+    31→interface MaintenanceRec {
+    32→  id: string; vehicleId: string; vehicleName?: string; date: string; type: string;
+    33→  description?: string | null; cost?: number | null; nextDueDate?: string | null; status: string; createdByName?: string | null;
+    34→}
+    35→interface VehicleDetail { vehicle: VehicleRec; trips: TripRec[]; expenses: ExpenseRec[]; emis: EmiRec[]; maintenance: MaintenanceRec[] }
+    36→
+    37→interface ExpenseCategoryRec { id: string; name: string; business: string; kind?: string }
+    38→
+    39→const VEHICLE_STATUS_OPTIONS: Option[] = ["AVAILABLE", "RENTED", "TRIP", "MAINTENANCE", "INACTIVE"]
+    40→  .map((s) => ({ label: s.charAt(0) + s.slice(1).toLowerCase(), value: s }));
+    41→
+    42→const METHOD_OPTIONS: Option[] = ["Cash", "UPI", "Bank", "Card", "Cheque", "Other"].map((m) => ({ label: m, value: m }));
+    43→
+    44→function daysUntil(dateStr?: string | null): number | null {
+    45→  if (!dateStr) return null;
+    46→  const d = new Date(dateStr.length === 10 ? `${dateStr}T00:00:00` : dateStr);
+    47→  if (Number.isNaN(d.getTime())) return null;
+    48→  const today = new Date();
+    49→  today.setHours(0, 0, 0, 0);
+    50→  return Math.round((d.getTime() - today.getTime()) / 86400000);
+    51→}
+    52→
+    53→function tripTotal(t: TripRec): number {
+    54→  return t.finalAmount ?? (t.agreedAmount + (t.extraCharges ?? 0));
+    55→}
+    56→
+    57→function expiryCls(dateStr?: string | null): string {
+    58→  const d = daysUntil(dateStr);
+    59→  if (d === null) return "";
+    60→  if (d < 0) return "text-red-600 dark:text-red-400 font-semibold";
+    61→  if (d <= 30) return "text-amber-600 dark:text-amber-400 font-semibold";
+    62→  return "";
+    63→}
+    64→
+    65→function expiryHint(dateStr?: string | null): string {
+    66→  const d = daysUntil(dateStr);
+    67→  if (d === null) return "";
+    68→  if (d < 0) return ` (expired ${Math.abs(d)}d ago)`;
+    69→  if (d <= 30) return ` (in ${d}d)`;
+    70→  return "";
+    71→}
+    72→
+    73→// ---------------------------------------------------------------------------
+    74→// Add expense (transport, vehicle prefilled)
+    75→// ---------------------------------------------------------------------------
+    76→
+    77→function VehicleExpenseDialog({ open, onOpenChange, vehicleId, onDone }: {
+    78→  open: boolean;
+    79→  onOpenChange: (v: boolean) => void;
+    80→  vehicleId: string;
+    81→  onDone: () => void;
+    82→}) {
+    83→  const [form, setForm] = useState({ date: todayStr(), categoryId: "", amount: "", method: "Cash", description: "", notes: "" });
+    84→  const [categories, setCategories] = useState<ExpenseCategoryRec[]>([]);
+    85→  const { mutate, saving } = useMutation();
+    86→
+    87→  const [prevOpen, setPrevOpen] = useState(open);
+    88→  if (open !== prevOpen) {
+    89→    setPrevOpen(open);
+    90→    if (open) setForm({ date: todayStr(), categoryId: "", amount: "", method: "Cash", description: "", notes: "" });
+    91→  }
+    92→
+    93→  useEffect(() => {
+    94→    if (!open) return;
+    95→    let cancelled = false;
+    96→    api.get<{ items: ExpenseCategoryRec[] }>("/api/expense-categories" + qs({ business: "TRANSPORT" }))
+    97→      .then((d) => { if (!cancelled) setCategories(d.items ?? []); })
+    98→      .catch(() => { if (!cancelled) setCategories([]); });
+    99→    return () => { cancelled = true; };
+   100→  }, [open]);
+   101→
+   102→  const submit = async () => {
+   103→    const amt = parseAmount(form.amount);
+   104→    if (amt <= 0) { toast.error("Enter a valid amount"); return; }
+   105→    if (!form.date) { toast.error("Date is required"); return; }
+   106→    const res = await mutate(
+   107→      () => api.post("/api/expenses", {
+   108→        date: form.date,
+   109→        business: "TRANSPORT",
+   110→        vehicleId: vehicleId || undefined,
+   111→        categoryId: form.categoryId || undefined,
+   112→        amount: amt,
+   113→        method: form.method || undefined,
+   114→        description: form.description || undefined,
+   115→        notes: form.notes || undefined,
+   116→      }),
+   117→      "Expense recorded"
+   118→    );
+   119→    if (res.ok) { onOpenChange(false); onDone(); }
+   120→  };
+   121→
+   122→  return (
+   123→    <Dialog open={open} onOpenChange={onOpenChange}>
+   124→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+   125→        <DialogHeader>
+   126→          <DialogTitle>Add Vehicle Expense</DialogTitle>
+   127→          <DialogDescription>Recorded under the Transport business for this vehicle.</DialogDescription>
+   128→        </DialogHeader>
+   129→        <div className="grid gap-3 sm:grid-cols-2">
+   130→          <Field label="Date" required>
+   131→            <Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} className="h-10" />
+   132→          </Field>
+   133→          <Field label="Category">
+   134→            <SelectInput
+   135→              value={form.categoryId}
+   136→              onChange={(v) => setForm((f) => ({ ...f, categoryId: v }))}
+   137→              placeholder="Select category…"
+   138→              options={categories.map((c) => ({ label: c.name, value: c.id }))}
+   139→            />
+   140→          </Field>
+   141→          <Field label="Amount (₹)" required>
+   142→            <MoneyInput value={form.amount} onChange={(v) => setForm((f) => ({ ...f, amount: v }))} min={1} className="h-10" />
+   143→          </Field>
+   144→          <Field label="Method">
+   145→            <SelectInput value={form.method} onChange={(v) => setForm((f) => ({ ...f, method: v }))} options={METHOD_OPTIONS} />
+   146→          </Field>
+   147→          <Field label="Description" className="sm:col-span-2">
+   148→            <Input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} className="h-10" placeholder="Fuel, toll, repair…" />
+   149→          </Field>
+   150→          <Field label="Notes" className="sm:col-span-2">
+   151→            <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} placeholder="Optional" />
+   152→          </Field>
+   153→        </div>
+   154→        <DialogFooter className="gap-2">
+   155→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   156→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : "Add expense"}</Button>
+   157→        </DialogFooter>
+   158→      </DialogContent>
+   159→    </Dialog>
+   160→  );
+   161→}
+   162→
+   163→// ---------------------------------------------------------------------------
+   164→// Add maintenance
+   165→// ---------------------------------------------------------------------------
+   166→
+   167→function AddMaintenanceDialog({ open, onOpenChange, vehicleId, onDone }: {
+   168→  open: boolean;
+   169→  onOpenChange: (v: boolean) => void;
+   170→  vehicleId: string;
+   171→  onDone: () => void;
+   172→}) {
+   173→  const [form, setForm] = useState({ date: todayStr(), type: "", description: "", cost: "", nextDueDate: "" });
+   174→  const { mutate, saving } = useMutation();
+   175→
+   176→  const [prevOpen, setPrevOpen] = useState(open);
+   177→  if (open !== prevOpen) {
+   178→    setPrevOpen(open);
+   179→    if (open) setForm({ date: todayStr(), type: "", description: "", cost: "", nextDueDate: "" });
+   180→  }
+   181→
+   182→  const submit = async () => {
+   183→    if (!form.type.trim()) { toast.error("Maintenance type is required"); return; }
+   184→    if (!form.date) { toast.error("Date is required"); return; }
+   185→    const res = await mutate(
+   186→      () => api.post("/api/maintenance", {
+   187→        vehicleId,
+   188→        date: form.date,
+   189→        type: form.type.trim(),
+   190→        description: form.description || undefined,
+   191→        cost: form.cost ? parseAmount(form.cost) : undefined,
+   192→        nextDueDate: form.nextDueDate || undefined,
+   193→      }),
+   194→      "Maintenance scheduled"
+   195→    );
+   196→    if (res.ok) { onOpenChange(false); onDone(); }
+   197→  };
+   198→
+   199→  return (
+   200→    <Dialog open={open} onOpenChange={onOpenChange}>
+   201→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+   202→        <DialogHeader>
+   203→          <DialogTitle>Add Maintenance</DialogTitle>
+   204→          <DialogDescription>Marking it done later auto-creates the expense for this vehicle.</DialogDescription>
+   205→        </DialogHeader>
+   206→        <div className="grid gap-3 sm:grid-cols-2">
+   207→          <Field label="Date" required>
+   208→            <Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} className="h-10" />
+   209→          </Field>
+   210→          <Field label="Type" required>
+   211→            <Input value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} className="h-10" placeholder="Service, Tyres, Repair…" />
+   212→          </Field>
+   213→          <Field label="Cost (₹)">
+   214→            <MoneyInput value={form.cost} onChange={(v) => setForm((f) => ({ ...f, cost: v }))} min={0} className="h-10" />
+   215→          </Field>
+   216→          <Field label="Next due date">
+   217→            <Input type="date" value={form.nextDueDate} onChange={(e) => setForm((f) => ({ ...f, nextDueDate: e.target.value }))} className="h-10" />
+   218→          </Field>
+   219→          <Field label="Description" className="sm:col-span-2">
+   220→            <Textarea value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} rows={2} placeholder="Optional details" />
+   221→          </Field>
+   222→        </div>
+   223→        <DialogFooter className="gap-2">
+   224→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   225→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : "Add maintenance"}</Button>
+   226→        </DialogFooter>
+   227→      </DialogContent>
+   228→    </Dialog>
+   229→  );
+   230→}
+   231→
+   232→// ---------------------------------------------------------------------------
+   233→// Main view
+   234→// ---------------------------------------------------------------------------
+   235→
+   236→export default function VehicleDetailView({ params, navigate }: ViewProps) {
+   237→  const id = params?.id ?? "";
+   238→  const { back } = useNav();
+   239→  const { mutate, saving } = useMutation();
+   240→
+   241→  const { data, loading, error, reload } = useAsync<VehicleDetail>(
+   242→    () => (id ? api.get(`/api/vehicles/${id}`) : Promise.reject(new Error("No vehicle selected"))),
+   243→    [id]
+   244→  );
+   245→
+   246→  const [expenseOpen, setExpenseOpen] = useState(false);
+   247→  const [maintenanceOpen, setMaintenanceOpen] = useState(false);
+   248→
+   249→  if (!id) {
+   250→    return (
+   251→      <div className="py-10">
+   252→        <ErrorState message="No vehicle selected." />
+   253→        <div className="mt-4 flex justify-center">
+   254→          <Button variant="outline" className="min-h-10" onClick={() => navigate("vehicles")}>Back to Vehicles</Button>
+   255→        </div>
+   256→      </div>
+   257→    );
+   258→  }
+   259→
+   260→  if (loading) {
+   261→    return (
+   262→      <div className="space-y-4" aria-busy="true">
+   263→        <div className="h-10 w-56 animate-pulse rounded-lg bg-muted" />
+   264→        <div className="h-48 animate-pulse rounded-xl bg-muted" />
+   265→        <div className="h-64 animate-pulse rounded-xl bg-muted" />
+   266→      </div>
+   267→    );
+   268→  }
+   269→
+   270→  if (error || !data) {
+   271→    return (
+   272→      <div className="py-10">
+   273→        <ErrorState message={error ?? "Vehicle not found"} onRetry={() => void reload()} />
+   274→        <div className="mt-4 flex justify-center">
+   275→          <Button variant="outline" className="min-h-10" onClick={() => navigate("vehicles")}>Back to Vehicles</Button>
+   276→        </div>
+   277→      </div>
+   278→    );
+   279→  }
+   280→
+   281→  const { vehicle: v, trips, expenses, emis, maintenance } = data;
+   282→  const sortedEmis = [...emis].sort((a, b) => a.month.localeCompare(b.month));
+   283→  const pendingEmis = sortedEmis.filter((e) => e.status === "PENDING").length;
+   284→
+   285→  const changeStatus = async (next: string) => {
+   286→    const res = await mutate(() => api.put(`/api/vehicles/${v.id}`, { status: next }), `Marked ${next.toLowerCase()}`);
+   287→    if (res.ok) void reload();
+   288→  };
+   289→
+   290→  const markEmiPaid = async (emi: EmiRec) => {
+   291→    const res = await mutate(
+   292→      () => api.put(`/api/emis/${emi.id}/pay`, { paidDate: todayStr() }),
+   293→      "EMI recorded & expense created",
+   294→      () => ({ module: "EMI", recordId: emi.id, onUndo: () => void reload() })
+   295→    );
+   296→    if (res.ok) void reload();
+   297→  };
+   298→
+   299→  const generateSchedule = async () => {
+   300→    let createdCount: number | null = null;
+   301→    const res = await mutate(async () => {
+   302→      const d = await api.post<{ created?: number }>(`/api/vehicles/${v.id}/emis/generate`);
+   303→      createdCount = typeof d.created === "number" ? d.created : null;
+   304→      return d;
+   305→    });
+   306→    if (res.ok) {
+   307→      toast.success(`EMI schedule ready${createdCount !== null ? ` — ${createdCount} installment(s) added` : ""}`);
+   308→      void reload();
+   309→    }
+   310→  };
+   311→
+   312→  const markMaintenanceDone = async (m: MaintenanceRec) => {
+   313→    const res = await mutate(() => api.put(`/api/maintenance/${m.id}`, { status: "DONE" }), "Maintenance marked done — expense created", () => ({ module: "MAINTENANCE", recordId: m.id, onUndo: () => void reload() }));
+   314→    if (res.ok) void reload();
+   315→  };
+   316→
+   317→  const tripColumns: Column<TripRec>[] = [
+   318→    {
+   319→      key: "period", label: "Period", primary: true,
+   320→      render: (r) => (
+   321→        <div className="min-w-0">
+   322→          <p className="truncate font-medium">{fmtDay(r.startAt)} → {r.endAt ? fmtDay(r.endAt) : "ongoing"}</p>
+   323→          <p className="truncate text-[11px] text-muted-foreground">{r.clientName ?? "—"}</p>
+   324→        </div>
+   325→      ),
+   326→      value: (r) => `${fmtDay(r.startAt)} → ${r.endAt ? fmtDay(r.endAt) : "ongoing"}`,
+   327→    },
+   328→    { key: "client", label: "Client", value: (r) => r.clientName ?? "—", hideOnMobile: true },
+   329→    {
+   330→      key: "amount", label: "Amount", className: "text-right",
+   331→      render: (r) => <span className="font-semibold tabular-nums">{formatINR(tripTotal(r))}</span>,
+   332→      value: (r) => formatINR(tripTotal(r)),
+   333→    },
+   334→    { key: "paymentStatus", label: "Payment", render: (r) => <StatusBadge status={r.paymentStatus} />, value: (r) => r.paymentStatus },
+   335→    { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+   336→  ];
+   337→
+   338→  const expenseColumns: Column<ExpenseRec>[] = [
+   339→    { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
+   340→    {
+   341→      key: "description", label: "Expense", primary: true,
+   342→      render: (r) => (
+   343→        <div className="min-w-0">
+   344→          <p className="truncate font-medium">{r.description || r.categoryName || "Vehicle expense"}</p>
+   345→          <p className="truncate text-[11px] text-muted-foreground">{r.categoryName ?? "Uncategorized"} · {fmtDay(r.date)}</p>
+   346→        </div>
+   347→      ),
+   348→      value: (r) => r.description || r.categoryName || "Vehicle expense",
+   349→    },
+   350→    { key: "category", label: "Category", value: (r) => r.categoryName ?? "—", hideOnMobile: true },
+   351→    {
+   352→      key: "amount", label: "Amount", className: "text-right",
+   353→      render: (r) => <span className="font-semibold tabular-nums">{formatINR(r.amount)}</span>,
+   354→      value: (r) => formatINR(r.amount),
+   355→    },
+   356→  ];
+   357→
+   358→  return (
+   359→    <div className="space-y-4">
+   360→      <PageHeader
+   361→        title={v.name}
+   362→        subtitle={[v.make, v.model, v.year].filter(Boolean).join(" · ") || v.registrationNumber}
+   363→        onBack={back}
+   364→        actions={
+   365→          <div className="flex items-center gap-2">
+   366→            <StatusBadge status={v.status} />
+   367→            <div className="w-36">
+   368→              <SelectInput value={v.status} onChange={(s) => void changeStatus(s)} options={VEHICLE_STATUS_OPTIONS} placeholder="Status" />
+   369→            </div>
+   370→          </div>
+   371→        }
+   372→      />
+   373→
+   374→      {/* Identity strip */}
+   375→      <Card>
+   376→        <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-2 p-3 sm:p-4">
+   377→          <span className="rounded-md bg-muted px-2 py-1 font-mono text-xs tracking-tight">{v.registrationNumber}</span>
+   378→          {v.variant && <span className="text-xs text-muted-foreground">{v.variant}</span>}
+   379→          <span className="text-xs text-muted-foreground">Purchased {v.purchaseDate ? fmtDay(v.purchaseDate) : "—"}{(v.purchasePrice ?? 0) > 0 ? ` · ${formatINR(v.purchasePrice ?? 0)}` : ""}</span>
+   380→          {(daysUntil(v.insuranceExpiry) ?? 999) <= 30 && v.insuranceExpiry && (
+   381→            <span className="flex items-center gap-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+   382→              <ShieldAlert className="h-3.5 w-3.5" aria-hidden />
+   383→              Insurance {expiryHint(v.insuranceExpiry).replace(/[()]/g, "")}
+   384→            </span>
+   385→          )}
+   386→        </CardContent>
+   387→      </Card>
+   388→
+   389→      {/* Stats */}
+   390→      <StatGrid cols={5}>
+   391→        <StatCard label="Month revenue" value={formatINR(v.stats?.monthRevenue ?? 0, { compact: true })} icon={IndianRupee} tone="positive" />
+   392→        <StatCard label="Month expense" value={formatINR(v.stats?.monthExpense ?? 0, { compact: true })} icon={Receipt} tone="warning" />
+   393→        <StatCard label="Month EMI" value={formatINR(v.stats?.monthEmi ?? 0, { compact: true })} icon={CalendarClock} />
+   394→        <StatCard label="Month net" value={formatINR(v.stats?.monthNet ?? 0, { compact: true })} icon={CarFront} tone={(v.stats?.monthNet ?? 0) >= 0 ? "positive" : "negative"} />
+   395→        <StatCard label="All-time net" value={formatINR(v.stats?.net ?? 0, { compact: true })} icon={BadgeCheck} tone={(v.stats?.net ?? 0) >= 0 ? "positive" : "negative"} hint="Revenue − expenses − EMI" />
+   396→      </StatGrid>
+   397→
+   398→      {/* Info grid */}
+   399→      <Card>
+   400→        <CardContent className="p-4 sm:p-5">
+   401→          <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
+   402→            <InfoCell label="Make" value={v.make || "—"} />
+   403→            <InfoCell label="Model" value={v.model || "—"} />
+   404→            <InfoCell label="Variant" value={v.variant || "—"} />
+   405→            <InfoCell label="Year" value={v.year ? String(v.year) : "—"} />
+   406→            <InfoCell label="Purchase date" value={v.purchaseDate ? fmtDay(v.purchaseDate) : "—"} />
+   407→            <InfoCell label="Purchase price" value={(v.purchasePrice ?? 0) > 0 ? formatINR(v.purchasePrice ?? 0) : "—"} />
+   408→            <InfoCell label="Loan amount" value={(v.loanAmount ?? 0) > 0 ? formatINR(v.loanAmount ?? 0) : "—"} />
+   409→            <InfoCell label="Monthly EMI" value={(v.monthlyEmi ?? 0) > 0 ? `${formatINR(v.monthlyEmi ?? 0)}/mo` : "—"} />
+   410→            <InfoCell
+   411→              label="EMI period"
+   412→              value={(v.emiStartDate || v.emiEndDate) ? `${v.emiStartDate ? fmtDay(v.emiStartDate) : "—"} → ${v.emiEndDate ? fmtDay(v.emiEndDate) : "ongoing"}` : "—"}
+   413→            />
+   414→            <InfoCell label="Installments" value={sortedEmis.length > 0 ? `${sortedEmis.length} (${pendingEmis} pending)` : "—"} />
+   415→            <InfoCell label="Insurance company" value={v.insuranceCompany || "—"} />
+   416→            <InfoCell label="Insurance number" value={v.insuranceNumber || "—"} />
+   417→            <InfoCell label="Insurance expiry" value={v.insuranceExpiry ? `${fmtDay(v.insuranceExpiry)}${expiryHint(v.insuranceExpiry)}` : "—"} className={expiryCls(v.insuranceExpiry)} />
+   418→            <InfoCell label="Fitness expiry" value={v.fitnessExpiry ? `${fmtDay(v.fitnessExpiry)}${expiryHint(v.fitnessExpiry)}` : "—"} className={expiryCls(v.fitnessExpiry)} />
+   419→            <InfoCell label="Permit" value={v.permitInfo || "—"} />
+   420→            <InfoCell label="Notes" value={v.notes || "—"} className="col-span-2 sm:col-span-3 lg:col-span-4" />
+   421→          </div>
+   422→        </CardContent>
+   423→      </Card>
+   424→
+   425→      <Tabs defaultValue="trips">
+   426→        <TabsList className="grid w-full grid-cols-4 sm:w-auto sm:inline-flex">
+   427→          <TabsTrigger value="trips">Trips ({trips.length})</TabsTrigger>
+   428→          <TabsTrigger value="expenses">Expenses ({expenses.length})</TabsTrigger>
+   429→          <TabsTrigger value="emi">EMI ({emis.length})</TabsTrigger>
+   430→          <TabsTrigger value="maintenance">Maintenance ({maintenance.length})</TabsTrigger>
+   431→        </TabsList>
+   432→
+   433→        {/* Trips */}
+   434→        <TabsContent value="trips" className="mt-3">
+   435→          <Card>
+   436→            <CardContent className="p-3 sm:p-4">
+   437→              <DataTable
+   438→                columns={tripColumns}
+   439→                rows={trips}
+   440→                rowKey={(r) => r.id}
+   441→                onRowClick={() => navigate("trips", { vehicleId: v.id })}
+   442→                emptyIcon={Route}
+   443→                emptyTitle="No trips for this vehicle"
+   444→                emptyDescription="Create a rental from the Trips & Rentals screen."
+   445→              />
+   446→            </CardContent>
+   447→          </Card>
+   448→        </TabsContent>
+   449→
+   450→        {/* Expenses */}
+   451→        <TabsContent value="expenses" className="mt-3">
+   452→          <Card>
+   453→            <CardContent className="p-3 sm:p-4">
+   454→              <div className="mb-3 flex justify-end">
+   455→                <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => setExpenseOpen(true)}>
+   456→                  <Plus className="h-4 w-4" aria-hidden />Add Expense
+   457→                </Button>
+   458→              </div>
+   459→              <DataTable
+   460→                columns={expenseColumns}
+   461→                rows={expenses}
+   462→                rowKey={(r) => r.id}
+   463→                emptyIcon={Receipt}
+   464→                emptyTitle="No expenses recorded"
+   465→                emptyDescription="Fuel, tolls, repairs and other vehicle costs appear here."
+   466→              />
+   467→            </CardContent>
+   468→          </Card>
+   469→        </TabsContent>
+   470→
+   471→        {/* EMI */}
+   472→        <TabsContent value="emi" className="mt-3">
+   473→          <Card>
+   474→            <CardContent className="p-3 sm:p-4">
+   475→              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+   476→                <p className="text-sm font-semibold">
+   477→                  EMI schedule
+   478→                  {sortedEmis.length === 0 && (v.monthlyEmi ?? 0) > 0 && (
+   479→                    <span className="ml-2 text-xs font-normal text-amber-600 dark:text-amber-400">Loan configured — generate the schedule</span>
+   480→                  )}
+   481→                </p>
+   482→                <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => void generateSchedule()} disabled={saving}>
+   483→                  <CalendarClock className="h-4 w-4" aria-hidden />Generate Schedule
+   484→                </Button>
+   485→              </div>
+   486→
+   487→              {sortedEmis.length === 0 ? (
+   488→                <p className="py-8 text-center text-xs text-muted-foreground">
+   489→                  No EMI schedule yet. Generate one from the loan config (start date, installment count, monthly EMI).
+   490→                </p>
+   491→              ) : (
+   492→                <div className="max-h-96 overflow-y-auto rounded-xl border">
+   493→                  {sortedEmis.map((e) => (
+   494→                    <div key={e.id} className="flex items-center justify-between gap-3 border-b px-3 py-2.5 last:border-b-0">
+   495→                      <div className="min-w-0">
+   496→                        <p className="text-sm font-medium tabular-nums">{e.month}</p>
+   497→                        <p className="text-[11px] text-muted-foreground">Due {fmtDay(e.dueDate)}{e.paidDate ? ` · paid ${fmtDay(e.paidDate)}` : ""}</p>
+   498→                      </div>
+   499→                      <div className="flex shrink-0 items-center gap-2">
+   500→                        <span className="text-sm font-semibold tabular-nums">{formatINR(e.amount)}</span>
+   501→                        <StatusBadge status={e.status} />
+   502→                        {e.status === "PENDING" && (
+   503→                          <Button size="sm" variant="outline" className="h-8 text-xs" disabled={saving} onClick={() => void markEmiPaid(e)}>
+   504→                            Mark Paid
+   505→                          </Button>
+   506→                        )}
+   507→                      </div>
+   508→                    </div>
+   509→                  ))}
+   510→                </div>
+   511→              )}
+   512→            </CardContent>
+   513→          </Card>
+   514→        </TabsContent>
+   515→
+   516→        {/* Maintenance */}
+   517→        <TabsContent value="maintenance" className="mt-3">
+   518→          <Card>
+   519→            <CardContent className="p-3 sm:p-4">
+   520→              <div className="mb-3 flex justify-end">
+   521→                <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => setMaintenanceOpen(true)}>
+   522→                  <Wrench className="h-4 w-4" aria-hidden />Add Maintenance
+   523→                </Button>
+   524→              </div>
+   525→
+   526→              {maintenance.length === 0 ? (
+   527→                <p className="py-8 text-center text-xs text-muted-foreground">No maintenance records yet.</p>
+   528→              ) : (
+   529→                <div className="max-h-96 space-y-2 overflow-y-auto pr-0.5">
+   530→                  {maintenance.map((m) => (
+   531→                    <div key={m.id} className="rounded-xl border p-3">
+   532→                      <div className="flex flex-wrap items-start justify-between gap-2">
+   533→                        <div className="min-w-0">
+   534→                          <p className="text-sm font-medium">{m.type}{(m.cost ?? 0) > 0 && <span className="ml-2 font-semibold tabular-nums">{formatINR(m.cost ?? 0)}</span>}</p>
+   535→                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+   536→                            {fmtDay(m.date)}{m.nextDueDate ? ` · next due ${fmtDay(m.nextDueDate)}` : ""}
+   537→                            {m.createdByName ? ` · by ${m.createdByName}` : ""}
+   538→                          </p>
+   539→                          {m.description && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{m.description}</p>}
+   540→                        </div>
+   541→                        <div className="flex shrink-0 items-center gap-2">
+   542→                          <StatusBadge status={m.status} />
+   543→                          {m.status === "SCHEDULED" && (
+   544→                            <Button size="sm" variant="outline" className="h-8 text-xs" disabled={saving} onClick={() => void markMaintenanceDone(m)}>
+   545→                              Mark Done
+   546→                            </Button>
+   547→                          )}
+   548→                        </div>
+   549→                      </div>
+   550→                    </div>
+   551→                  ))}
+   552→                </div>
+   553→              )}
+   554→            </CardContent>
+   555→          </Card>
+   556→        </TabsContent>
+   557→      </Tabs>
+   558→
+   559→      <VehicleExpenseDialog open={expenseOpen} onOpenChange={setExpenseOpen} vehicleId={v.id} onDone={() => void reload()} />
+   560→      <AddMaintenanceDialog open={maintenanceOpen} onOpenChange={setMaintenanceOpen} vehicleId={v.id} onDone={() => void reload()} />
+   561→    </div>
+   562→  );
+   563→}
+   564→
+   565→function InfoCell({ label, value, className }: { label: string; value: React.ReactNode; className?: string }) {
+   566→  return (
+   567→    <div className={cn("min-w-0", className)}>
+   568→      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
+   569→      <p className="mt-0.5 break-words text-sm tabular-nums">{value}</p>
+   570→    </div>
+   571→  );
+   572→}
+   573→

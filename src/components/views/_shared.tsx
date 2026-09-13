@@ -206,6 +206,7 @@ export interface VehicleRec {
   monthlyEmi?: number | null;
   emiStartDate?: string | null;
   emiEndDate?: string | null;
+  emiCount?: number | null;
   stats?: {
     monthRevenue: number;
     monthExpense: number;

@@ -2,27 +2,25 @@
 
 import { useState } from "react";
 import { api, qs } from "@/lib/api-client";
-import { formatINR, parseAmount } from "@/lib/money";
+import { formatINR } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
 import { PageHeader } from "@/components/shared/page-header";
 import { SearchInput } from "@/components/shared/filters";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { StatCard, StatGrid } from "@/components/shared/stat-card";
+import { VehicleFormDialog } from "@/components/shared/vehicle-form-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
-} from "@/components/ui/dialog";
-import { toast } from "sonner";
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useLang, t } from "@/lib/i18n";
-import { CarFront, Plus, ShieldAlert, GaugeCircle } from "lucide-react";
+import { CarFront, Eye, MoreVertical, Pencil, Plus, ShieldAlert, GaugeCircle } from "lucide-react";
 import {
-  type VehicleRec, type Option, SelectInput, Field, ErrorState, moneyCls, MoneyInput,
-  useAsync, useMutation, useDebounced, fmtDay,
+  type VehicleRec, type Option, SelectInput, ErrorState, moneyCls,
+  useAsync, useDebounced, fmtDay,
 } from "./_shared";
 
 const STATUS_OPTIONS: Option[] = [
@@ -51,117 +49,6 @@ function shortDay(dateStr?: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// Add vehicle dialog
-// ---------------------------------------------------------------------------
-
-function AddVehicleDialog({ open, onOpenChange, onDone }: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  onDone: () => void;
-}) {
-  const blank = {
-    registrationNumber: "", name: "", make: "", model: "", variant: "", year: "",
-    purchaseDate: "", purchasePrice: "", loanAmount: "", monthlyEmi: "", emiStartDate: "", emiCount: "",
-    insuranceCompany: "", insuranceNumber: "", insuranceExpiry: "", fitnessExpiry: "",
-    permitInfo: "", notes: "",
-  };
-  const [form, setForm] = useState(blank);
-  const { mutate, saving } = useMutation();
-
-  const [prevOpen, setPrevOpen] = useState(open);
-  if (open !== prevOpen) {
-    setPrevOpen(open);
-    if (open) setForm(blank);
-  }
-
-  // Event-compatible setter: works directly as Input/Textarea onChange.
-  const set = (k: keyof typeof blank) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
-
-  const submit = async () => {
-    if (!form.registrationNumber.trim()) { toast.error("Registration number is required"); return; }
-    if (!form.name.trim()) { toast.error("Vehicle name is required"); return; }
-    const res = await mutate(
-      () => api.post("/api/vehicles", {
-        registrationNumber: form.registrationNumber.trim().toUpperCase(),
-        name: form.name.trim(),
-        make: form.make || undefined,
-        model: form.model || undefined,
-        variant: form.variant || undefined,
-        year: form.year ? Number(form.year) : undefined,
-        purchaseDate: form.purchaseDate || undefined,
-        purchasePrice: form.purchasePrice ? parseAmount(form.purchasePrice) : undefined,
-        loanAmount: form.loanAmount ? parseAmount(form.loanAmount) : undefined,
-        monthlyEmi: form.monthlyEmi ? parseAmount(form.monthlyEmi) : undefined,
-        emiStartDate: form.emiStartDate || undefined,
-        emiCount: form.emiCount ? Number(form.emiCount) : undefined,
-        insuranceCompany: form.insuranceCompany || undefined,
-        insuranceNumber: form.insuranceNumber || undefined,
-        insuranceExpiry: form.insuranceExpiry || undefined,
-        fitnessExpiry: form.fitnessExpiry || undefined,
-        permitInfo: form.permitInfo || undefined,
-        notes: form.notes || undefined,
-      }),
-      "Vehicle added"
-    );
-    if (res.ok) { onOpenChange(false); onDone(); }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>Add Vehicle</DialogTitle>
-          <DialogDescription>Vehicle code (VEH-xxx) is auto-generated. Loan details drive the EMI schedule.</DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Registration number" required>
-            <Input value={form.registrationNumber} onChange={set("registrationNumber")} className="h-10 font-mono uppercase" placeholder="MH12AB1234" />
-          </Field>
-          <Field label="Name" required>
-            <Input value={form.name} onChange={set("name")} className="h-10" placeholder="e.g. Swift Desire 01" />
-          </Field>
-          <Field label="Make"><Input value={form.make} onChange={set("make")} className="h-10" placeholder="Maruti" /></Field>
-          <Field label="Model"><Input value={form.model} onChange={set("model")} className="h-10" placeholder="Dzire" /></Field>
-          <Field label="Variant"><Input value={form.variant} onChange={set("variant")} className="h-10" placeholder="VXi" /></Field>
-          <Field label="Year"><Input type="number" inputMode="numeric" value={form.year} onChange={set("year")} className="h-10" placeholder="2023" /></Field>
-          <Field label="Purchase date"><Input type="date" value={form.purchaseDate} onChange={set("purchaseDate")} className="h-10" /></Field>
-          <Field label="Purchase price (₹)"><MoneyInput value={form.purchasePrice} onChange={(v) => setForm((f) => ({ ...f, purchasePrice: v }))} className="h-10" /></Field>
-
-          <div className="sm:col-span-2">
-            <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Loan & EMI</p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Loan amount (₹)"><MoneyInput value={form.loanAmount} onChange={(v) => setForm((f) => ({ ...f, loanAmount: v }))} className="h-10" /></Field>
-              <Field label="Monthly EMI (₹)"><MoneyInput value={form.monthlyEmi} onChange={(v) => setForm((f) => ({ ...f, monthlyEmi: v }))} className="h-10" /></Field>
-              <Field label="EMI start date"><Input type="date" value={form.emiStartDate} onChange={set("emiStartDate")} className="h-10" /></Field>
-              <Field label="Installments" hint="Number of monthly EMIs"><Input type="number" inputMode="numeric" value={form.emiCount} onChange={set("emiCount")} className="h-10" /></Field>
-            </div>
-          </div>
-
-          <div className="sm:col-span-2">
-            <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Compliance</p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Insurance company"><Input value={form.insuranceCompany} onChange={set("insuranceCompany")} className="h-10" /></Field>
-              <Field label="Insurance number"><Input value={form.insuranceNumber} onChange={set("insuranceNumber")} className="h-10" /></Field>
-              <Field label="Insurance expiry"><Input type="date" value={form.insuranceExpiry} onChange={set("insuranceExpiry")} className="h-10" /></Field>
-              <Field label="Fitness expiry"><Input type="date" value={form.fitnessExpiry} onChange={set("fitnessExpiry")} className="h-10" /></Field>
-              <Field label="Permit info" className="sm:col-span-2"><Input value={form.permitInfo} onChange={set("permitInfo")} className="h-10" placeholder="State permit, national permit…" /></Field>
-            </div>
-          </div>
-
-          <Field label="Notes" className="sm:col-span-2">
-            <Textarea value={form.notes} onChange={set("notes")} rows={2} placeholder="Optional" />
-          </Field>
-        </div>
-        <DialogFooter className="gap-2">
-          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : "Add vehicle"}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Main view
 // ---------------------------------------------------------------------------
 
@@ -171,6 +58,7 @@ export default function VehiclesView({ navigate }: ViewProps) {
   const [search, setSearch] = useState("");
   const searchDeb = useDebounced(search);
   const [addOpen, setAddOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<VehicleRec | null>(null);
 
   const vehicles = useAsync<{ items: VehicleRec[] }>(
     () => api.get("/api/vehicles" + qs({ status: status || undefined, search: searchDeb || undefined })),
@@ -248,7 +136,31 @@ export default function VehiclesView({ navigate }: ViewProps) {
                         {v.registrationNumber}
                       </span>
                     </div>
-                    <StatusBadge status={v.status} />
+                    <div className="flex shrink-0 items-center gap-1">
+                      <StatusBadge status={v.status} />
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            aria-label={`Actions for ${v.name}`}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => e.stopPropagation()}
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-40">
+                          <DropdownMenuItem onClick={() => navigate("vehicle-detail", { id: v.id })}>
+                            <Eye className="h-3.5 w-3.5" />Open
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setEditTarget(v)}>
+                            <Pencil className="h-3.5 w-3.5" />Edit
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                   </div>
 
                   <p className="truncate text-xs text-muted-foreground">
@@ -313,7 +225,8 @@ export default function VehiclesView({ navigate }: ViewProps) {
         </div>
       )}
 
-      <AddVehicleDialog open={addOpen} onOpenChange={setAddOpen} onDone={() => void vehicles.reload()} />
+      <VehicleFormDialog open={addOpen} onOpenChange={setAddOpen} vehicle={null} onDone={() => void vehicles.reload()} />
+      <VehicleFormDialog open={Boolean(editTarget)} onOpenChange={(v) => !v && setEditTarget(null)} vehicle={editTarget} onDone={() => void vehicles.reload()} />
     </div>
   );
 }

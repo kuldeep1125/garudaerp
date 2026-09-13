@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import {
   BarsCompare, CHART_COLORS, DeploymentRec, Field, MoneyInput, PaymentRec,
-  PropertyRec, ShiftBadgeInline, errMessage, fmtDay, useMutation,
+  PropertyRec, SelectInput, ShiftBadgeInline, errMessage, fmtDay, useMutation,
 } from "./_shared";
 
 interface Detail {
@@ -42,7 +42,7 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
   const [editOpen, setEditOpen] = useState(false);
   const [form, setForm] = useState({
     name: "", brandName: "", type: "", billingRate: "", contactPerson: "", contactNumber: "",
-    whatsapp: "", email: "", address: "", notes: "",
+    whatsapp: "", email: "", address: "", notes: "", startDate: "", status: "ACTIVE",
   });
   const { mutate, saving } = useMutation();
 
@@ -68,6 +68,8 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
       billingRate: p?.billingRate ? String(p.billingRate) : "",
       contactPerson: p?.contactPerson ?? "", contactNumber: p?.contactNumber ?? "",
       whatsapp: p?.whatsapp ?? "", email: p?.email ?? "", address: p?.address ?? "", notes: p?.notes ?? "",
+      startDate: p?.startDate?.slice(0, 10) ?? "",
+      status: p?.status === "INACTIVE" ? "INACTIVE" : "ACTIVE",
     });
     setEditOpen(true);
   };
@@ -82,6 +84,8 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
       contactPerson: form.contactPerson || undefined, contactNumber: form.contactNumber || undefined,
       whatsapp: form.whatsapp || undefined, email: form.email || undefined, address: form.address || undefined,
       notes: form.notes || undefined,
+      startDate: form.startDate, // "" clears — the API accepts undefined/null/""
+      status: form.status,
     }), "Property updated — new rate applies to future deployments only");
     if (res.ok) { setEditOpen(false); void load(); }
   };
@@ -263,6 +267,14 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Name" required className="sm:col-span-2"><Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="h-10" /></Field>
+            <Field label="Start date"><Input type="date" value={form.startDate} onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))} className="h-10" /></Field>
+            <Field label="Status">
+              <SelectInput
+                value={form.status}
+                onChange={(v) => setForm((f) => ({ ...f, status: v }))}
+                options={[{ label: "Active", value: "ACTIVE" }, { label: "Inactive", value: "INACTIVE" }]}
+              />
+            </Field>
             <Field
               label="Billing rate (₹/shift)"
               required

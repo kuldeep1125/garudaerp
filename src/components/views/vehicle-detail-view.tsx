@@ -9,11 +9,16 @@ import { PageHeader } from "@/components/shared/page-header";
 import { DataTable, type Column } from "@/components/shared/data-table";
 import { StatCard, StatGrid } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { VehicleFormDialog } from "@/components/shared/vehicle-form-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -21,6 +26,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   CarFront, Plus, Route, Receipt, CalendarClock, Wrench, IndianRupee, BadgeCheck, ShieldAlert,
+  Pencil, RefreshCw,
 } from "lucide-react";
 import {
   type VehicleRec, type TripRec, type ExpenseRec, type Option, SelectInput, Field, ErrorState, MoneyInput,
@@ -34,12 +40,15 @@ interface MaintenanceRec {
 }
 interface VehicleDetail { vehicle: VehicleRec; trips: TripRec[]; expenses: ExpenseRec[]; emis: EmiRec[]; maintenance: MaintenanceRec[] }
 
-interface ExpenseCategoryRec { id: string; name: string; business: string; kind?: string }
+interface ExpenseCategoryRec { id: string; name: string; business: string; kind?: string; isActive?: boolean }
 
 const VEHICLE_STATUS_OPTIONS: Option[] = ["AVAILABLE", "RENTED", "TRIP", "MAINTENANCE", "INACTIVE"]
   .map((s) => ({ label: s.charAt(0) + s.slice(1).toLowerCase(), value: s }));
 
 const METHOD_OPTIONS: Option[] = ["Cash", "UPI", "Bank", "Card", "Cheque", "Other"].map((m) => ({ label: m, value: m }));
+
+const MAINTENANCE_TYPE_OPTIONS: Option[] = ["SERVICE", "REPAIR", "TYRES", "OTHER"]
+  .map((t) => ({ label: t.charAt(0) + t.slice(1).toLowerCase(), value: t }));
 
 function daysUntil(dateStr?: string | null): number | null {
   if (!dateStr) return null;
@@ -135,7 +144,7 @@ function VehicleExpenseDialog({ open, onOpenChange, vehicleId, onDone }: {
               value={form.categoryId}
               onChange={(v) => setForm((f) => ({ ...f, categoryId: v }))}
               placeholder="Select category…"
-              options={categories.map((c) => ({ label: c.name, value: c.id }))}
+              options={categories.filter((c) => c.isActive !== false).map((c) => ({ label: c.name, value: c.id }))}
             />
           </Field>
           <Field label="Amount (₹)" required>
@@ -230,6 +239,104 @@ function AddMaintenanceDialog({ open, onOpenChange, vehicleId, onDone }: {
 }
 
 // ---------------------------------------------------------------------------
+// Edit maintenance
+// ---------------------------------------------------------------------------
+
+function EditMaintenanceDialog({ open, onOpenChange, record, onDone }: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  record: MaintenanceRec | null;
+  onDone: () => void;
+}) {
+  const [form, setForm] = useState({ date: "", type: "", cost: "", nextDueDate: "", description: "" });
+  const { mutate, saving } = useMutation();
+
+  // Reset form each time the dialog opens (render-time state adjustment).
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (open) {
+      setForm({
+        date: record?.date?.slice(0, 10) ?? todayStr(),
+        type: record?.type ?? "",
+        cost: record?.cost ? String(record.cost) : "",
+        nextDueDate: record?.nextDueDate?.slice(0, 10) ?? "",
+        description: record?.description ?? "",
+      });
+    }
+  }
+
+  const submit = async () => {
+    if (!form.date) { toast.error("Date is required"); return; }
+    if (!form.type) { toast.error("Maintenance type is required"); return; }
+    const cost = form.cost ? parseAmount(form.cost) : 0;
+    if (cost < 0) { toast.error("Cost cannot be negative"); return; }
+    let synced = false;
+    const res = await mutate(async () => {
+      const d = await api.put<{ expenseSynced?: boolean }>(`/api/maintenance/${record!.id}`, {
+        date: form.date,
+        type: form.type,
+        cost,
+        nextDueDate: form.nextDueDate || null,
+        description: form.description || null,
+      });
+      synced = Boolean(d.expenseSynced);
+      return d;
+    });
+    if (res.ok) {
+      toast.success(
+        synced
+          ? "Maintenance updated — linked expense synced to the new cost"
+          : "Maintenance updated",
+      );
+      onOpenChange(false);
+      onDone();
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit Maintenance</DialogTitle>
+          <DialogDescription>
+            {record?.status === "DONE"
+              ? "Already done: changing the cost keeps the linked expense in sync (same date, new amount)."
+              : "Marking it done later auto-creates the expense for this vehicle."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Date" required>
+            <Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} className="h-10" />
+          </Field>
+          <Field label="Type" required>
+            <SelectInput
+              value={form.type}
+              onChange={(v) => setForm((f) => ({ ...f, type: v }))}
+              placeholder="Select type…"
+              options={MAINTENANCE_TYPE_OPTIONS}
+            />
+          </Field>
+          <Field label="Cost (₹)">
+            <MoneyInput value={form.cost} onChange={(v) => setForm((f) => ({ ...f, cost: v }))} min={0} className="h-10" />
+          </Field>
+          <Field label="Next due date">
+            <Input type="date" value={form.nextDueDate} onChange={(e) => setForm((f) => ({ ...f, nextDueDate: e.target.value }))} className="h-10" />
+          </Field>
+          <Field label="Description" className="sm:col-span-2">
+            <Textarea value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} rows={2} placeholder="Optional details" />
+          </Field>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : "Save changes"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main view
 // ---------------------------------------------------------------------------
 
@@ -245,6 +352,8 @@ export default function VehicleDetailView({ params, navigate }: ViewProps) {
 
   const [expenseOpen, setExpenseOpen] = useState(false);
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editMaintenance, setEditMaintenance] = useState<MaintenanceRec | null>(null);
 
   if (!id) {
     return (
@@ -309,6 +418,14 @@ export default function VehicleDetailView({ params, navigate }: ViewProps) {
     }
   };
 
+  const regenerateSchedule = async () => {
+    const res = await mutate(
+      () => api.post(`/api/vehicles/${v.id}/emis/regenerate`),
+      "EMI schedule regenerated — paid EMIs untouched",
+    );
+    if (res.ok) void reload();
+  };
+
   const markMaintenanceDone = async (m: MaintenanceRec) => {
     const res = await mutate(() => api.put(`/api/maintenance/${m.id}`, { status: "DONE" }), "Maintenance marked done — expense created", () => ({ module: "MAINTENANCE", recordId: m.id, onUndo: () => void reload() }));
     if (res.ok) void reload();
@@ -367,6 +484,9 @@ export default function VehicleDetailView({ params, navigate }: ViewProps) {
             <div className="w-36">
               <SelectInput value={v.status} onChange={(s) => void changeStatus(s)} options={VEHICLE_STATUS_OPTIONS} placeholder="Status" />
             </div>
+            <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => setEditOpen(true)}>
+              <Pencil className="h-4 w-4" aria-hidden />Edit
+            </Button>
           </div>
         }
       />
@@ -479,9 +599,34 @@ export default function VehicleDetailView({ params, navigate }: ViewProps) {
                     <span className="ml-2 text-xs font-normal text-amber-600 dark:text-amber-400">Loan configured — generate the schedule</span>
                   )}
                 </p>
-                <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => void generateSchedule()} disabled={saving}>
-                  <CalendarClock className="h-4 w-4" aria-hidden />Generate Schedule
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {Boolean(v.monthlyEmi && v.emiStartDate && v.emiCount) && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button size="sm" variant="outline" className="h-9 gap-1.5" disabled={saving}>
+                          <RefreshCw className="h-4 w-4" aria-hidden />Regenerate pending schedule
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Regenerate the pending EMI schedule?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            All PENDING installments ({pendingEmis} right now) are deleted and rebuilt from the vehicle&apos;s current loan amount, monthly EMI, start date and installment count. PAID EMIs and their expenses are never touched.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
+                          <AlertDialogAction className="min-h-10" onClick={(e) => { e.preventDefault(); void regenerateSchedule(); }}>
+                            Regenerate
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                  <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => void generateSchedule()} disabled={saving}>
+                    <CalendarClock className="h-4 w-4" aria-hidden />Generate Schedule
+                  </Button>
+                </div>
               </div>
 
               {sortedEmis.length === 0 ? (
@@ -545,6 +690,9 @@ export default function VehicleDetailView({ params, navigate }: ViewProps) {
                               Mark Done
                             </Button>
                           )}
+                          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setEditMaintenance(m)}>
+                            Edit
+                          </Button>
                         </div>
                       </div>
                     </div>
@@ -558,6 +706,8 @@ export default function VehicleDetailView({ params, navigate }: ViewProps) {
 
       <VehicleExpenseDialog open={expenseOpen} onOpenChange={setExpenseOpen} vehicleId={v.id} onDone={() => void reload()} />
       <AddMaintenanceDialog open={maintenanceOpen} onOpenChange={setMaintenanceOpen} vehicleId={v.id} onDone={() => void reload()} />
+      <EditMaintenanceDialog open={Boolean(editMaintenance)} onOpenChange={(o) => !o && setEditMaintenance(null)} record={editMaintenance} onDone={() => void reload()} />
+      <VehicleFormDialog open={editOpen} onOpenChange={setEditOpen} vehicle={v} onDone={() => void reload()} />
     </div>
   );
 }

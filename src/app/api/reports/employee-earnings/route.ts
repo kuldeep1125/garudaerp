@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { handleRoute } from "@/lib/api-helpers";
 import { round2 } from "@/lib/money";
-import { dayKey, reportRange, salaryOvertimeForRange } from "@/app/api/_lib/engine";
+import { dayKey, reportRange, salaryRentOvertimeForRange } from "@/app/api/_lib/engine";
 
 // GET /api/reports/employee-earnings?from=&to=[&employeeId=]
 // Per-employee earnings for the range: shift payouts + salaried salary/overtime
@@ -45,10 +45,12 @@ export const GET = handleRoute(async ({ req }) => {
       _sum: { contractorCut: true },
       where: { date: { gte: from, lte: to }, contractorCut: { gt: 0 }, ...(employeeId ? { employeeId } : {}) },
     }),
-    // Salaried employees earn salary even with zero deployments — include them all.
+    // Salaried employees earn salary even with zero deployments — include them all
+    // (current salaried + anyone whose pay history has salaried terms, so a past
+    // period report still shows salary for an employee since switched to per-shift).
     db.employee.findMany({
-      where: { employmentType: "SALARIED", ...(employeeId ? { id: employeeId } : {}) },
-      select: { id: true, fullName: true, code: true, designation: true, status: true, joiningDate: true, employmentType: true, monthlySalary: true, overtimeThreshold: true, overtimeRate: true },
+      where: { OR: [{ employmentType: "SALARIED" }, { payHistory: { some: { employmentType: "SALARIED" } } }], ...(employeeId ? { id: employeeId } : {}) },
+      select: { id: true, fullName: true, code: true, designation: true, status: true, joiningDate: true, employmentType: true, monthlySalary: true, overtimeThreshold: true, overtimeRate: true, standardRate: true, onBusinessRent: true, rentAmount: true, rentMode: true, hasContractor: true, contractorName: true, contractorRateCut: true },
     }),
   ]);
 
@@ -76,7 +78,7 @@ export const GET = handleRoute(async ({ req }) => {
   }
   // Salaried accrual merged in — zero-deployment salaried employees get their own row.
   for (const emp of salaried) {
-    const so = await salaryOvertimeForRange(emp, from, to);
+    const so = await salaryRentOvertimeForRange(emp, from, to);
     const row = byEmp.get(emp.id) ?? {
       employeeName: emp.fullName,
       employeeCode: emp.code,

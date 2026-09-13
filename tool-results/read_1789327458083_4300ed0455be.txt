@@ -1,0 +1,673 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import { api } from "@/lib/api-client";
+     5→import { formatINR, parseAmount } from "@/lib/money";
+     6→import type { ViewProps } from "@/components/view-types";
+     7→import { useNav } from "@/components/providers";
+     8→import { PageHeader } from "@/components/shared/page-header";
+     9→import { DataTable, type Column } from "@/components/shared/data-table";
+    10→import { Button } from "@/components/ui/button";
+    11→import { Badge } from "@/components/ui/badge";
+    12→import { Card, CardContent } from "@/components/ui/card";
+    13→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    14→import {
+    15→  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+    16→} from "@/components/ui/dialog";
+    17→import { Input } from "@/components/ui/input";
+    18→import { Skeleton } from "@/components/ui/skeleton";
+    19→import { StatusBadge } from "@/components/shared/status-badge";
+    20→import { toast } from "sonner";
+    21→import { cn } from "@/lib/utils";
+    22→import {
+    23→  Phone, MessageCircle, HandCoins, Pencil, CalendarDays, Wallet, ReceiptText, Activity,
+    24→} from "lucide-react";
+    25→import {
+    26→  EmployeePayBadges, AdvanceRec, AreaTrend, CHART_COLORS, DeploymentRec, EmployeeRec, Field, GiveAdvanceDialog,
+    27→  InitialAvatar, MoneyInput, Option, SelectInput, SettlementRec, SHIFT_UNITS, ShiftBadgeInline, errMessage, fmtDay,
+    28→  todayStr, useMutation,
+    29→} from "./_shared";
+    30→
+    31→interface AdjustmentRec {
+    32→  id: string; employeeId?: string; employeeName?: string; date: string;
+    33→  type: string; amount: number; reason?: string | null; createdByName?: string;
+    34→}
+    35→interface EmpDetail {
+    36→  employee: EmployeeRec;
+    37→  deployments: DeploymentRec[];
+    38→  advances: AdvanceRec[];
+    39→  adjustments: AdjustmentRec[] | { items: AdjustmentRec[] };
+    40→  settlements: SettlementRec[];
+    41→}
+    42→
+    43→const ADJ_TYPES: Option[] = [
+    44→  { label: "Bonus (+)", value: "BONUS" },
+    45→  { label: "Overtime (+)", value: "OVERTIME" },
+    46→  { label: "Deduction (−)", value: "DEDUCTION" },
+    47→  { label: "Penalty (−)", value: "PENALTY" },
+    48→  { label: "Other", value: "OTHER" },
+    49→];
+    50→
+    51→function AddAdjustmentDialog({ open, onOpenChange, employeeId, onDone }: {
+    52→  open: boolean; onOpenChange: (v: boolean) => void; employeeId: string; onDone: () => void;
+    53→}) {
+    54→  const [type, setType] = useState("BONUS");
+    55→  const [date, setDate] = useState(todayStr());
+    56→  const [amount, setAmount] = useState("");
+    57→  const [reason, setReason] = useState("");
+    58→  const { mutate, saving } = useMutation();
+    59→
+    60→  // Reset form each time the dialog opens (render-time state adjustment).
+    61→  const [prevOpen, setPrevOpen] = useState(open);
+    62→  if (open !== prevOpen) {
+    63→    setPrevOpen(open);
+    64→    if (open) { setType("BONUS"); setDate(todayStr()); setAmount(""); setReason(""); }
+    65→  }
+    66→
+    67→  const submit = async () => {
+    68→    const amt = parseAmount(amount);
+    69→    if (amt <= 0) { toast.error("Enter a valid amount"); return; }
+    70→    const signed = type === "DEDUCTION" || type === "PENALTY" ? -amt : amt;
+    71→    const res = await mutate(
+    72→      () => api.post("/api/adjustments", { employeeId, date, type, amount: signed, reason: reason || undefined }),
+    73→      "Adjustment recorded",
+    74→      (data) => ({ module: "ADJUSTMENT", recordId: (data as { id: string }).id, onUndo: onDone })
+    75→    );
+    76→    if (res.ok) { onOpenChange(false); onDone(); }
+    77→  };
+    78→
+    79→  return (
+    80→    <Dialog open={open} onOpenChange={onOpenChange}>
+    81→      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+    82→        <DialogHeader>
+    83→          <DialogTitle>Add Adjustment</DialogTitle>
+    84→          <DialogDescription>Bonus/overtime add to payout; deduction/penalty subtract in settlements.</DialogDescription>
+    85→        </DialogHeader>
+    86→        <div className="grid gap-3 sm:grid-cols-2">
+    87→          <Field label="Type" required>
+    88→            <SelectInput value={type} onChange={setType} options={ADJ_TYPES} />
+    89→          </Field>
+    90→          <Field label="Amount (₹)" required>
+    91→            <MoneyInput value={amount} onChange={setAmount} min={1} className="h-10" />
+    92→          </Field>
+    93→          <Field label="Date" required>
+    94→            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10" />
+    95→          </Field>
+    96→          <Field label="Reason">
+    97→            <Input value={reason} onChange={(e) => setReason(e.target.value)} className="h-10" placeholder="Extra shift, late mark…" />
+    98→          </Field>
+    99→        </div>
+   100→        <DialogFooter className="gap-2">
+   101→          <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
+   102→          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : "Add adjustment"}</Button>
+   103→        </DialogFooter>
+   104→      </DialogContent>
+   105→    </Dialog>
+   106→  );
+   107→}
+   108→
+   109→export default function EmployeeDetailView({ params, navigate }: ViewProps) {
+   110→  const id = params?.id ?? "";
+   111→  const { back } = useNav();
+   112→  const [data, setData] = useState<EmpDetail | null>(null);
+   113→  const [loading, setLoading] = useState(true);
+   114→  const [error, setError] = useState<string | null>(null);
+   115→  const [advanceOpen, setAdvanceOpen] = useState(false);
+   116→  const [adjustOpen, setAdjustOpen] = useState(false);
+   117→  const [editOpen, setEditOpen] = useState(false);
+   118→  const [editForm, setEditForm] = useState({ fullName: "", mobile: "", designation: "", standardRate: "", skills: "", city: "", upiId: "", bankDetails: "", notes: "" });
+   119→  const { mutate, saving } = useMutation();
+   120→
+   121→  const load = useCallback(async () => {
+   122→    setLoading(true);
+   123→    try {
+   124→      const d = await api.get<EmpDetail>(`/api/employees/${id}`);
+   125→      setData(d);
+   126→      setError(null);
+   127→    } catch (e) {
+   128→      setError(errMessage(e));
+   129→    } finally {
+   130→      setLoading(false);
+   131→    }
+   132→  }, [id]);
+   133→
+   134→  useEffect(() => { if (id) void load(); }, [id, load]);
+   135→
+   136→  const afterAdvance = useCallback(async () => {
+   137→    try {
+   138→      const d = await api.get<EmpDetail>(`/api/employees/${id}`);
+   139→      setData(d);
+   140→      toast.info(`Advance balance now ${formatINR(d.employee.advanceBalance ?? 0)}`);
+   141→    } catch {
+   142→      void load();
+   143→    }
+   144→  }, [id, load]);
+   145→
+   146→  const changeStatus = async (next: string) => {
+   147→    const res = await mutate(() => api.post(`/api/employees/${id}/status`, { status: next }), `Status changed to ${next.toLowerCase()}`);
+   148→    if (res.ok) void load();
+   149→  };
+   150→
+   151→  const openEdit = () => {
+   152→    const e = data?.employee;
+   153→    setEditForm({
+   154→      fullName: e?.fullName ?? "", mobile: e?.mobile ?? "", designation: e?.designation ?? "",
+   155→      standardRate: e?.standardRate ? String(e.standardRate) : "", skills: e?.skills ?? "",
+   156→      city: e?.city ?? "", upiId: e?.upiId ?? "", bankDetails: e?.bankDetails ?? "", notes: e?.notes ?? "",
+   157→    });
+   158→    setEditOpen(true);
+   159→  };
+   160→
+   161→  const submitEdit = async () => {
+   162→    if (!editForm.fullName.trim()) { toast.error("Full name is required"); return; }
+   163→    const res = await mutate(
+   164→      () => api.put(`/api/employees/${id}`, {
+   165→        fullName: editForm.fullName.trim(),
+   166→        mobile: editForm.mobile || undefined,
+   167→        designation: editForm.designation || undefined,
+   168→        standardRate: editForm.standardRate ? parseAmount(editForm.standardRate) : undefined,
+   169→        skills: editForm.skills || undefined,
+   170→        city: editForm.city || undefined,
+   171→        upiId: editForm.upiId || undefined,
+   172→        bankDetails: editForm.bankDetails || undefined,
+   173→        notes: editForm.notes || undefined,
+   174→      }),
+   175→      "Profile updated"
+   176→    );
+   177→    if (res.ok) { setEditOpen(false); void load(); }
+   178→  };
+   179→
+   180→  const workColumns: Column<DeploymentRec>[] = [
+   181→    { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
+   182→    {
+   183→      key: "propertyName", label: "Property", primary: true,
+   184→      render: (r) => (
+   185→        <div className="min-w-0">
+   186→          <p className="truncate font-medium">{r.propertyName}</p>
+   187→          <p className="text-[11px] text-muted-foreground">{fmtDay(r.date)}</p>
+   188→        </div>
+   189→      ),
+   190→      value: (r) => r.propertyName,
+   191→    },
+   192→    { key: "shift", label: "Shift", render: (r) => <ShiftBadgeInline shift={r.shift} />, value: (r) => r.shift },
+   193→    { key: "rate", label: "Rate", className: "text-right", value: (r) => formatINR(r.payoutRate ?? 0), hideOnMobile: true },
+   194→    { key: "earning", label: "Earning", className: "text-right", value: (r) => formatINR((r.payoutAmount ?? 0) + (r.adjustmentAmount ?? 0)) },
+   195→    { key: "paid", label: "Paid", render: (r) => <StatusBadge status={r.paidStatus ?? "UNPAID"} />, value: (r) => r.paidStatus ?? "UNPAID", hideOnMobile: true },
+   196→  ];
+   197→
+   198→  const advances = data?.advances ?? [];
+   199→  const advTotal = advances.reduce((s, a) => s + (a.amount ?? 0), 0);
+   200→  const adjustments = Array.isArray(data?.adjustments) ? (data?.adjustments as AdjustmentRec[]) : ((data?.adjustments as { items?: AdjustmentRec[] })?.items ?? []);
+   201→  const emp = data?.employee;
+   202→
+   203→  // Last-30-day activity derived client-side from the 100 most recent deployments.
+   204→  const activity = useMemo(() => {
+   205→    const days = 30;
+   206→    const byDay = new Map<string, { shifts: number; billing: number }>();
+   207→    for (const d of data?.deployments ?? []) {
+   208→      if (!d.date) continue;
+   209→      const key = String(d.date).slice(0, 10);
+   210→      const row = byDay.get(key) ?? { shifts: 0, billing: 0 };
+   211→      row.shifts += SHIFT_UNITS[String(d.shift).toUpperCase()] ?? 1;
+   212→      row.billing += d.billingAmount ?? 0;
+   213→      byDay.set(key, row);
+   214→    }
+   215→    const list: { date: string; shifts: number; billing: number }[] = [];
+   216→    const now = new Date();
+   217→    for (let i = days - 1; i >= 0; i--) {
+   218→      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+   219→      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+   220→      const row = byDay.get(key);
+   221→      list.push({ date: key, shifts: row?.shifts ?? 0, billing: row?.billing ?? 0 });
+   222→    }
+   223→    const worked = list.filter((d) => d.shifts > 0).length;
+   224→    const totalShifts = list.reduce((s, d) => s + d.shifts, 0);
+   225→    const billed = list.reduce((s, d) => s + d.billing, 0);
+   226→
+   227→    // Utilization analytics: shift mix, weekday distribution, top properties.
+   228→    // IMPORTANT: filter to the same 30-day window as the summary numbers above.
+   229→    // FULL covers both halves → counts once in day AND night (units stay equal).
+   230→    const window30 = new Set(list.map((d) => d.date));
+   231→    let dayShifts = 0;
+   232→    let nightShifts = 0;
+   233→    const weekday = [0, 0, 0, 0, 0, 0, 0]; // Sun..Sat
+   234→    const byProp = new Map<string, number>();
+   235→    for (const d of data?.deployments ?? []) {
+   236→      if (!d.date) continue;
+   237→      const key = String(d.date).slice(0, 10);
+   238→      if (window30.has(key)) {
+   239→        const s = String(d.shift).toUpperCase();
+   240→        if (s === "NIGHT" || s === "FULL") nightShifts += 1;
+   241→        if (s === "DAY" || s === "FULL") dayShifts += 1;
+   242→        const wd = new Date(`${key}T00:00:00`).getDay();
+   243→        weekday[wd] += 1;
+   244→        byProp.set(d.propertyName, (byProp.get(d.propertyName) ?? 0) + 1);
+   245→      }
+   246→    }
+   247→    const topProps = [...byProp.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+   248→    return { list, worked, totalShifts, billed, dayShifts, nightShifts, weekday, topProps };
+   249→  }, [data?.deployments]);
+   250→
+   251→  if (loading) {
+   252→    return (
+   253→      <div className="space-y-4">
+   254→        <Skeleton className="h-8 w-40" />
+   255→        <Skeleton className="h-40 w-full rounded-xl" />
+   256→        <Skeleton className="h-64 w-full rounded-xl" />
+   257→      </div>
+   258→    );
+   259→  }
+   260→
+   261→  if (error || !emp) {
+   262→    return (
+   263→      <div className="space-y-4">
+   264→        <PageHeader title="Employee" onBack={back} />
+   265→        <Card><CardContent className="p-6 text-center">
+   266→          <p className="text-sm text-red-600 dark:text-red-400">{error ?? "Not found"}</p>
+   267→          <Button variant="outline" size="sm" className="mt-3" onClick={() => void load()}>Retry</Button>
+   268→        </CardContent></Card>
+   269→      </div>
+   270→    );
+   271→  }
+   272→
+   273→  return (
+   274→    <div className="space-y-4">
+   275→      <PageHeader
+   276→        title={emp.fullName}
+   277→        subtitle={`${emp.code}${emp.designation ? ` · ${emp.designation}` : ""}`}
+   278→        onBack={back}
+   279→        actions={
+   280→          <>
+   281→            <Button size="sm" className="h-9 gap-1.5" onClick={() => setAdvanceOpen(true)}>
+   282→              <HandCoins className="h-4 w-4" aria-hidden />Give Advance
+   283→            </Button>
+   284→            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={openEdit}>
+   285→              <Pencil className="h-3.5 w-3.5" aria-hidden /><span className="hidden sm:inline">Edit</span>
+   286→            </Button>
+   287→          </>
+   288→        }
+   289→      />
+   290→
+   291→      {/* Header card */}
+   292→      <Card>
+   293→        <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
+   294→          <div className="flex min-w-0 items-center gap-3">
+   295→            <InitialAvatar name={emp.fullName} className="h-14 w-14 text-lg" />
+   296→            <div className="min-w-0">
+   297→              <div className="flex flex-wrap items-center gap-2">
+   298→                <p className="truncate font-bold">{emp.fullName}</p>
+   299→                <StatusBadge status={emp.status} />
+   300→              </div>
+   301→              <p className="mt-0.5 text-xs text-muted-foreground">
+   302→                Joined {fmtDay(emp.joiningDate)} · {emp.city || "—"}
+   303→              </p>
+   304→              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+   305→                {emp.employmentType === "SALARIED" ? (
+   306→                  <Badge variant="outline" className="tabular-nums">{formatINR(emp.monthlySalary ?? 0)}/month · salaried</Badge>
+   307→                ) : (
+   308→                  <Badge variant="outline" className="tabular-nums">{formatINR(emp.standardRate ?? 0)}/shift</Badge>
+   309→                )}
+   310→                {(emp.overtimeRate ?? 0) > 0 && (
+   311→                  <Badge variant="outline" className="tabular-nums">OT {formatINR(emp.overtimeRate ?? 0)} after {emp.overtimeThreshold ?? 30}/mo</Badge>
+   312→                )}
+   313→                <EmployeePayBadges r={emp} />
+   314→                {(emp.advanceBalance ?? 0) > 0 ? (
+   315→                  <Badge variant="outline" className="border-red-200 bg-red-50 tabular-nums text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+   316→                    Advance due {formatINR(emp.advanceBalance ?? 0)}
+   317→                  </Badge>
+   318→                ) : (
+   319→                  <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
+   320→                    No advance due
+   321→                  </Badge>
+   322→                )}
+   323→              </div>
+   324→            </div>
+   325→          </div>
+   326→          <div className="flex shrink-0 gap-2">
+   327→            {emp.mobile && (
+   328→              <Button asChild variant="outline" size="sm" className="h-9">
+   329→                <a href={`tel:${emp.mobile}`} aria-label={`Call ${emp.fullName}`}><Phone className="h-3.5 w-3.5" /><span className="hidden sm:inline">Call</span></a>
+   330→              </Button>
+   331→            )}
+   332→            {(emp.whatsapp || emp.mobile) && (
+   333→              <Button asChild variant="outline" size="sm" className="h-9">
+   334→                <a href={`https://wa.me/${(emp.whatsapp ?? emp.mobile ?? "").replace(/\D/g, "")}`} target="_blank" rel="noreferrer" aria-label={`WhatsApp ${emp.fullName}`}>
+   335→                  <MessageCircle className="h-3.5 w-3.5" /><span className="hidden sm:inline">WhatsApp</span>
+   336→                </a>
+   337→              </Button>
+   338→            )}
+   339→          </div>
+   340→        </CardContent>
+   341→      </Card>
+   342→
+   343→      <Tabs defaultValue="work">
+   344→        <div className="overflow-x-auto no-scrollbar">
+   345→          <TabsList className="w-max min-w-full sm:min-w-0">
+   346→            <TabsTrigger value="work">Work History</TabsTrigger>
+   347→            <TabsTrigger value="advances">Advances</TabsTrigger>
+   348→            <TabsTrigger value="adjustments">Adjustments</TabsTrigger>
+   349→            <TabsTrigger value="settlements">Settlements</TabsTrigger>
+   350→            <TabsTrigger value="profile">Profile</TabsTrigger>
+   351→          </TabsList>
+   352→        </div>
+   353→
+   354→        <TabsContent value="work" className="mt-3 space-y-3">
+   355→          {/* Pay model strip — salary / overtime / rent / contractor in one glance */}
+   356→          {(emp.employmentType === "SALARIED" || emp.onBusinessRent || (emp.hasContractor && emp.contractorName)) && (
+   357→            <Card>
+   358→              <CardContent className="grid gap-2 p-4 text-xs sm:grid-cols-2 lg:grid-cols-4">
+   359→                {emp.employmentType === "SALARIED" && (
+   360→                  <div className="rounded-lg bg-muted/50 p-2.5">
+   361→                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Salary model</p>
+   362→                    <p className="mt-0.5 font-semibold tabular-nums">{formatINR(emp.monthlySalary ?? 0)}/month</p>
+   363→                    <p className="text-[11px] text-muted-foreground">
+   364→                      {(emp.overtimeRate ?? 0) > 0
+   365→                        ? `Overtime ₹${emp.overtimeRate} per deployment beyond ${emp.overtimeThreshold ?? 30}/mo`
+   366→                        : "No overtime configured"}
+   367→                    </p>
+   368→                  </div>
+   369→                )}
+   370→                {emp.onBusinessRent && (
+   371→                  <div className="rounded-lg bg-muted/50 p-2.5">
+   372→                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Business rent (income)</p>
+   373→                    <p className="mt-0.5 font-semibold tabular-nums">{formatINR(emp.rentAmount ?? 0)}/{(emp.rentMode ?? "MONTH").toLowerCase() === "DAY" ? "day" : "month"}</p>
+   374→                    <p className="text-[11px] text-muted-foreground">Stays in the business flat/home; rent counts as business income.</p>
+   375→                  </div>
+   376→                )}
+   377→                {emp.hasContractor && emp.contractorName && (
+   378→                  <div className="rounded-lg bg-muted/50 p-2.5">
+   379→                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Contractor</p>
+   380→                    <p className="mt-0.5 font-semibold">{emp.contractorName}</p>
+   381→                    <p className="text-[11px] text-muted-foreground tabular-nums">{formatINR(emp.contractorRateCut ?? 0)}/shift cut from payout, paid to the contractor</p>
+   382→                  </div>
+   383→                )}
+   384→              </CardContent>
+   385→            </Card>
+   386→          )}
+   387→          {/* Last-30-days activity: presence strip + billing trend */}
+   388→          <Card>
+   389→            <CardContent className="p-4">
+   390→              <p className="flex items-center gap-2 text-sm font-semibold">
+   391→                <Activity className="h-4 w-4 text-primary" aria-hidden />
+   392→                Last 30 days
+   393→              </p>
+   394→              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+   395→                <span><span className="font-bold tabular-nums text-foreground">{activity.worked}</span>/30 days worked</span>
+   396→                <span><span className="font-bold tabular-nums text-foreground">{activity.totalShifts}</span> shifts</span>
+   397→                <span><span className="font-bold tabular-nums text-foreground">{formatINR(activity.billed, { compact: true })}</span> billed</span>
+   398→              </div>
+   399→              <div className="mt-2.5 flex gap-[3px]" role="img" aria-label={`Worked ${activity.worked} of the last 30 days`}>
+   400→                {activity.list.map((d) => (
+   401→                  <div
+   402→                    key={d.date}
+   403→                    className={cn(
+   404→                      "h-5 flex-1 rounded-[3px] transition-transform hover:scale-125",
+   405→                      d.shifts === 0 && "bg-muted",
+   406→                      d.shifts === 1 && "bg-emerald-300 dark:bg-emerald-700",
+   407→                      d.shifts >= 2 && "bg-emerald-600 dark:bg-emerald-500"
+   408→                    )}
+   409→                    title={`${d.date} · ${d.shifts} shift${d.shifts === 1 ? "" : "s"} · ${formatINR(d.billing)}`}
+   410→                  />
+   411→                ))}
+   412→              </div>
+   413→              <div className="mt-1.5 flex justify-between text-[10px] text-muted-foreground">
+   414→                <span>30 days ago</span>
+   415→                <span className="flex items-center gap-1">Less <span className="h-2 w-3 rounded-[2px] bg-muted" aria-hidden /><span className="h-2 w-3 rounded-[2px] bg-emerald-300 dark:bg-emerald-700" aria-hidden /><span className="h-2 w-3 rounded-[2px] bg-emerald-600 dark:bg-emerald-500" aria-hidden /> More</span>
+   416→                <span>Today</span>
+   417→              </div>
+   418→              {activity.totalShifts > 0 && (
+   419→                <div className="mt-4">
+   420→                  <p className="mb-1 text-[11px] font-medium text-muted-foreground">Daily billing</p>
+   421→                  <AreaTrend
+   422→                    data={activity.list as unknown as Record<string, unknown>[]}
+   423→                    xKey="date"
+   424→                    height={140}
+   425→                    series={[{ key: "billing", label: "Billing", color: CHART_COLORS.emerald }]}
+   426→                  />
+   427→                </div>
+   428→              )}
+   429→
+   430→              {/* Utilization analytics: shift mix · weekday load · top properties */}
+   431→              {activity.totalShifts > 0 && (
+   432→                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+   433→                  {/* Shift mix — day vs night stacked bar */}
+   434→                  <div className="rounded-xl border bg-muted/30 p-3 transition-colors hover:bg-muted/50">
+   435→                    <p className="text-[11px] font-medium text-muted-foreground">Shift mix · 30 days</p>
+   436→                    <div
+   437→                      className="mt-2.5 flex h-2.5 w-full overflow-hidden rounded-full"
+   438→                      role="img"
+   439→                      aria-label={`${activity.dayShifts} day shifts, ${activity.nightShifts} night shifts`}
+   440→                    >
+   441→                      <span
+   442→                        className="h-full bg-amber-400 transition-all dark:bg-amber-500"
+   443→                        style={{ width: `${Math.round((activity.dayShifts / activity.totalShifts) * 100)}%` }}
+   444→                        title={`Day · ${activity.dayShifts} shifts`}
+   445→                      />
+   446→                      <span
+   447→                        className="h-full bg-slate-500 transition-all dark:bg-slate-400"
+   448→                        style={{ width: `${Math.round((activity.nightShifts / activity.totalShifts) * 100)}%` }}
+   449→                        title={`Night · ${activity.nightShifts} shifts`}
+   450→                      />
+   451→                    </div>
+   452→                    <div className="mt-2.5 space-y-1 text-[11px]">
+   453→                      <p className="flex items-center justify-between gap-2">
+   454→                        <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+   455→                          <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400 dark:bg-amber-500" aria-hidden />Day
+   456→                        </span>
+   457→                        <span className="shrink-0 font-bold tabular-nums">
+   458→                          {activity.dayShifts} <span className="font-normal text-muted-foreground">({Math.round((activity.dayShifts / activity.totalShifts) * 100)}%)</span>
+   459→                        </span>
+   460→                      </p>
+   461→                      <p className="flex items-center justify-between gap-2">
+   462→                        <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+   463→                          <span className="h-2 w-2 shrink-0 rounded-full bg-slate-500 dark:bg-slate-400" aria-hidden />Night
+   464→                        </span>
+   465→                        <span className="shrink-0 font-bold tabular-nums">
+   466→                          {activity.nightShifts} <span className="font-normal text-muted-foreground">({Math.round((activity.nightShifts / activity.totalShifts) * 100)}%)</span>
+   467→                        </span>
+   468→                      </p>
+   469→                    </div>
+   470→                  </div>
+   471→
+   472→                  {/* Busiest weekdays — mini bar chart Mon..Sun */}
+   473→                  <div className="rounded-xl border bg-muted/30 p-3 transition-colors hover:bg-muted/50">
+   474→                    <p className="text-[11px] font-medium text-muted-foreground">Busiest weekdays</p>
+   475→                    {(() => {
+   476→                      const order = [1, 2, 3, 4, 5, 6, 0]; // Mon..Sun
+   477→                      const labels = ["M", "T", "W", "T", "F", "S", "S"];
+   478→                      const max = Math.max(...order.map((i) => activity.weekday[i]), 1);
+   479→                      return (
+   480→                        <div className="mt-2.5 flex h-14 items-end justify-between gap-1.5">
+   481→                          {order.map((i, idx) => (
+   482→                            <div key={i} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1">
+   483→                              <div
+   484→                                className={cn(
+   485→                                  "w-full rounded-t-[3px] transition-all hover:opacity-80",
+   486→                                  activity.weekday[i] > 0 ? "bg-emerald-500/80 dark:bg-emerald-500" : "bg-muted"
+   487→                                )}
+   488→                                style={{ height: `${Math.max((activity.weekday[i] / max) * 100, activity.weekday[i] > 0 ? 8 : 4)}%` }}
+   489→                                title={`${activity.weekday[i]} shift${activity.weekday[i] === 1 ? "" : "s"}`}
+   490→                              />
+   491→                              <span className="text-[9px] text-muted-foreground">{labels[idx]}</span>
+   492→                            </div>
+   493→                          ))}
+   494→                        </div>
+   495→                      );
+   496→                    })()}
+   497→                  </div>
+   498→
+   499→                  {/* Top properties — where this employee works most */}
+   500→                  <div className="rounded-xl border bg-muted/30 p-3 transition-colors hover:bg-muted/50">
+   501→                    <p className="text-[11px] font-medium text-muted-foreground">Top properties</p>
+   502→                    <div className="mt-2.5 space-y-2">
+   503→                      {activity.topProps.map(([name, count]) => (
+   504→                        <div key={name} className="min-w-0">
+   505→                          <p className="flex items-center justify-between gap-2 text-[11px]">
+   506→                            <span className="min-w-0 truncate" title={name}>{name}</span>
+   507→                            <span className="shrink-0 font-bold tabular-nums">{count}</span>
+   508→                          </p>
+   509→                          <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-muted">
+   510→                            <div
+   511→                              className="h-full rounded-full bg-teal-500/80 transition-all dark:bg-teal-400"
+   512→                              style={{ width: `${Math.round((count / (activity.topProps[0]?.[1] ?? 1)) * 100)}%` }}
+   513→                            />
+   514→                          </div>
+   515→                        </div>
+   516→                      ))}
+   517→                    </div>
+   518→                  </div>
+   519→                </div>
+   520→              )}
+   521→            </CardContent>
+   522→          </Card>
+   523→
+   524→          <DataTable
+   525→            columns={workColumns}
+   526→            rows={data?.deployments ?? []}
+   527→            rowKey={(r) => r.id}
+   528→            onRowClick={(r) => navigate("deployments", { date: r.date })}
+   529→            emptyIcon={CalendarDays}
+   530→            emptyTitle="No deployments yet"
+   531→            emptyDescription="Deploy this employee to a property to build history."
+   532→          />
+   533→        </TabsContent>
+   534→
+   535→        <TabsContent value="advances" className="mt-3 space-y-3">
+   536→          <div className="flex items-center justify-between">
+   537→            <p className="text-sm text-muted-foreground">Total taken: <span className="font-bold tabular-nums text-foreground">{formatINR(advTotal)}</span></p>
+   538→            <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => setAdvanceOpen(true)}>
+   539→              <HandCoins className="h-3.5 w-3.5" />Give
+   540→            </Button>
+   541→          </div>
+   542→          <DataTable
+   543→            columns={[
+   544→              { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
+   545→              { key: "amount", label: "Amount", primary: true, render: (r) => <span className="font-semibold tabular-nums">{formatINR(r.amount)}</span>, value: (r) => formatINR(r.amount) },
+   546→              { key: "reason", label: "Reason", value: (r) => r.reason ?? "—" },
+   547→              { key: "method", label: "Method", value: (r) => r.method ?? "—", hideOnMobile: true },
+   548→              { key: "givenBy", label: "Given by", value: (r) => r.givenByName ?? "—", hideOnMobile: true },
+   549→            ] as Column<AdvanceRec>[]}
+   550→            rows={advances}
+   551→            rowKey={(r) => r.id}
+   552→            emptyIcon={Wallet}
+   553→            emptyTitle="No advances given"
+   554→            emptyDescription="Advances given to this employee will appear here."
+   555→          />
+   556→        </TabsContent>
+   557→
+   558→        <TabsContent value="adjustments" className="mt-3 space-y-3">
+   559→          <div className="flex items-center justify-between">
+   560→            <p className="text-sm text-muted-foreground">Bonuses add, deductions subtract at settlement</p>
+   561→            <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => setAdjustOpen(true)}>
+   562→              <ReceiptText className="h-3.5 w-3.5" />Add
+   563→            </Button>
+   564→          </div>
+   565→          <DataTable
+   566→            columns={[
+   567→              { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
+   568→              {
+   569→                key: "type", label: "Type", primary: true,
+   570→                render: (r) => <div className="min-w-0"><p className="truncate font-medium">{r.type}{r.reason ? ` · ${r.reason}` : ""}</p><p className="text-[11px] text-muted-foreground">{fmtDay(r.date)}</p></div>,
+   571→                value: (r) => r.type,
+   572→              },
+   573→              {
+   574→                key: "amount", label: "Amount", className: "text-right",
+   575→                render: (r) => <span className={cn("font-semibold tabular-nums", r.amount >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{formatINR(r.amount)}</span>,
+   576→                value: (r) => formatINR(r.amount),
+   577→              },
+   578→              { key: "by", label: "By", value: (r) => r.createdByName ?? "—", hideOnMobile: true },
+   579→            ] as Column<AdjustmentRec>[]}
+   580→            rows={adjustments}
+   581→            rowKey={(r) => r.id}
+   582→            emptyIcon={ReceiptText}
+   583→            emptyTitle="No adjustments"
+   584→            emptyDescription="Bonuses, overtime and penalties appear here."
+   585→          />
+   586→        </TabsContent>
+   587→
+   588→        <TabsContent value="settlements" className="mt-3">
+   589→          <DataTable
+   590→            columns={[
+   591→              { key: "month", label: "Month", primary: true, render: (r) => <span className="font-medium tabular-nums">{r.month}</span>, value: (r) => r.month },
+   592→              { key: "days", label: "Days", className: "text-right", value: (r) => String(r.totalDays ?? 0), hideOnMobile: true },
+   593→              { key: "gross", label: "Gross", className: "text-right", value: (r) => formatINR(r.grossEarnings ?? 0), hideOnMobile: true },
+   594→              { key: "advance", label: "Adv. deducted", className: "text-right", value: (r) => formatINR(r.advanceDeducted ?? 0), hideOnMobile: true },
+   595→              { key: "net", label: "Net payable", className: "text-right", render: (r) => <span className="font-bold tabular-nums">{formatINR(r.netPayable ?? 0)}</span>, value: (r) => formatINR(r.netPayable ?? 0) },
+   596→              { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+   597→            ] as Column<SettlementRec>[]}
+   598→            rows={data?.settlements ?? []}
+   599→            rowKey={(r) => r.id}
+   600→            onRowClick={(r) => navigate("settlements", { month: r.month })}
+   601→            emptyIcon={ReceiptText}
+   602→            emptyTitle="No settlements yet"
+   603→            emptyDescription="Generate month-end settlements to see them here."
+   604→          />
+   605→        </TabsContent>
+   606→
+   607→        <TabsContent value="profile" className="mt-3">
+   608→          <Card>
+   609→            <CardContent className="p-4">
+   610→              <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+   611→                {([
+   612→                  ["Mobile", emp.mobile], ["WhatsApp", emp.whatsapp], ["Gender", emp.gender], ["City", emp.city],
+   613→                  ["Address", emp.address], ["Skills", emp.skills], ["Rate type", emp.rateType ?? "PER_SHIFT"],
+   614→                  ["Preferred payment", emp.preferredPaymentMethod], ["UPI ID", emp.upiId], ["Bank details", emp.bankDetails],
+   615→                  ["Emergency contact", (emp as unknown as { emergencyContact?: string | null }).emergencyContact],
+   616→                  ["Notes", emp.notes],
+   617→                ] as [string, string | null | undefined][]).map(([k, v]) => (
+   618→                  <div key={k} className="min-w-0">
+   619→                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{k}</p>
+   620→                    <p className="truncate text-sm" title={v ?? undefined}>{v || "—"}</p>
+   621→                  </div>
+   622→                ))}
+   623→              </div>
+   624→              <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-4">
+   625→                <span className="mr-1 text-xs text-muted-foreground">Status control:</span>
+   626→                {["ACTIVE", "INACTIVE"].filter((s) => s !== emp.status).map((s) => (
+   627→                  <Button key={s} variant="outline" size="sm" className="h-8" disabled={saving} onClick={() => void changeStatus(s)}>
+   628→                    Mark {s.charAt(0) + s.slice(1).toLowerCase()}
+   629→                  </Button>
+   630→                ))}
+   631→              </div>
+   632→            </CardContent>
+   633→          </Card>
+   634→        </TabsContent>
+   635→      </Tabs>
+   636→
+   637→      <GiveAdvanceDialog open={advanceOpen} onOpenChange={setAdvanceOpen} defaultEmployeeId={id} employees={emp ? [{ id: emp.id, fullName: emp.fullName, code: emp.code, standardRate: emp.standardRate, advanceBalance: emp.advanceBalance }] : undefined} onDone={afterAdvance} />
+   638→      <AddAdjustmentDialog open={adjustOpen} onOpenChange={setAdjustOpen} employeeId={id} onDone={load} />
+   639→
+   640→      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+   641→        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+   642→          <DialogHeader>
+   643→            <DialogTitle>Edit profile</DialogTitle>
+   644→            <DialogDescription>Update contact, rate and payment details.</DialogDescription>
+   645→          </DialogHeader>
+   646→          <div className="grid gap-3 sm:grid-cols-2">
+   647→            <Field label="Full name" required className="sm:col-span-2">
+   648→              <Input value={editForm.fullName} onChange={(e) => setEditForm((f) => ({ ...f, fullName: e.target.value }))} className="h-10" />
+   649→            </Field>
+   650→            <Field label="Mobile"><Input value={editForm.mobile} onChange={(e) => setEditForm((f) => ({ ...f, mobile: e.target.value }))} className="h-10" /></Field>
+   651→            <Field label="Designation"><Input value={editForm.designation} onChange={(e) => setEditForm((f) => ({ ...f, designation: e.target.value }))} className="h-10" /></Field>
+   652→            <Field
+   653→              label="Payout rate (₹/shift)"
+   654→              hint="Applies to future deployments only — past records keep their original rate."
+   655→            >
+   656→              <MoneyInput value={editForm.standardRate} onChange={(v) => setEditForm((f) => ({ ...f, standardRate: v }))} className="h-10" />
+   657→            </Field>
+   658→            <Field label="City"><Input value={editForm.city} onChange={(e) => setEditForm((f) => ({ ...f, city: e.target.value }))} className="h-10" /></Field>
+   659→            <Field label="Skills" className="sm:col-span-2"><Input value={editForm.skills} onChange={(e) => setEditForm((f) => ({ ...f, skills: e.target.value }))} className="h-10" /></Field>
+   660→            <Field label="UPI ID"><Input value={editForm.upiId} onChange={(e) => setEditForm((f) => ({ ...f, upiId: e.target.value }))} className="h-10" /></Field>
+   661→            <Field label="Bank details"><Input value={editForm.bankDetails} onChange={(e) => setEditForm((f) => ({ ...f, bankDetails: e.target.value }))} className="h-10" /></Field>
+   662→            <Field label="Notes" className="sm:col-span-2"><Input value={editForm.notes} onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))} className="h-10" /></Field>
+   663→          </div>
+   664→          <DialogFooter className="gap-2">
+   665→            <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => setEditOpen(false)}>Cancel</Button>
+   666→            <Button className="min-h-10 flex-1 sm:flex-none" onClick={submitEdit} disabled={saving}>{saving ? "Saving…" : "Save changes"}</Button>
+   667→          </DialogFooter>
+   668→        </DialogContent>
+   669→      </Dialog>
+   670→    </div>
+   671→  );
+   672→}
+   673→

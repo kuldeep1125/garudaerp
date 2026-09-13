@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { handleRoute, readBody, parseDate, HttpError } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
-import { advanceBalanceMap, serializeDeployment, EMPLOYEE_STATUSES, requireEnum, EMPLOYMENT_TYPES, RENT_MODES } from "@/app/api/_lib/engine";
+import { advanceBalanceMap, serializeDeployment, EMPLOYEE_STATUSES, requireEnum, EMPLOYMENT_TYPES, RENT_MODES, payValuesOf } from "@/app/api/_lib/engine";
 
 export const GET = handleRoute(async ({ params }) => {
   const { id } = params;
@@ -56,7 +56,24 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
   }
   if (body.standardRate !== undefined) data.standardRate = round2(Number(body.standardRate) || 0);
   if (body.dob !== undefined) data.dob = body.dob ? parseDate(body.dob as string) : null;
-  if (body.joiningDate !== undefined) data.joiningDate = body.joiningDate ? parseDate(body.joiningDate as string) : existing.joiningDate;
+  if (body.joiningDate !== undefined && body.joiningDate) {
+    const joiningDate = parseDate(body.joiningDate as string);
+    if (joiningDate.getTime() !== existing.joiningDate.getTime()) {
+      // Historical integrity: joiningDate is a financial-impacting historical
+      // fact (it anchors salary/rent proration). Once any record exists for the
+      // employee it can no longer be changed — edits must never rewrite history.
+      const [depC, advC, setC, adjC] = await Promise.all([
+        db.deployment.count({ where: { employeeId: id } }),
+        db.advance.count({ where: { employeeId: id } }),
+        db.settlement.count({ where: { employeeId: id } }),
+        db.adjustment.count({ where: { employeeId: id } }),
+      ]);
+      if (depC + advC + setC + adjC > 0) {
+        throw new HttpError(409, "Joining date is locked — this employee already has deployments/advances/settlements, so changing it would rewrite historical payroll.");
+      }
+      data.joiningDate = joiningDate;
+    }
+  }
   if (body.status !== undefined) data.status = requireEnum(body.status, EMPLOYEE_STATUSES, "status");
 
   // --- employment / salary / rent / contractor fields ---
@@ -147,7 +164,40 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
   }
   if (!Object.keys(data).length) throw new HttpError(400, "No editable fields provided");
 
+  // --- historical integrity: snapshot pay-term changes into the effective-dated history ---
+  const PAY_FIELDS = [
+    "employmentType", "standardRate", "monthlySalary", "overtimeThreshold", "overtimeRate",
+    "onBusinessRent", "rentAmount", "rentMode", "hasContractor", "contractorName", "contractorRateCut",
+  ] as const;
+  const payChanged = PAY_FIELDS.some((k) => k in data && data[k] !== (existing as unknown as Record<string, unknown>)[k]);
+
   const employee = await db.employee.update({ where: { id }, data });
+  if (payChanged) {
+    // Backfill the initial-terms row first if this employee predates pay history,
+    // then append the new terms effective from NOW — past periods keep the terms
+    // that were in force at their time, so no report can change retroactively.
+    const histCount = await db.employeePayHistory.count({ where: { employeeId: id } });
+    if (histCount === 0) {
+      await db.employeePayHistory.create({
+        data: {
+          employeeId: id,
+          effectiveFrom: existing.joiningDate,
+          ...payValuesOf(existing),
+          changedByName: owner?.name ?? null,
+          reason: "Initial terms",
+        },
+      });
+    }
+    await db.employeePayHistory.create({
+      data: {
+        employeeId: id,
+        effectiveFrom: new Date(),
+        ...payValuesOf(employee),
+        changedByName: owner?.name ?? null,
+        reason: "Terms updated",
+      },
+    });
+  }
   await logAudit({
     owner,
     action: "UPDATE",

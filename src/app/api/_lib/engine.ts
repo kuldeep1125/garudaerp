@@ -103,61 +103,208 @@ function activeDaysInSegment(
   return Math.max(0, daysBetweenInclusive(start, end));
 }
 
-/** Salaried gross for one full month — the settlement formula (accrual for a full month matches this). */
-export function salaryOvertimeForMonth(
-  emp: { monthlySalary: number; overtimeThreshold: number; overtimeRate: number },
-  deploymentsInMonth: number,
-): { salary: number; overtime: number; total: number; extraDeployments: number; threshold: number } {
-  const threshold = emp.overtimeThreshold ?? 30;
-  const extra = Math.max(0, deploymentsInMonth - threshold);
-  const salary = round2(emp.monthlySalary ?? 0);
-  const overtime = round2(extra * (emp.overtimeRate ?? 0));
-  return { salary, overtime, total: round2(salary + overtime), extraDeployments: extra, threshold };
+// ---------- effective-dated pay history (the historical-integrity core) ----------
+
+/** The compensation terms carried by an Employee record or a pay-history row. */
+export interface PayValues {
+  employmentType: string;
+  standardRate: number;
+  monthlySalary: number;
+  overtimeThreshold: number;
+  overtimeRate: number;
+  onBusinessRent: boolean;
+  rentAmount: number;
+  rentMode: string;
+  hasContractor: boolean;
+  contractorName: string | null;
+  contractorRateCut: number;
 }
 
-/** Salaried salary + overtime accrual for an arbitrary range (per-employee reports). */
-export async function salaryOvertimeForRange(
-  emp: { id: string; joiningDate: Date; status: string; employmentType: string; monthlySalary: number; overtimeThreshold: number; overtimeRate: number },
+export type PayHistoryRow = PayValues & { effectiveFrom: Date };
+
+/** Extracts the pay snapshot carried by an Employee record (fallback / initial terms). */
+export function payValuesOf(emp: {
+  employmentType: string; standardRate: number; monthlySalary: number; overtimeThreshold: number;
+  overtimeRate: number; onBusinessRent: boolean; rentAmount: number; rentMode: string;
+  hasContractor: boolean; contractorName: string | null; contractorRateCut: number;
+}): PayValues {
+  return {
+    employmentType: emp.employmentType,
+    standardRate: emp.standardRate,
+    monthlySalary: emp.monthlySalary,
+    overtimeThreshold: emp.overtimeThreshold,
+    overtimeRate: emp.overtimeRate,
+    onBusinessRent: emp.onBusinessRent,
+    rentAmount: emp.rentAmount,
+    rentMode: emp.rentMode,
+    hasContractor: emp.hasContractor,
+    contractorName: emp.contractorName,
+    contractorRateCut: emp.contractorRateCut,
+  };
+}
+
+/** Terms in effect at instant `at`: latest row whose CHANGE DAY has started (rows ascending), else the fallback. */
+export function payAsOf(rows: PayHistoryRow[], at: Date, fallback: PayValues): PayValues {
+  let picked = fallback;
+  for (const r of rows) {
+    if (startOfDay(r.effectiveFrom).getTime() <= at.getTime()) picked = r;
+    else break;
+  }
+  return picked;
+}
+
+/**
+ * Splits [from, to] at pay-change boundaries → sub-segments, each carrying the
+ * terms effective inside it. Boundaries are quantized to the START of the
+ * change's calendar day, so a change applies from that whole day and the
+ * prorated day counts always sum exactly to the period length (no day is ever
+ * counted twice or skipped). A change made today can never rewrite any period
+ * that ended before today (the historical-integrity rule).
+ */
+export function paySegments(
+  rows: PayHistoryRow[],
+  from: Date,
+  to: Date,
+  fallback: PayValues,
+): { values: PayValues; from: Date; to: Date }[] {
+  // Segment STARTS: the range start + each change day strictly inside the range.
+  // `to` is only ever a closing bound (never a new segment start) — otherwise a
+  // 1ms sliver at the end would double-count one day of salary/rent.
+  const startTimes = new Set<number>([startOfDay(from).getTime()]);
+  for (const r of rows) {
+    const t = startOfDay(r.effectiveFrom).getTime();
+    if (t > startOfDay(from).getTime() && t <= to.getTime()) startTimes.add(t);
+  }
+  const starts = [...startTimes].sort((a, b) => a - b).map((ms) => new Date(ms));
+  const out: { values: PayValues; from: Date; to: Date }[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    const segFrom = starts[i];
+    const segTo = i + 1 < starts.length ? new Date(starts[i + 1].getTime() - 1) : to;
+    if (segFrom.getTime() > segTo.getTime()) continue;
+    out.push({ values: payAsOf(rows, segFrom, fallback), from: segFrom, to: segTo });
+  }
+  return out;
+}
+
+/** Rent accrual for given active days under one pay-values snapshot. */
+export function rentForValues(values: PayValues, activeDays: number, daysInMonth: number): number {
+  if (!values.onBusinessRent || activeDays <= 0) return 0;
+  if (String(values.rentMode).toUpperCase() === "DAY") return round2((values.rentAmount ?? 0) * activeDays);
+  return round2((values.rentAmount ?? 0) * (activeDays / daysInMonth));
+}
+
+export interface SalariedAccrualResult { salary: number; overtime: number; rent: number }
+
+/**
+ * Salaried salary + overtime + employee-rent accrual for an arbitrary range,
+ * resolved through the employee's effective-dated pay history: each change is
+ * applied exactly from the moment it was made and NEVER rewrites past periods.
+ *  - salary: monthlySalary prorated per ACTIVE day, piecewise across pay changes
+ *  - rent: MONTH prorated / DAY per active day, piecewise across pay changes
+ *  - overtime: month-scoped; uses the threshold/rate in effect at month end, so
+ *    a later edit cannot reach back into a closed month
+ */
+export async function salaryRentOvertimeForRange(
+  emp: { id: string; joiningDate: Date; status: string } & PayValues,
   from: Date,
   to: Date,
   lastWork?: Date | null,
-): Promise<{ salary: number; overtime: number }> {
-  if (emp.employmentType !== "SALARIED") return { salary: 0, overtime: 0 };
+): Promise<SalariedAccrualResult> {
+  const rows = (await db.employeePayHistory.findMany({
+    where: { employeeId: emp.id },
+    orderBy: { effectiveFrom: "asc" },
+  })) as PayHistoryRow[];
+  const fallback = payValuesOf(emp);
   const segments = monthSegments(from, to);
   const segFrom = startOfDay(from);
   let salary = 0;
   let overtime = 0;
+  let rent = 0;
   for (const seg of segments) {
     const effSeg = { ...seg, from: seg.from < segFrom ? segFrom : seg.from };
     if (effSeg.from > effSeg.to) continue;
-    const days = activeDaysInSegment(emp, lastWork ?? null, effSeg);
-    salary += (emp.monthlySalary ?? 0) * (days / effSeg.daysInMonth);
-    if ((emp.overtimeRate ?? 0) > 0) {
+    for (const sub of paySegments(rows, effSeg.from, effSeg.to, fallback)) {
+      const days = activeDaysInSegment(emp, lastWork ?? null, { ...effSeg, from: sub.from, to: sub.to });
+      if (days <= 0) continue;
+      if (sub.values.employmentType === "SALARIED") {
+        salary += (sub.values.monthlySalary ?? 0) * (days / effSeg.daysInMonth);
+      }
+      rent += rentForValues(sub.values, days, effSeg.daysInMonth);
+    }
+    const ov = payAsOf(rows, effSeg.to, fallback);
+    if (ov.employmentType === "SALARIED" && (ov.overtimeRate ?? 0) > 0) {
       const count = await db.deployment.count({ where: { employeeId: emp.id, date: { gte: effSeg.from, lte: effSeg.to } } });
-      overtime += Math.max(0, count - (emp.overtimeThreshold ?? 30)) * (emp.overtimeRate ?? 0);
+      overtime += Math.max(0, count - (ov.overtimeThreshold ?? 30)) * (ov.overtimeRate ?? 0);
     }
   }
-  return { salary: round2(salary), overtime: round2(overtime) };
+  return { salary: round2(salary), overtime: round2(overtime), rent: round2(rent) };
 }
 
-/** Employee rent accrual for one month segment. */
-export function rentForSegment(
-  emp: { onBusinessRent: boolean; rentAmount: number; rentMode: string },
-  activeDays: number,
-  seg: MonthSegment,
-): number {
-  if (!emp.onBusinessRent || activeDays <= 0) return 0;
-  if (String(emp.rentMode).toUpperCase() === "DAY") return round2((emp.rentAmount ?? 0) * activeDays);
-  return round2((emp.rentAmount ?? 0) * (activeDays / seg.daysInMonth));
+export interface SalariedMonthPay {
+  salary: number;
+  overtime: number;
+  total: number;
+  extraDeployments: number;
+  threshold: number;
+  wasSalaried: boolean; // salaried as of the month end (draft-generation gate)
+}
+
+/**
+ * Salaried pay for a settlement month — THE canonical settlement formula,
+ * aligned 1:1 with the accrual the dashboards show (same active-day proration,
+ * same effective-dated history), so a settled month always reconciles:
+ *  - salary: prorated per ACTIVE day, piecewise across pay-history changes
+ *  - overtime: (deployments in month − threshold) × rate, params as of month end
+ *  - wasSalaried: whether the terms in effect at month end were salaried
+ */
+export async function salariedMonthPay(args: {
+  employeeId: string;
+  month: string;
+  joiningDate: Date;
+  status: string;
+  lastWork: Date | null;
+  deploymentsInMonth: number;
+  current: PayValues;
+}): Promise<SalariedMonthPay> {
+  const { from, to } = monthBounds(args.month);
+  const rows = (await db.employeePayHistory.findMany({
+    where: { employeeId: args.employeeId },
+    orderBy: { effectiveFrom: "asc" },
+  })) as PayHistoryRow[];
+  const fallback = args.current;
+  const endValues = payAsOf(rows, to, fallback);
+  const wasSalaried = endValues.employmentType === "SALARIED";
+  const daysInMonth = new Date(from.getFullYear(), from.getMonth() + 1, 0).getDate();
+  const seg: MonthSegment = { from, to, month: args.month, daysInMonth };
+  let salary = 0;
+  for (const sub of paySegments(rows, from, to, fallback)) {
+    const days = activeDaysInSegment({ joiningDate: args.joiningDate, status: args.status }, args.lastWork, { ...seg, from: sub.from, to: sub.to });
+    if (days > 0 && sub.values.employmentType === "SALARIED") {
+      salary += (sub.values.monthlySalary ?? 0) * (days / daysInMonth);
+    }
+  }
+  const extra = Math.max(0, args.deploymentsInMonth - (endValues.overtimeThreshold ?? 30));
+  const sal = round2(salary);
+  const overtime = wasSalaried ? round2(extra * (endValues.overtimeRate ?? 0)) : 0;
+  return { salary: sal, overtime, total: round2(sal + overtime), extraDeployments: extra, threshold: endValues.overtimeThreshold ?? 30, wasSalaried };
 }
 
 /**
  * THE canonical manpower cost/accrual aggregation for [from, to].
  * dashboard/summary, reports/profitability and monthly-metrics ALL read from
  * this function — numbers can never disagree across pages by construction.
+ * Salary/rent accruals resolve through each employee's effective-dated pay
+ * history, so editing an employee never rewrites a past period's numbers.
  */
 export async function manpowerCostBreakdown(from: Date, to: Date): Promise<ManpowerCostBreakdown> {
-  const [depAgg, cutRows, specials, lastWorks] = await Promise.all([
+  const candidateWhere = {
+    OR: [
+      { employmentType: "SALARIED" },
+      { onBusinessRent: true },
+      { payHistory: { some: {} } }, // was salaried/on-rent at some point in history
+    ],
+  };
+  const [depAgg, cutRows, specials, lastWorks, historyRows] = await Promise.all([
     db.deployment.aggregate({
       where: { date: { gte: from, lte: to } },
       _sum: { billingAmount: true, payoutAmount: true, contractorCut: true },
@@ -167,13 +314,17 @@ export async function manpowerCostBreakdown(from: Date, to: Date): Promise<Manpo
       select: { payoutAmount: true, contractorCut: true },
     }),
     db.employee.findMany({
-      where: { OR: [{ employmentType: "SALARIED" }, { onBusinessRent: true }] },
-      select: { id: true, fullName: true, status: true, joiningDate: true, employmentType: true, monthlySalary: true, overtimeThreshold: true, overtimeRate: true, onBusinessRent: true, rentAmount: true, rentMode: true },
+      where: candidateWhere,
+      select: { id: true, fullName: true, status: true, joiningDate: true, employmentType: true, standardRate: true, monthlySalary: true, overtimeThreshold: true, overtimeRate: true, onBusinessRent: true, rentAmount: true, rentMode: true, hasContractor: true, contractorName: true, contractorRateCut: true },
     }),
     db.deployment.groupBy({
       by: ["employeeId"],
       _max: { date: true },
-      where: { employee: { OR: [{ employmentType: "SALARIED" }, { onBusinessRent: true }] } },
+      where: { employee: candidateWhere },
+    }),
+    db.employeePayHistory.findMany({
+      where: { employee: candidateWhere },
+      orderBy: [{ employeeId: "asc" }, { effectiveFrom: "asc" }],
     }),
   ]);
 
@@ -186,31 +337,41 @@ export async function manpowerCostBreakdown(from: Date, to: Date): Promise<Manpo
 
   const segments = monthSegments(from, to);
   const lastWorkBy = new Map(lastWorks.map((r) => [r.employeeId, r._max.date as Date | null]));
+  const historyBy = new Map<string, PayHistoryRow[]>();
+  for (const r of historyRows) {
+    const arr = historyBy.get(r.employeeId) ?? [];
+    arr.push(r as PayHistoryRow);
+    historyBy.set(r.employeeId, arr);
+  }
   let salary = 0;
   let overtime = 0;
   let rentIncome = 0;
   const segFrom = startOfDay(from);
   for (const emp of specials) {
+    const rows = historyBy.get(emp.id) ?? [];
+    const fallback = payValuesOf(emp);
+    const lastWork = lastWorkBy.get(emp.id) ?? null;
     for (const seg of segments) {
       // only count days inside the requested range (segment is already clipped, but the
       // segment start may precede `from` when the range starts mid-month — clamp again)
       const effSeg = { ...seg, from: seg.from < segFrom ? segFrom : seg.from };
       if (effSeg.from > effSeg.to) continue;
-      const lastWork = lastWorkBy.get(emp.id) ?? null;
-      const days = activeDaysInSegment(emp, lastWork, effSeg);
-      if (emp.employmentType === "SALARIED") {
-        salary += (emp.monthlySalary ?? 0) * (days / effSeg.daysInMonth);
+      for (const sub of paySegments(rows, effSeg.from, effSeg.to, fallback)) {
+        const days = activeDaysInSegment(emp, lastWork, { ...effSeg, from: sub.from, to: sub.to });
+        if (days <= 0) continue;
+        if (sub.values.employmentType === "SALARIED") {
+          salary += (sub.values.monthlySalary ?? 0) * (days / effSeg.daysInMonth);
+        }
+        rentIncome += rentForValues(sub.values, days, effSeg.daysInMonth);
       }
-      rentIncome += rentForSegment(emp, days, effSeg);
-    }
-    // overtime: per month segment, deployments of this employee inside the segment
-    if (emp.employmentType === "SALARIED" && (emp.overtimeRate ?? 0) > 0) {
-      for (const seg of segments) {
-        const effSeg = { ...seg, from: seg.from < segFrom ? segFrom : seg.from };
+      // month-scoped overtime: terms as of the month's end — later edits never
+      // reach back into a closed month
+      const ov = payAsOf(rows, effSeg.to, fallback);
+      if (ov.employmentType === "SALARIED" && (ov.overtimeRate ?? 0) > 0) {
         const count = await db.deployment.count({
           where: { employeeId: emp.id, date: { gte: effSeg.from, lte: effSeg.to } },
         });
-        overtime += Math.max(0, count - (emp.overtimeThreshold ?? 30)) * (emp.overtimeRate ?? 0);
+        overtime += Math.max(0, count - (ov.overtimeThreshold ?? 30)) * (ov.overtimeRate ?? 0);
       }
     }
   }
@@ -332,6 +493,26 @@ export function dayKey(d: Date): string {
 
 export function monthKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/**
+ * Historical-integrity guard: blocks any deployment mutation (edit/delete) in a
+ * month already locked by a FINALIZED/PAID settlement — settled payroll rows are
+ * frozen inputs of that settlement, so editing them would silently stale its
+ * totals. DRAFT months stay freely editable (drafts regenerate).
+ */
+export async function assertDeploymentMonthUnlocked(employeeId: string, date: Date): Promise<void> {
+  const month = monthKey(date);
+  const locked = await db.settlement.findFirst({
+    where: { employeeId, month, status: { not: "DRAFT" } },
+    select: { id: true },
+  });
+  if (locked) {
+    throw new HttpError(
+      409,
+      `This deployment is in ${month} — a month already settled & finalized for this employee. Finalized payroll is immutable, so the row cannot be modified.`,
+    );
+  }
 }
 
 export function parseYmd(s: string): Date {
@@ -678,6 +859,33 @@ export async function vehicleStatsMap(vehicleIds: string[]): Promise<Map<string,
 export function deriveEmiEndDate(v: { emiStartDate: Date | null; emiCount: number | null }): Date | null {
   if (!v.emiStartDate || !v.emiCount || v.emiCount <= 0) return null;
   return addMonths(v.emiStartDate, v.emiCount);
+}
+
+/**
+ * THE single EMI schedule builder — shared by emis/generate and emis/regenerate.
+ * Creates one VehicleEmiPayment row per installment month that does not exist yet
+ * (idempotent). Months that already have a row are skipped, so PAID installments
+ * keep their recorded amounts and are never duplicated.
+ * Returns the number of rows created.
+ */
+export async function fillMissingEmiSchedule(
+  tx: Tx,
+  vehicleId: string,
+  loan: { monthlyEmi: number; emiStartDate: Date; emiCount: number },
+): Promise<number> {
+  const existing = await tx.vehicleEmiPayment.findMany({ where: { vehicleId }, select: { month: true } });
+  const existingMonths = new Set(existing.map((e) => e.month));
+  const toCreate: { vehicleId: string; month: string; dueDate: Date; amount: number }[] = [];
+  for (let i = 0; i < loan.emiCount; i++) {
+    const due = addMonths(loan.emiStartDate, i);
+    const mk = monthKey(due);
+    if (existingMonths.has(mk)) continue;
+    toCreate.push({ vehicleId, month: mk, dueDate: due, amount: loan.monthlyEmi });
+  }
+  if (toCreate.length) {
+    await tx.vehicleEmiPayment.createMany({ data: toCreate });
+  }
+  return toCreate.length;
 }
 
 // ---------- auto expense creation (EMI / maintenance) ----------

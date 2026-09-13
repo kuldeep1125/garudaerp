@@ -40,7 +40,7 @@ import {
   todayStr, undoRequest, UNDO_APPLIED_EVENT,
 } from "./_shared";
 
-interface ExpenseCategoryRec { id: string; name: string; business: string; kind?: string }
+interface ExpenseCategoryRec { id: string; name: string; business: string; kind?: string; isActive?: boolean }
 interface OwnerRec { id: string; name: string }
 interface RecurringRow {
   id: string;
@@ -53,7 +53,8 @@ interface RecurringRow {
   startDate: string;
   method?: string | null;
   notes?: string | null;
-  active?: boolean;
+  isActive?: boolean; // canonical field from the API
+  active?: boolean; // legacy alias kept for compatibility
   lastGeneratedMonth?: string | null;
 }
 
@@ -88,6 +89,12 @@ const BUSINESS_OPTIONS: Option[] = [
 ];
 
 const METHOD_OPTIONS: Option[] = ["Cash", "UPI", "Bank", "Card", "Cheque", "Other"].map((m) => ({ label: m, value: m }));
+
+// Mirrors CAPITAL_CATEGORY_NAMES in engine.ts (client can't import server code):
+// these category NAMES decide capital vs operating stamping, so they are locked
+// in the category manager (rename/deactivate blocked server-side too).
+const CAPITAL_CATEGORY_NAMES = ["OWNER CONTRIBUTION", "OWNER WITHDRAWAL"];
+const isCapitalCategory = (name?: string | null) => CAPITAL_CATEGORY_NAMES.includes((name ?? "").trim().toUpperCase());
 
 function rangeDates(r: RangeKey): { from: string; to: string } {
   const now = new Date();
@@ -212,6 +219,15 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, pres
 
   const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
 
+  // Inactive categories stay out of the picker — except the one already on the
+  // record being edited, so edit never shows a blank where a category was.
+  const categoryOptions = useMemo(() => {
+    const selectedId = form.categoryId || presetCategoryId || expense?.categoryId || "";
+    return categories
+      .filter((c) => c.isActive !== false || c.id === selectedId)
+      .map((c) => ({ label: c.isActive === false ? `${c.name} (inactive)` : c.name, value: c.id }));
+  }, [categories, form.categoryId, presetCategoryId, expense?.categoryId]);
+
   const createCategory = async () => {
     const name = newCatName.trim();
     if (!name) { toast.error("Enter a category name"); return; }
@@ -234,7 +250,9 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, pres
     const body = {
       date: form.date,
       business: form.business,
-      categoryId: form.categoryId || presetCategoryId || undefined,
+      // Always send the selection: "" explicitly clears the category on PUT
+      // (e.g. after a business switch) — the API re-stamps kind in the same pass.
+      categoryId: form.categoryId || presetCategoryId || "",
       amount: amt,
       method: form.method || undefined,
       description: form.description || undefined,
@@ -301,7 +319,7 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, pres
               value={form.categoryId || presetCategoryId}
               onChange={set("categoryId")}
               placeholder="Select category…"
-              options={categories.map((c) => ({ label: c.name, value: c.id }))}
+              options={categoryOptions}
             />
           </Field>
           <div className="sm:col-span-1 sm:row-start-auto">
@@ -368,23 +386,35 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, pres
 }
 
 // ---------------------------------------------------------------------------
-// New recurring expense dialog
+// Recurring expense dialog — shared by add AND edit (same fields either way)
 // ---------------------------------------------------------------------------
 
-function RecurringFormDialog({ open, onOpenChange, onDone }: {
+function RecurringFormDialog({ open, onOpenChange, recurring, onDone }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** When set, the dialog edits this recurring expense (prefilled); null = create. */
+  recurring: RecurringRow | null;
   onDone: () => void;
 }) {
+  const editing = Boolean(recurring);
   const [form, setForm] = useState({ name: "", business: "MANPOWER", categoryId: "", amount: "", startDate: todayStr(), method: "Bank", notes: "" });
   const [categories, setCategories] = useState<ExpenseCategoryRec[]>([]);
   const { mutate, saving } = useMutation();
 
+  // Reset form each time the dialog opens (render-time state adjustment).
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
     setPrevOpen(open);
     if (open) {
-      setForm({ name: "", business: "MANPOWER", categoryId: "", amount: "", startDate: todayStr(), method: "Bank", notes: "" });
+      setForm({
+        name: recurring?.name ?? "",
+        business: recurring?.business ?? "MANPOWER",
+        categoryId: recurring?.categoryId ?? "",
+        amount: recurring ? String(recurring.amount) : "",
+        startDate: recurring?.startDate?.slice(0, 10) ?? todayStr(),
+        method: recurring?.method ?? "Bank",
+        notes: recurring?.notes ?? "",
+      });
     }
   }
 
@@ -399,24 +429,33 @@ function RecurringFormDialog({ open, onOpenChange, onDone }: {
 
   const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
 
+  // Inactive categories stay out of the picker — except the one already on the
+  // recurring expense being edited.
+  const recurringCategoryOptions = useMemo(() => {
+    const selectedId = form.categoryId || recurring?.categoryId || "";
+    return categories
+      .filter((c) => c.isActive !== false || c.id === selectedId)
+      .map((c) => ({ label: c.isActive === false ? `${c.name} (inactive)` : c.name, value: c.id }));
+  }, [categories, form.categoryId, recurring?.categoryId]);
+
   const submit = async () => {
     if (!form.name.trim()) { toast.error("Name is required"); return; }
     const amt = parseAmount(form.amount);
     if (amt <= 0) { toast.error("Enter a valid amount"); return; }
     if (!form.startDate) { toast.error("Start date is required"); return; }
-    const res = await mutate(
-      () => api.post("/api/recurring-expenses", {
-        name: form.name.trim(),
-        business: form.business,
-        categoryId: form.categoryId || undefined,
-        amount: amt,
-        frequency: "MONTHLY",
-        startDate: form.startDate,
-        method: form.method || undefined,
-        notes: form.notes || undefined,
-      }),
-      "Recurring expense created"
-    );
+    const body = {
+      name: form.name.trim(),
+      business: form.business,
+      categoryId: form.categoryId, // "" explicitly clears the category on PUT
+      amount: amt,
+      frequency: "MONTHLY",
+      startDate: form.startDate,
+      method: form.method || undefined,
+      notes: form.notes || undefined,
+    };
+    const res = editing
+      ? await mutate(() => api.put(`/api/recurring-expenses/${recurring!.id}`, body), "Recurring expense updated")
+      : await mutate(() => api.post("/api/recurring-expenses", body), "Recurring expense created");
     if (res.ok) { onOpenChange(false); onDone(); }
   };
 
@@ -424,7 +463,7 @@ function RecurringFormDialog({ open, onOpenChange, onDone }: {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>New Recurring Expense</DialogTitle>
+          <DialogTitle>{editing ? "Edit Recurring Expense" : "New Recurring Expense"}</DialogTitle>
           <DialogDescription>Generated monthly; idempotent per name + month + business.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -443,7 +482,7 @@ function RecurringFormDialog({ open, onOpenChange, onDone }: {
               value={form.categoryId}
               onChange={set("categoryId")}
               placeholder="Select category…"
-              options={categories.map((c) => ({ label: c.name, value: c.id }))}
+              options={recurringCategoryOptions}
             />
           </Field>
           <Field label="Amount (₹ / month)" required>
@@ -464,7 +503,127 @@ function RecurringFormDialog({ open, onOpenChange, onDone }: {
         </div>
         <DialogFooter className="gap-2">
           <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : "Create"}</Button>
+          <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>{saving ? "Saving…" : editing ? "Save changes" : "Create"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Expense category manager — rename + activate/deactivate (no delete: past
+// expenses reference their category by name, so categories never disappear)
+// ---------------------------------------------------------------------------
+
+function CategoryManagerDialog({ open, onOpenChange, onChanged }: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  /** Called after any rename/toggle so the parent re-fetches its category lists. */
+  onChanged: () => void;
+}) {
+  const [editingId, setEditingId] = useState("");
+  const [editName, setEditName] = useState("");
+  const { mutate, saving } = useMutation();
+
+  // Full list (every business, active AND inactive) refetched whenever the dialog opens.
+  const categories = useAsync<ExpenseCategoryRec[]>(async () => {
+    if (!open) return [];
+    const d = await api.get<{ items: ExpenseCategoryRec[] }>("/api/expense-categories");
+    return d.items ?? [];
+  }, [open]);
+
+  const rename = async (c: ExpenseCategoryRec) => {
+    const name = editName.trim();
+    if (!name) { toast.error("Enter a category name"); return; }
+    if (name === c.name) { setEditingId(""); return; }
+    const res = await mutate(() => api.put(`/api/expense-categories/${c.id}`, { name }), `Category renamed to "${name}"`);
+    if (res.ok) {
+      setEditingId("");
+      setEditName("");
+      onChanged();
+      void categories.reload();
+    }
+  };
+
+  const toggleActive = async (c: ExpenseCategoryRec, next: boolean) => {
+    const res = await mutate(
+      () => api.put(`/api/expense-categories/${c.id}`, { isActive: next }),
+      next ? `"${c.name}" is active again` : `"${c.name}" hidden from new expenses — past records keep it`
+    );
+    if (res.ok) { onChanged(); void categories.reload(); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Expense categories</DialogTitle>
+          <DialogDescription>
+            Rename or pause categories. Paused categories disappear from new-expense pickers; past expenses keep their category name. Deleting is never allowed.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-80 space-y-1.5 overflow-y-auto pr-0.5">
+          {categories.loading && <div className="h-20 animate-pulse rounded-lg bg-muted" />}
+          {!categories.loading && (categories.data ?? []).length === 0 && (
+            <p className="py-4 text-center text-xs text-muted-foreground">No categories yet</p>
+          )}
+          {(categories.data ?? []).map((c) => {
+            const capital = isCapitalCategory(c.name);
+            const inactive = c.isActive === false;
+            return (
+              <div key={c.id} className="flex items-center gap-2 rounded-xl border p-2">
+                {editingId === c.id ? (
+                  <>
+                    <Input
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void rename(c); } }}
+                      className="h-8 text-sm"
+                      aria-label="Category name"
+                      autoFocus
+                    />
+                    <Button type="button" size="sm" className="h-8 shrink-0 px-2" onClick={() => void rename(c)} disabled={saving} aria-label="Save category name">
+                      <Check className="h-3.5 w-3.5" aria-hidden />
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" className="h-8 shrink-0 px-2" onClick={() => setEditingId("")} aria-label="Cancel rename">
+                      ✕
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <div className="min-w-0 flex-1">
+                      <p className={cn("truncate text-sm font-medium", inactive && "text-muted-foreground")}>{c.name}</p>
+                      <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <BusinessBadge business={c.business} />
+                        {capital && <CapitalBadge />}
+                        {inactive && <span>hidden from new expenses</span>}
+                      </p>
+                    </div>
+                    <Switch
+                      checked={!inactive}
+                      onCheckedChange={(v) => void toggleActive(c, v)}
+                      disabled={saving || capital}
+                      aria-label={`${inactive ? "Activate" : "Deactivate"} ${c.name}`}
+                    />
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 shrink-0"
+                      onClick={() => { setEditingId(c.id); setEditName(c.name); }}
+                      disabled={capital}
+                      aria-label={`Rename ${c.name}`}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" className="min-h-10" onClick={() => onOpenChange(false)}>Close</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -978,10 +1137,11 @@ export default function ExpensesView({ navigate }: ViewProps) {
 
   const eff = rangeKey === "custom" ? { from: customFrom, to: customTo } : rangeDates(rangeKey);
 
-  // Static option lists
+  // Static option lists (catVersion bumps when the category manager edits a category)
+  const [catVersion, setCatVersion] = useState(0);
   const categories = useAsync<{ items: ExpenseCategoryRec[] }>(
     () => api.get("/api/expense-categories" + qs({ business: business || undefined })),
-    [business]
+    [business, catVersion]
   );
   const vehicles = useAsync<{ items: VehicleRec[] }>(() => api.get("/api/vehicles"), []);
   const owners = useAsync<{ items: OwnerRec[] }>(() => api.get("/api/owners"), []);
@@ -1004,6 +1164,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
   // Recurring section
   const [recOpen, setRecOpen] = useState(false);
   const [recAddOpen, setRecAddOpen] = useState(false);
+  const [recEditTarget, setRecEditTarget] = useState<RecurringRow | null>(null);
   const recurring = useAsync<RecurringRow[]>(async () => {
     const d = await api.get<RecurringRow[] | { items: RecurringRow[] }>("/api/recurring-expenses");
     return Array.isArray(d) ? d : (d.items ?? []);
@@ -1015,6 +1176,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
   const [editTarget, setEditTarget] = useState<ExpenseRec | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ExpenseRec | null>(null);
+  const [catManageOpen, setCatManageOpen] = useState(false);
 
   // Quick actions from the Owner Breakdown tab open the Add Expense dialog
   // pre-filled with the right capital category (and owner when focused).
@@ -1107,7 +1269,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
   };
 
   const toggleRecurring = async (row: RecurringRow, next: boolean) => {
-    const res = await mutate(() => api.put(`/api/recurring-expenses/${row.id}/toggle`, { active: next }));
+    const res = await mutate(() => api.put(`/api/recurring-expenses/${row.id}/toggle`, { isActive: next }));
     if (res.ok) {
       toast.success(next ? `"${row.name}" activated` : `"${row.name}" paused`);
       void recurring.reload();
@@ -1390,7 +1552,16 @@ export default function ExpensesView({ navigate }: ViewProps) {
             <div className="space-y-4">
               <Card>
                 <CardContent className="p-3 sm:p-4">
-                  <p className="mb-3 text-sm font-semibold">Category breakdown</p>
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">Category breakdown</p>
+                    <Button
+                      size="sm" variant="ghost" className="h-7 gap-1 text-xs"
+                      onClick={() => setCatManageOpen(true)}
+                      aria-label="Manage expense categories"
+                    >
+                      <Pencil className="h-3 w-3" aria-hidden />Manage
+                    </Button>
+                  </div>
                   {expenses.loading ? (
                     <div className="space-y-2.5">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-8 rounded-lg bg-muted animate-pulse" />)}</div>
                   ) : (
@@ -1444,12 +1615,17 @@ export default function ExpensesView({ navigate }: ViewProps) {
                           </div>
                           <div className="mt-2 flex items-center justify-between gap-2">
                             <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                              <Switch checked={row.active ?? false} onCheckedChange={(v) => void toggleRecurring(row, v)} disabled={saving} aria-label={`Toggle ${row.name}`} />
-                              {row.active === false ? "Paused" : "Active"}
+                              <Switch checked={(row.isActive ?? row.active) ?? false} onCheckedChange={(v) => void toggleRecurring(row, v)} disabled={saving} aria-label={`Toggle ${row.name}`} />
+                              {(row.isActive ?? row.active) === false ? "Paused" : "Active"}
                             </label>
-                            <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={() => void runRecurring(row)} disabled={saving}>
-                              <Play className="h-3 w-3" aria-hidden />Run now
-                            </Button>
+                            <span className="flex items-center gap-1.5">
+                              <Button size="sm" variant="ghost" className="h-8 gap-1 text-xs" onClick={() => setRecEditTarget(row)} aria-label={`Edit ${row.name}`}>
+                                <Pencil className="h-3 w-3" aria-hidden />Edit
+                              </Button>
+                              <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={() => void runRecurring(row)} disabled={saving}>
+                                <Play className="h-3 w-3" aria-hidden />Run now
+                              </Button>
+                            </span>
                           </div>
                         </div>
                       ))}
@@ -1482,7 +1658,18 @@ export default function ExpensesView({ navigate }: ViewProps) {
         <ViewFab icon={Plus} label="Add expense" onClick={() => setAddOpen(true)} />
       )}
       <ExpenseFormDialog open={Boolean(editTarget)} onOpenChange={(v) => !v && setEditTarget(null)} expense={editTarget} vehicles={vehicles.data?.items ?? []} onDone={() => reloadExpenses()} />
-      <RecurringFormDialog open={recAddOpen} onOpenChange={setRecAddOpen} onDone={() => { void recurring.reload(); reloadExpenses(); }} />
+      <RecurringFormDialog
+        open={recAddOpen || Boolean(recEditTarget)}
+        onOpenChange={(v) => { setRecAddOpen(false); if (!v) setRecEditTarget(null); }}
+        recurring={recEditTarget}
+        onDone={() => { void recurring.reload(); reloadExpenses(); }}
+      />
+
+      <CategoryManagerDialog
+        open={catManageOpen}
+        onOpenChange={setCatManageOpen}
+        onChanged={() => setCatVersion((v) => v + 1)}
+      />
 
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(v) => !v && setDeleteTarget(null)}>
         <AlertDialogContent>

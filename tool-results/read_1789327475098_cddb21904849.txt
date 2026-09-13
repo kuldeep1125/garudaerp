@@ -1,0 +1,902 @@
+     1→// Shared server-side business engine for BizHub API routes.
+     2→// Pure logic + data access helpers reused across endpoints (property FIFO ledger,
+     3→// advance balances, settlement inputs, trip math, vehicle stats, notifications).
+     4→// NOTE: private folder (underscore prefix) — never treated as a route by Next.js.
+     5→import { db } from "@/lib/db";
+     6→import { round2 } from "@/lib/money";
+     7→import { HttpError, endOfDay, monthBounds, parseDate } from "@/lib/api-helpers";
+     8→import type { Prisma } from "@prisma/client";
+     9→
+    10→export type Tx = Prisma.TransactionClient;
+    11→
+    12→// Re-export the standard route toolkit so route files can import everything from one place.
+    13→export { handleRoute, readBody, requireFields, parseDate, parsePage, parseRange, monthBounds, endOfDay, HttpError } from "@/lib/api-helpers";
+    14→export { logAudit } from "@/lib/audit";
+    15→export { db } from "@/lib/db";
+    16→
+    17→/** Shift units: FULL = day + night = 2 paid/billed shift units. */
+    18→export const SHIFT_UNITS: Record<string, number> = { DAY: 1, NIGHT: 1, FULL: 2 };
+    19→export const SHIFTS = ["DAY", "NIGHT", "FULL"] as const;
+    20→export const EMPLOYEE_STATUSES = ["ACTIVE", "INACTIVE"] as const;
+    21→export const ADJUSTMENT_TYPES = ["BONUS", "OVERTIME", "DEDUCTION", "PENALTY", "OTHER"] as const;
+    22→export const BUSINESSES = ["MANPOWER", "TRANSPORT"] as const;
+    23→export const TRIP_STATUSES = ["CONFIRMED", "ACTIVE", "COMPLETED", "CANCELLED"] as const;
+    24→
+    25→export const EPS = 0.005;
+    26→
+    27→// ---------- employment types / rent / contractor (canonical constants) ----------
+    28→export const EMPLOYMENT_TYPES = ["NON_SALARIED", "SALARIED"] as const;
+    29→export const RENT_MODES = ["MONTH", "DAY"] as const;
+    30→
+    31→/**
+    32→ * Manpower money model (the zero-mismatch contract):
+    33→ *  - NON_SALARIED employee: cost = Σ deployment.payoutAmount (per shift, snapshot).
+    34→ *  - SALARIED employee: deployments carry payout 0; cost accrues as
+    35→ *    monthlySalary prorated per ACTIVE day + overtime = (deployments in month −
+    36→ *    threshold) × overtimeRate. Settlement gross for a full month uses the SAME
+    37→ *    formula, so settled statements always reconcile with accrued cost.
+    38→ *  - Contractor cut: snapshotted per deployment, taken FROM the employee's
+    39→ *    payout and paid to the contractor (business cost unchanged = split). Cuts
+    40→ *    that exceed the deployment payout (only possible on salaried/edge rows)
+    41→ *    are an EXTRA business cost and are added to the payout metric.
+    42→ *  - Employee rent (employee rents the business flat): ACCRUED INCOME —
+    43→ *    MONTH mode prorates rentAmount per active day over the calendar month,
+    44→ *    DAY mode charges rentAmount per active day.
+    45→ *  Canonical net: net = revenue + rentIncome − payout − operatingExpenses.
+    46→ */
+    47→export interface ManpowerCostBreakdown {
+    48→  billing: number;
+    49→  shiftPayout: number;
+    50→  contractorCut: number; // memo — commission earned by contractors (inside shiftPayout in the normal case)
+    51→  extraContractorCut: number; // cuts exceeding the deployment payout (salaried edge) — extra business cost
+    52→  salary: number; // salaried accrual in range
+    53→  overtime: number; // salaried overtime accrual in range
+    54→  rentIncome: number; // employee-rent accrual in range (income)
+    55→  payout: number; // THE employee-cost metric = shiftPayout + salary + overtime + extraContractorCut
+    56→  salariedCount: number;
+    57→  rentCount: number;
+    58→  contractorCount: number;
+    59→}
+    60→
+    61→export interface MonthSegment { from: Date; to: Date; month: string; daysInMonth: number }
+    62→
+    63→/** Splits [from, to] into calendar-month segments (clipped to the range). */
+    64→export function monthSegments(from: Date, to: Date): MonthSegment[] {
+    65→  const segs: MonthSegment[] = [];
+    66→  let cur = new Date(from.getFullYear(), from.getMonth(), 1);
+    67→  while (cur.getTime() <= to.getTime()) {
+    68→    const next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+    69→    const segEnd = new Date(next.getTime() - 1); // last ms of the month
+    70→    const dim = new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate();
+    71→    segs.push({
+    72→      from: startOfDay(cur < from ? from : cur),
+    73→      to: segEnd > to ? to : segEnd,
+    74→      month: monthKey(cur),
+    75→      daysInMonth: dim,
+    76→    });
+    77→    cur = next;
+    78→  }
+    79→  return segs;
+    80→}
+    81→
+    82→function daysBetweenInclusive(a: Date, b: Date): number {
+    83→  return Math.floor((startOfDay(b).getTime() - startOfDay(a).getTime()) / 86400000) + 1;
+    84→}
+    85→
+    86→/**
+    87→ * ACTIVE days for an employee inside a month segment: from joiningDate (or
+    88→ * segment start) to segment end — capped at the last work date for INACTIVE
+    89→ * employees (best available signal for "left the job").
+    90→ */
+    91→function activeDaysInSegment(
+    92→  emp: { joiningDate: Date; status: string },
+    93→  lastWork: Date | null,
+    94→  seg: MonthSegment,
+    95→): number {
+    96→  const start = emp.joiningDate > seg.from ? emp.joiningDate : seg.from;
+    97→  let end = seg.to;
+    98→  if (emp.status !== "ACTIVE") {
+    99→    const lw = lastWork ?? emp.joiningDate;
+   100→    if (lw < end) end = lw;
+   101→  }
+   102→  if (end < start) return 0;
+   103→  return Math.max(0, daysBetweenInclusive(start, end));
+   104→}
+   105→
+   106→/** Salaried gross for one full month — the settlement formula (accrual for a full month matches this). */
+   107→export function salaryOvertimeForMonth(
+   108→  emp: { monthlySalary: number; overtimeThreshold: number; overtimeRate: number },
+   109→  deploymentsInMonth: number,
+   110→): { salary: number; overtime: number; total: number; extraDeployments: number; threshold: number } {
+   111→  const threshold = emp.overtimeThreshold ?? 30;
+   112→  const extra = Math.max(0, deploymentsInMonth - threshold);
+   113→  const salary = round2(emp.monthlySalary ?? 0);
+   114→  const overtime = round2(extra * (emp.overtimeRate ?? 0));
+   115→  return { salary, overtime, total: round2(salary + overtime), extraDeployments: extra, threshold };
+   116→}
+   117→
+   118→/** Salaried salary + overtime accrual for an arbitrary range (per-employee reports). */
+   119→export async function salaryOvertimeForRange(
+   120→  emp: { id: string; joiningDate: Date; status: string; employmentType: string; monthlySalary: number; overtimeThreshold: number; overtimeRate: number },
+   121→  from: Date,
+   122→  to: Date,
+   123→  lastWork?: Date | null,
+   124→): Promise<{ salary: number; overtime: number }> {
+   125→  if (emp.employmentType !== "SALARIED") return { salary: 0, overtime: 0 };
+   126→  const segments = monthSegments(from, to);
+   127→  const segFrom = startOfDay(from);
+   128→  let salary = 0;
+   129→  let overtime = 0;
+   130→  for (const seg of segments) {
+   131→    const effSeg = { ...seg, from: seg.from < segFrom ? segFrom : seg.from };
+   132→    if (effSeg.from > effSeg.to) continue;
+   133→    const days = activeDaysInSegment(emp, lastWork ?? null, effSeg);
+   134→    salary += (emp.monthlySalary ?? 0) * (days / effSeg.daysInMonth);
+   135→    if ((emp.overtimeRate ?? 0) > 0) {
+   136→      const count = await db.deployment.count({ where: { employeeId: emp.id, date: { gte: effSeg.from, lte: effSeg.to } } });
+   137→      overtime += Math.max(0, count - (emp.overtimeThreshold ?? 30)) * (emp.overtimeRate ?? 0);
+   138→    }
+   139→  }
+   140→  return { salary: round2(salary), overtime: round2(overtime) };
+   141→}
+   142→
+   143→/** Employee rent accrual for one month segment. */
+   144→export function rentForSegment(
+   145→  emp: { onBusinessRent: boolean; rentAmount: number; rentMode: string },
+   146→  activeDays: number,
+   147→  seg: MonthSegment,
+   148→): number {
+   149→  if (!emp.onBusinessRent || activeDays <= 0) return 0;
+   150→  if (String(emp.rentMode).toUpperCase() === "DAY") return round2((emp.rentAmount ?? 0) * activeDays);
+   151→  return round2((emp.rentAmount ?? 0) * (activeDays / seg.daysInMonth));
+   152→}
+   153→
+   154→/**
+   155→ * THE canonical manpower cost/accrual aggregation for [from, to].
+   156→ * dashboard/summary, reports/profitability and monthly-metrics ALL read from
+   157→ * this function — numbers can never disagree across pages by construction.
+   158→ */
+   159→export async function manpowerCostBreakdown(from: Date, to: Date): Promise<ManpowerCostBreakdown> {
+   160→  const [depAgg, cutRows, specials, lastWorks] = await Promise.all([
+   161→    db.deployment.aggregate({
+   162→      where: { date: { gte: from, lte: to } },
+   163→      _sum: { billingAmount: true, payoutAmount: true, contractorCut: true },
+   164→    }),
+   165→    db.deployment.findMany({
+   166→      where: { date: { gte: from, lte: to }, contractorCut: { gt: 0 } },
+   167→      select: { payoutAmount: true, contractorCut: true },
+   168→    }),
+   169→    db.employee.findMany({
+   170→      where: { OR: [{ employmentType: "SALARIED" }, { onBusinessRent: true }] },
+   171→      select: { id: true, fullName: true, status: true, joiningDate: true, employmentType: true, monthlySalary: true, overtimeThreshold: true, overtimeRate: true, onBusinessRent: true, rentAmount: true, rentMode: true },
+   172→    }),
+   173→    db.deployment.groupBy({
+   174→      by: ["employeeId"],
+   175→      _max: { date: true },
+   176→      where: { employee: { OR: [{ employmentType: "SALARIED" }, { onBusinessRent: true }] } },
+   177→    }),
+   178→  ]);
+   179→
+   180→  const billing = round2(depAgg._sum.billingAmount ?? 0);
+   181→  const shiftPayout = round2(depAgg._sum.payoutAmount ?? 0);
+   182→  const contractorCut = round2(depAgg._sum.contractorCut ?? 0);
+   183→  let extraContractorCut = 0;
+   184→  for (const r of cutRows) extraContractorCut += Math.max(0, r.contractorCut - r.payoutAmount);
+   185→  extraContractorCut = round2(extraContractorCut);
+   186→
+   187→  const segments = monthSegments(from, to);
+   188→  const lastWorkBy = new Map(lastWorks.map((r) => [r.employeeId, r._max.date as Date | null]));
+   189→  let salary = 0;
+   190→  let overtime = 0;
+   191→  let rentIncome = 0;
+   192→  const segFrom = startOfDay(from);
+   193→  for (const emp of specials) {
+   194→    for (const seg of segments) {
+   195→      // only count days inside the requested range (segment is already clipped, but the
+   196→      // segment start may precede `from` when the range starts mid-month — clamp again)
+   197→      const effSeg = { ...seg, from: seg.from < segFrom ? segFrom : seg.from };
+   198→      if (effSeg.from > effSeg.to) continue;
+   199→      const lastWork = lastWorkBy.get(emp.id) ?? null;
+   200→      const days = activeDaysInSegment(emp, lastWork, effSeg);
+   201→      if (emp.employmentType === "SALARIED") {
+   202→        salary += (emp.monthlySalary ?? 0) * (days / effSeg.daysInMonth);
+   203→      }
+   204→      rentIncome += rentForSegment(emp, days, effSeg);
+   205→    }
+   206→    // overtime: per month segment, deployments of this employee inside the segment
+   207→    if (emp.employmentType === "SALARIED" && (emp.overtimeRate ?? 0) > 0) {
+   208→      for (const seg of segments) {
+   209→        const effSeg = { ...seg, from: seg.from < segFrom ? segFrom : seg.from };
+   210→        const count = await db.deployment.count({
+   211→          where: { employeeId: emp.id, date: { gte: effSeg.from, lte: effSeg.to } },
+   212→        });
+   213→        overtime += Math.max(0, count - (emp.overtimeThreshold ?? 30)) * (emp.overtimeRate ?? 0);
+   214→      }
+   215→    }
+   216→  }
+   217→  salary = round2(salary);
+   218→  overtime = round2(overtime);
+   219→  rentIncome = round2(rentIncome);
+   220→
+   221→  return {
+   222→    billing,
+   223→    shiftPayout,
+   224→    contractorCut,
+   225→    extraContractorCut,
+   226→    salary,
+   227→    overtime,
+   228→    rentIncome,
+   229→    payout: round2(shiftPayout + salary + overtime + extraContractorCut),
+   230→    salariedCount: specials.filter((e) => e.employmentType === "SALARIED").length,
+   231→    rentCount: specials.filter((e) => e.onBusinessRent).length,
+   232→    contractorCount: 0, // filled by callers that need it (cheap separate query)
+   233→  };
+   234→}
+   235→
+   236→export interface ContractorStat {
+   237→  name: string;
+   238→  todayDeployments: number;
+   239→  todayCommission: number;
+   240→  monthDeployments: number;
+   241→  monthCommission: number;
+   242→  employees: string[];
+   243→}
+   244→
+   245→/** Per-contractor commission: today + current month (dashboard cards). */
+   246→export async function contractorStats(): Promise<ContractorStat[]> {
+   247→  const now = new Date();
+   248→  const dayStart = startOfDay(now);
+   249→  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+   250→  const rows = await db.deployment.findMany({
+   251→    where: { contractorName: { not: null }, date: { gte: monthStart, lte: endOfDay(now) } },
+   252→    select: { contractorName: true, date: true, contractorCut: true, employee: { select: { fullName: true } } },
+   253→    orderBy: { date: "asc" },
+   254→  });
+   255→  const map = new Map<string, ContractorStat>();
+   256→  for (const r of rows) {
+   257→    const name = r.contractorName as string;
+   258→    const stat = map.get(name) ?? { name, todayDeployments: 0, todayCommission: 0, monthDeployments: 0, monthCommission: 0, employees: [] };
+   259→    stat.monthDeployments += 1;
+   260→    stat.monthCommission = round2(stat.monthCommission + r.contractorCut);
+   261→    if (!stat.employees.includes(r.employee.fullName)) stat.employees.push(r.employee.fullName);
+   262→    if (r.date >= dayStart) {
+   263→      stat.todayDeployments += 1;
+   264→      stat.todayCommission = round2(stat.todayCommission + r.contractorCut);
+   265→    }
+   266→    map.set(name, stat);
+   267→  }
+   268→  return [...map.values()].sort((a, b) => b.monthCommission - a.monthCommission);
+   269→}
+   270→
+   271→/** Distinct contractor names on the Employee master (for filters). */
+   272→export async function contractorNames(): Promise<string[]> {
+   273→  const rows = await db.employee.findMany({
+   274→    where: { hasContractor: true, contractorName: { not: null } },
+   275→    select: { contractorName: true },
+   276→    orderBy: { contractorName: "asc" },
+   277→  });
+   278→  return [...new Set(rows.map((r) => r.contractorName as string))];
+   279→}
+   280→
+   281→// ---------- owner capital movements (canonical predicate) ----------
+   282→// Owner CONTRIBUTION (money in) / WITHDRAWAL (drawings) are capital movements,
+   283→// NOT operating expenses. Every P&L aggregation must count OPERATING expenses
+   284→// only — the Owner Breakdown surfaces capital flows separately. This constant
+   285→// list is the single source of truth; Expense.kind is stamped from it on write.
+   286→export const CAPITAL_CATEGORY_NAMES = ["OWNER CONTRIBUTION", "OWNER WITHDRAWAL"] as const;
+   287→export const EXPENSE_KINDS = ["OPERATING", "CAPITAL"] as const;
+   288→
+   289→export function isCapitalCategoryName(name?: string | null): boolean {
+   290→  return (CAPITAL_CATEGORY_NAMES as readonly string[]).includes((name ?? "").trim().toUpperCase());
+   291→}
+   292→
+   293→/** Canonical expense kind stamp: capital when the category is an owner capital movement. */
+   294→export function expenseKindForCategory(categoryName?: string | null): (typeof EXPENSE_KINDS)[number] {
+   295→  return isCapitalCategoryName(categoryName) ? "CAPITAL" : "OPERATING";
+   296→}
+   297→
+   298→export interface ExpenseAttribution {
+   299→  isCommon: boolean;
+   300→  spentById: string | null;
+   301→  spentByName: string | null;
+   302→}
+   303→
+   304→/**
+   305→ * Resolves who the money is attributed to for an expense.
+   306→ * - `isCommon: true` (or spentById === "COMMON") → shared by all owners & the business;
+   307→ *   `spentBy` still records who physically took/spent the money (the acting user).
+   308→ * - `spentById` of a real owner → attributed to that owner.
+   309→ * - otherwise → attributed to the acting user.
+   310→ */
+   311→export async function resolveExpenseAttribution(
+   312→  body: { isCommon?: unknown; spentById?: unknown },
+   313→  actingOwner: { id: string; name: string },
+   314→): Promise<ExpenseAttribution> {
+   315→  if (body.isCommon === true || String(body.spentById ?? "") === "COMMON") {
+   316→    return { isCommon: true, spentById: actingOwner.id, spentByName: actingOwner.name };
+   317→  }
+   318→  const wanted = body.spentById ? String(body.spentById) : "";
+   319→  if (wanted && wanted !== actingOwner.id) {
+   320→    const o = await db.owner.findUnique({ where: { id: wanted } });
+   321→    if (!o || !o.isActive) throw new HttpError(404, "Selected owner not found");
+   322→    return { isCommon: false, spentById: o.id, spentByName: o.name };
+   323→  }
+   324→  return { isCommon: false, spentById: actingOwner.id, spentByName: actingOwner.name };
+   325→}
+   326→
+   327→// ---------- date helpers ----------
+   328→
+   329→export function dayKey(d: Date): string {
+   330→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+   331→}
+   332→
+   333→export function monthKey(d: Date): string {
+   334→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+   335→}
+   336→
+   337→export function parseYmd(s: string): Date {
+   338→  const [y, m, d] = s.split("-").map(Number);
+   339→  return new Date(y, (m ?? 1) - 1, d ?? 1);
+   340→}
+   341→
+   342→export function addMonths(d: Date, n: number): Date {
+   343→  const target = new Date(d.getFullYear(), d.getMonth() + n, 1);
+   344→  const dim = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+   345→  return new Date(target.getFullYear(), target.getMonth(), Math.min(d.getDate(), dim), d.getHours(), d.getMinutes());
+   346→}
+   347→
+   348→export function startOfDay(d: Date): Date {
+   349→  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+   350→}
+   351→
+   352→/** Range for reports: explicit from/to, else month param, else current month. */
+   353→export function reportRange(sp: URLSearchParams): { from: Date; to: Date } {
+   354→  const from = sp.get("from");
+   355→  const to = sp.get("to");
+   356→  if (from && to) return { from: parseDate(from), to: endOfDay(parseDate(to)) };
+   357→  const month = sp.get("month");
+   358→  if (month) return monthBounds(month);
+   359→  const now = new Date();
+   360→  return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: endOfDay(now) };
+   361→}
+   362→
+   363→export function currentMonth(): string {
+   364→  return monthKey(new Date());
+   365→}
+   366→
+   367→// ---------- property ledger (FIFO) ----------
+   368→
+   369→export interface LedgerDay {
+   370→  date: string;
+   371→  billed: number;
+   372→  paid: number;
+   373→  outstanding: number;
+   374→  status: "UNPAID" | "PARTIAL" | "PAID";
+   375→}
+   376→
+   377→export interface PropertyLedger {
+   378→  billed: number;
+   379→  received: number;
+   380→  outstanding: number;
+   381→  oldestUnpaidDate: string | null;
+   382→  unpaidCount: number;
+   383→  days: LedgerDay[];
+   384→  monthly: { month: string; billed: number; received: number }[];
+   385→}
+   386→
+   387→type LedgerDepRow = { date: Date; billingAmount: number };
+   388→type LedgerPayRow = { date: Date; amount: number };
+   389→
+   390→/**
+   391→ * FIFO walk: billable deployments sorted by date consume the payment pool
+   392→ * chronologically. Produces per-day rows + totals + monthly aggregates.
+   393→ */
+   394→export function ledgerFromRows(deployments: LedgerDepRow[], payments: LedgerPayRow[]): PropertyLedger {
+   395→  const billed = round2(deployments.reduce((s, d) => s + d.billingAmount, 0));
+   396→  const received = round2(payments.reduce((s, p) => s + p.amount, 0));
+   397→
+   398→  const byDay = new Map<string, { billed: number; paid: number; sort: number }>();
+   399→  const monthlyMap = new Map<string, { billed: number; received: number }>();
+   400→  const sorted = [...deployments].sort((a, b) => a.date.getTime() - b.date.getTime());
+   401→  let pool = received;
+   402→  for (const dep of sorted) {
+   403→    const dk = dayKey(dep.date);
+   404→    const row = byDay.get(dk) ?? { billed: 0, paid: 0, sort: dep.date.getTime() };
+   405→    const alloc = Math.max(0, Math.min(dep.billingAmount, pool));
+   406→    pool = round2(pool - alloc);
+   407→    row.billed = round2(row.billed + dep.billingAmount);
+   408→    row.paid = round2(row.paid + alloc);
+   409→    byDay.set(dk, row);
+   410→    const mk = monthKey(dep.date);
+   411→    const mrow = monthlyMap.get(mk) ?? { billed: 0, received: 0 };
+   412→    mrow.billed = round2(mrow.billed + dep.billingAmount);
+   413→    monthlyMap.set(mk, mrow);
+   414→  }
+   415→  for (const p of payments) {
+   416→    const mk = monthKey(p.date);
+   417→    const mrow = monthlyMap.get(mk) ?? { billed: 0, received: 0 };
+   418→    mrow.received = round2(mrow.received + p.amount);
+   419→    monthlyMap.set(mk, mrow);
+   420→  }
+   421→
+   422→  let running = 0;
+   423→  let oldestUnpaidDate: string | null = null;
+   424→  let unpaidCount = 0;
+   425→  const days: LedgerDay[] = [...byDay.entries()]
+   426→    .sort((a, b) => a[1].sort - b[1].sort)
+   427→    .map(([date, row]) => {
+   428→      running = round2(running + row.billed - row.paid);
+   429→      const status: LedgerDay["status"] =
+   430→        row.billed - row.paid <= EPS ? "PAID" : row.paid > EPS ? "PARTIAL" : "UNPAID";
+   431→      if (status !== "PAID") {
+   432→        unpaidCount++;
+   433→        if (!oldestUnpaidDate) oldestUnpaidDate = date;
+   434→      }
+   435→      return { date, billed: row.billed, paid: row.paid, outstanding: running, status };
+   436→    });
+   437→
+   438→  const monthly = [...monthlyMap.entries()]
+   439→    .sort(([a], [b]) => a.localeCompare(b))
+   440→    .map(([month, r]) => ({ month, billed: r.billed, received: r.received }));
+   441→
+   442→  return { billed, received, outstanding: round2(billed - received), oldestUnpaidDate, unpaidCount, days, monthly };
+   443→}
+   444→
+   445→/**
+   446→ * Computes FIFO ledgers for ALL properties in three bulk queries (no N+1).
+   447→ * Returns property rows plus a ledger per property id.
+   448→ */
+   449→export async function loadAllLedgers(): Promise<{
+   450→  properties: { id: string; name: string }[];
+   451→  map: Map<string, PropertyLedger>;
+   452→}> {
+   453→  const [properties, deps, pays] = await Promise.all([
+   454→    db.property.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
+   455→    db.deployment.findMany({
+   456→      select: { propertyId: true, date: true, billingAmount: true },
+   457→      orderBy: { date: "asc" },
+   458→    }),
+   459→    db.propertyPayment.findMany({
+   460→      select: { propertyId: true, date: true, amount: true },
+   461→      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+   462→    }),
+   463→  ]);
+   464→  const depBy = new Map<string, LedgerDepRow[]>();
+   465→  for (const d of deps) {
+   466→    const arr = depBy.get(d.propertyId) ?? [];
+   467→    arr.push({ date: d.date, billingAmount: d.billingAmount });
+   468→    depBy.set(d.propertyId, arr);
+   469→  }
+   470→  const payBy = new Map<string, LedgerPayRow[]>();
+   471→  for (const p of pays) {
+   472→    const arr = payBy.get(p.propertyId) ?? [];
+   473→    arr.push({ date: p.date, amount: p.amount });
+   474→    payBy.set(p.propertyId, arr);
+   475→  }
+   476→  const map = new Map<string, PropertyLedger>();
+   477→  for (const p of properties) {
+   478→    map.set(p.id, ledgerFromRows(depBy.get(p.id) ?? [], payBy.get(p.id) ?? []));
+   479→  }
+   480→  return { properties, map };
+   481→}
+   482→
+   483→export async function loadPropertyLedger(propertyId: string): Promise<PropertyLedger> {
+   484→  const [deps, pays] = await Promise.all([
+   485→    db.deployment.findMany({
+   486→      where: { propertyId },
+   487→      select: { date: true, billingAmount: true },
+   488→      orderBy: { date: "asc" },
+   489→    }),
+   490→    db.propertyPayment.findMany({
+   491→      where: { propertyId },
+   492→      select: { date: true, amount: true },
+   493→      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+   494→    }),
+   495→  ]);
+   496→  return ledgerFromRows(deps, pays);
+   497→}
+   498→
+   499→/**
+   500→ * Recomputes per-deployment paidAmount for a property via the FIFO pool.
+   501→ * Call inside a transaction after payments/deployments/amounts change.
+   502→ */
+   503→export async function recomputeDeploymentPaid(tx: Tx, propertyId: string): Promise<void> {
+   504→  const [deps, pays] = await Promise.all([
+   505→    tx.deployment.findMany({
+   506→      where: { propertyId },
+   507→      select: { id: true, paidAmount: true, date: true, billingAmount: true },
+   508→      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+   509→    }),
+   510→    tx.propertyPayment.findMany({
+   511→      where: { propertyId },
+   512→      select: { amount: true },
+   513→      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+   514→    }),
+   515→  ]);
+   516→  let pool = round2(pays.reduce((s, p) => s + p.amount, 0));
+   517→  for (const dep of deps) {
+   518→    const alloc = Math.max(0, Math.min(dep.billingAmount, pool));
+   519→    pool = round2(pool - alloc);
+   520→    if (Math.abs(dep.paidAmount - alloc) > EPS) {
+   521→      await tx.deployment.update({ where: { id: dep.id }, data: { paidAmount: alloc } });
+   522→    }
+   523→  }
+   524→}
+   525→
+   526→export function derivePaidStatus(billingAmount: number, paidAmount: number): "UNPAID" | "PARTIAL" | "PAID" {
+   527→  if (paidAmount <= EPS) return "UNPAID";
+   528→  if (paidAmount + EPS >= billingAmount && billingAmount > EPS) return "PAID";
+   529→  return "PARTIAL";
+   530→}
+   531→
+   532→/** API contract shape for a serialized deployment (dynamic passthrough fields + computed). */
+   533→export type DeploymentDto = Record<string, unknown> & {
+   534→  employeeName: string | null;
+   535→  employeeCode: string | null;
+   536→  propertyName: string | null;
+   537→  paidStatus: string;
+   538→};
+   539→
+   540→/** Maps a Deployment (with employee/property includes) to the API contract shape. */
+   541→export function serializeDeployment(d: {
+   542→  employee: { fullName: string; code: string } | null;
+   543→  property: { name: string } | null;
+   544→} & Record<string, unknown>): DeploymentDto {
+   545→  const { employee, property, ...rest } = d;
+   546→  return {
+   547→    ...rest,
+   548→    employeeName: employee?.fullName ?? null,
+   549→    employeeCode: employee?.code ?? null,
+   550→    propertyName: property?.name ?? null,
+   551→    paidStatus: derivePaidStatus(Number(rest.billingAmount), Number(rest.paidAmount)),
+   552→    shiftUnits: SHIFT_UNITS[String(rest.shift).toUpperCase()] ?? 1,
+   553→  };
+   554→}
+   555→
+   556→// ---------- employee advances ----------
+   557→
+   558→export interface AdvanceBalance {
+   559→  totalTaken: number;
+   560→  totalDeducted: number;
+   561→  balance: number;
+   562→}
+   563→
+   564→/** Σ advances − Σ settlements.advanceDeducted (status != CANCELLED) per employee. */
+   565→export async function advanceBalanceMap(employeeIds?: string[]): Promise<Map<string, AdvanceBalance>> {
+   566→  const empFilter = employeeIds ? { employeeId: { in: employeeIds } } : {};
+   567→  const [adv, set] = await Promise.all([
+   568→    db.advance.groupBy({ by: ["employeeId"], _sum: { amount: true }, where: empFilter }),
+   569→    db.settlement.groupBy({
+   570→      by: ["employeeId"],
+   571→      _sum: { advanceDeducted: true },
+   572→      where: { status: { not: "CANCELLED" }, ...empFilter },
+   573→    }),
+   574→  ]);
+   575→  const map = new Map<string, AdvanceBalance>();
+   576→  for (const row of adv) {
+   577→    map.set(row.employeeId, { totalTaken: round2(row._sum.amount ?? 0), totalDeducted: 0, balance: round2(row._sum.amount ?? 0) });
+   578→  }
+   579→  for (const row of set) {
+   580→    const cur = map.get(row.employeeId) ?? { totalTaken: 0, totalDeducted: 0, balance: 0 };
+   581→    cur.totalDeducted = round2(row._sum.advanceDeducted ?? 0);
+   582→    cur.balance = round2(cur.totalTaken - cur.totalDeducted);
+   583→    map.set(row.employeeId, cur);
+   584→  }
+   585→  return map;
+   586→}
+   587→
+   588→// ---------- trips ----------
+   589→
+   590→export function tripTarget(t: { finalAmount: number | null; agreedAmount: number; extraCharges: number }): number {
+   591→  return round2(t.finalAmount ?? t.agreedAmount + t.extraCharges);
+   592→}
+   593→
+   594→export function tripPaymentStatusFor(paidAmount: number, target: number): "PENDING" | "PARTIAL" | "PAID" {
+   595→  if (paidAmount <= EPS) return "PENDING";
+   596→  if (paidAmount + EPS < target) return "PARTIAL";
+   597→  return "PAID";
+   598→}
+   599→
+   600→/** Overlapping CONFIRMED/ACTIVE trip on the vehicle? (open-ended trip blocks everything after start) */
+   601→export async function findOverlappingTrip(
+   602→  vehicleId: string,
+   603→  startAt: Date,
+   604→  endAt: Date | null,
+   605→  excludeTripId?: string
+   606→) {
+   607→  const trips = await db.trip.findMany({
+   608→    where: { vehicleId, status: { in: ["CONFIRMED", "ACTIVE"] }, ...(excludeTripId ? { id: { not: excludeTripId } } : {}) },
+   609→    select: { id: true, startAt: true, endAt: true },
+   610→  });
+   611→  const newStart = startAt.getTime();
+   612→  const newEnd = endAt ? endAt.getTime() : Number.POSITIVE_INFINITY;
+   613→  return trips.find((t) => t.startAt.getTime() <= newEnd && (t.endAt ? t.endAt.getTime() : Number.POSITIVE_INFINITY) >= newStart) ?? null;
+   614→}
+   615→
+   616→// ---------- vehicle stats ----------
+   617→
+   618→export interface VehicleStat {
+   619→  monthRevenue: number;
+   620→  monthExpense: number;
+   621→  monthEmi: number;
+   622→  monthNet: number;
+   623→  revenue: number;
+   624→  expense: number;
+   625→  emi: number;
+   626→  net: number;
+   627→}
+   628→
+   629→export function emptyVehicleStat(): VehicleStat {
+   630→  return { monthRevenue: 0, monthExpense: 0, monthEmi: 0, monthNet: 0, revenue: 0, expense: 0, emi: 0, net: 0 };
+   631→}
+   632→
+   633→/** Revenue = trip paidAmount (by startAt). Expenses exclude EMI; EMI tracked separately. */
+   634→export async function vehicleStatsMap(vehicleIds: string[]): Promise<Map<string, VehicleStat>> {
+   635→  const map = new Map<string, VehicleStat>();
+   636→  if (!vehicleIds.length) return map;
+   637→  for (const id of vehicleIds) map.set(id, emptyVehicleStat());
+   638→  const now = new Date();
+   639→  const mFrom = new Date(now.getFullYear(), now.getMonth(), 1);
+   640→  const mTo = endOfDay(now);
+   641→  const [trips, expenses] = await Promise.all([
+   642→    db.trip.findMany({
+   643→      where: { vehicleId: { in: vehicleIds }, status: { not: "CANCELLED" } },
+   644→      select: { vehicleId: true, startAt: true, paidAmount: true },
+   645→    }),
+   646→    db.expense.findMany({
+   647→      where: { vehicleId: { in: vehicleIds } },
+   648→      select: { vehicleId: true, date: true, amount: true, categoryName: true, kind: true },
+   649→    }),
+   650→  ]);
+   651→  for (const t of trips) {
+   652→    const s = map.get(t.vehicleId);
+   653→    if (!s) continue;
+   654→    s.revenue = round2(s.revenue + t.paidAmount);
+   655→    if (t.startAt >= mFrom && t.startAt <= mTo) s.monthRevenue = round2(s.monthRevenue + t.paidAmount);
+   656→  }
+   657→  for (const e of expenses) {
+   658→    if (!e.vehicleId) continue; // nullable FK; filtered by query but guard anyway
+   659→    const s = map.get(e.vehicleId);
+   660→    if (!s) continue;
+   661→    if (e.kind === "CAPITAL") continue; // owner capital movements are never vehicle opex (defensive)
+   662→    const isEmi = (e.categoryName ?? "").toUpperCase() === "EMI";
+   663→    if (!isEmi) s.expense = round2(s.expense + e.amount);
+   664→    else s.emi = round2(s.emi + e.amount);
+   665→    if (e.date >= mFrom && e.date <= mTo) {
+   666→      if (!isEmi) s.monthExpense = round2(s.monthExpense + e.amount);
+   667→      else s.monthEmi = round2(s.monthEmi + e.amount);
+   668→    }
+   669→  }
+   670→  for (const s of map.values()) {
+   671→    s.monthNet = round2(s.monthRevenue - s.monthExpense - s.monthEmi);
+   672→    s.net = round2(s.revenue - s.expense - s.emi);
+   673→  }
+   674→  return map;
+   675→}
+   676→
+   677→/** emiEndDate derived from loan config: emiStartDate + emiCount months. */
+   678→export function deriveEmiEndDate(v: { emiStartDate: Date | null; emiCount: number | null }): Date | null {
+   679→  if (!v.emiStartDate || !v.emiCount || v.emiCount <= 0) return null;
+   680→  return addMonths(v.emiStartDate, v.emiCount);
+   681→}
+   682→
+   683→// ---------- auto expense creation (EMI / maintenance) ----------
+   684→
+   685→/** Finds (or lazily creates) the given category within a business, falling back to COMMON. */
+   686→export async function ensureCategory(name: string, business: string): Promise<{ id: string | null; name: string }> {
+   687→  const found = await db.expenseCategory.findFirst({ where: { name, business } });
+   688→  if (found) return { id: found.id, name: found.name };
+   689→  const common = await db.expenseCategory.findFirst({ where: { name, business: "COMMON" } });
+   690→  if (common) return { id: common.id, name: common.name };
+   691→  try {
+   692→    const created = await db.expenseCategory.create({ data: { name, business, kind: "FINANCIAL" } });
+   693→    return { id: created.id, name: created.name };
+   694→  } catch {
+   695→    return { id: null, name };
+   696→  }
+   697→}
+   698→
+   699→// ---------- notifications engine ----------
+   700→
+   701→export interface AppNotification {
+   702→  key: string;
+   703→  severity: "INFO" | "WARNING" | "CRITICAL";
+   704→  title: string;
+   705→  message: string;
+   706→  view: string;
+   707→  params?: Record<string, unknown>;
+   708→}
+   709→
+   710→const SEV_ORDER: Record<string, number> = { CRITICAL: 0, WARNING: 1, INFO: 2 };
+   711→
+   712→/** Live-computed notifications, filtered by dismissals, severity-sorted. */
+   713→export async function computeNotifications(): Promise<AppNotification[]> {
+   714→  const now = new Date();
+   715→  const today = startOfDay(now);
+   716→  const in7 = endOfDay(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 7));
+   717→  const in30 = endOfDay(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 30));
+   718→  const list: AppNotification[] = [];
+   719→
+   720→  // 1) Property outstanding balances
+   721→  const { properties, map: ledgers } = await loadAllLedgers();
+   722→  for (const p of properties) {
+   723→    const led = ledgers.get(p.id);
+   724→    if (!led || led.outstanding <= EPS) continue;
+   725→    const daysOver = led.oldestUnpaidDate
+   726→      ? Math.floor((today.getTime() - parseYmd(led.oldestUnpaidDate).getTime()) / 86400000)
+   727→      : 0;
+   728→    list.push({
+   729→      key: `prop-outstanding-${p.id}`,
+   730→      severity: daysOver > 14 ? "CRITICAL" : "WARNING",
+   731→      title: `${p.name} — payment pending`,
+   732→      message: `₹${led.outstanding.toLocaleString("en-IN")} outstanding across ${led.unpaidCount} unpaid day(s)${led.oldestUnpaidDate ? `; oldest since ${led.oldestUnpaidDate}` : ""}.`,
+   733→      view: "payments",
+   734→      params: { propertyId: p.id, propertyName: p.name },
+   735→    });
+   736→  }
+   737→
+   738→  // 2) Employee advance balances (top 3)
+   739→  const balances = await advanceBalanceMap();
+   740→  const owing = [...balances.entries()]
+   741→    .filter(([, b]) => b.balance > EPS)
+   742→    .sort((a, b) => b[1].balance - a[1].balance)
+   743→    .slice(0, 3);
+   744→  if (owing.length) {
+   745→    const emps = await db.employee.findMany({
+   746→      where: { id: { in: owing.map(([id]) => id) } },
+   747→      select: { id: true, fullName: true, code: true },
+   748→    });
+   749→    const byId = new Map(emps.map((e) => [e.id, e]));
+   750→    for (const [empId, bal] of owing) {
+   751→      const emp = byId.get(empId);
+   752→      if (!emp) continue;
+   753→      list.push({
+   754→        key: `emp-advance-${empId}`,
+   755→        severity: "INFO",
+   756→        title: `${emp.fullName} holds an advance`,
+   757→        message: `Advance balance ₹${bal.balance.toLocaleString("en-IN")} — will be deducted in the next settlement.`,
+   758→        view: "advances",
+   759→        params: { employeeId: empId },
+   760→      });
+   761→    }
+   762→  }
+   763→
+   764→  // 3) Previous-month settlements not finalized
+   765→  const prevMonth = monthKey(addMonths(new Date(now.getFullYear(), now.getMonth(), 1), -1));
+   766→  const draftCount = await db.settlement.count({ where: { month: prevMonth, status: "DRAFT" } });
+   767→  if (draftCount > 0) {
+   768→    list.push({
+   769→      key: `settle-draft-${prevMonth}`,
+   770→      severity: "WARNING",
+   771→      title: "Previous month settlements pending",
+   772→      message: `${draftCount} settlement draft(s) for ${prevMonth} not finalized yet.`,
+   773→      view: "settlements",
+   774→      params: { month: prevMonth },
+   775→    });
+   776→  }
+   777→
+   778→  // 4) EMI due within 7 days
+   779→  const emis = await db.vehicleEmiPayment.findMany({
+   780→    where: { status: "PENDING", dueDate: { gte: today, lte: in7 } },
+   781→    include: { vehicle: { select: { name: true } } },
+   782→    orderBy: { dueDate: "asc" },
+   783→  });
+   784→  for (const e of emis) {
+   785→    list.push({
+   786→      key: `emi-${e.id}`,
+   787→      severity: "WARNING",
+   788→      title: `EMI due — ${e.vehicle.name}`,
+   789→      message: `₹${e.amount.toLocaleString("en-IN")} EMI for ${e.month} due on ${dayKey(e.dueDate)}.`,
+   790→      view: "vehicle-detail",
+   791→      params: { vehicleId: e.vehicleId },
+   792→    });
+   793→  }
+   794→
+   795→  // 5) Insurance / fitness expiry within 30 days
+   796→  const vehicles = await db.vehicle.findMany({
+   797→    select: { id: true, name: true, registrationNumber: true, insuranceExpiry: true, fitnessExpiry: true },
+   798→  });
+   799→  for (const v of vehicles) {
+   800→    if (v.insuranceExpiry && v.insuranceExpiry.getTime() <= in30.getTime()) {
+   801→      list.push({
+   802→        key: `veh-ins-${v.id}`,
+   803→        severity: v.insuranceExpiry < today ? "CRITICAL" : "WARNING",
+   804→        title: `Insurance ${v.insuranceExpiry < today ? "expired" : "expiring"} — ${v.name}`,
+   805→        message: `Insurance (${v.registrationNumber}) expires on ${dayKey(v.insuranceExpiry)}.`,
+   806→        view: "vehicle-detail",
+   807→        params: { vehicleId: v.id },
+   808→      });
+   809→    }
+   810→    if (v.fitnessExpiry && v.fitnessExpiry.getTime() <= in30.getTime()) {
+   811→      list.push({
+   812→        key: `veh-fit-${v.id}`,
+   813→        severity: v.fitnessExpiry < today ? "CRITICAL" : "WARNING",
+   814→        title: `Fitness ${v.fitnessExpiry < today ? "expired" : "expiring"} — ${v.name}`,
+   815→        message: `Fitness certificate for ${v.registrationNumber} expires on ${dayKey(v.fitnessExpiry)}.`,
+   816→        view: "vehicle-detail",
+   817→        params: { vehicleId: v.id },
+   818→      });
+   819→    }
+   820→  }
+   821→
+   822→  // 6) Scheduled maintenance
+   823→  const maintenances = await db.maintenance.findMany({
+   824→    where: { status: "SCHEDULED" },
+   825→    include: { vehicle: { select: { name: true } } },
+   826→    orderBy: { date: "asc" },
+   827→  });
+   828→  for (const m of maintenances) {
+   829→    list.push({
+   830→      key: `mnt-${m.id}`,
+   831→      severity: "INFO",
+   832→      title: `Maintenance scheduled — ${m.vehicle.name}`,
+   833→      message: `${m.type} on ${dayKey(m.date)}${m.description ? ` — ${m.description}` : ""}.`,
+   834→      view: "vehicle-detail",
+   835→      params: { vehicleId: m.vehicleId },
+   836→    });
+   837→  }
+   838→
+   839→  // 7) Trips with pending payments
+   840→  const trips = await db.trip.findMany({
+   841→    where: { status: { not: "CANCELLED" }, paymentStatus: { in: ["PENDING", "PARTIAL"] } },
+   842→    include: { vehicle: { select: { name: true } }, client: { select: { name: true } } },
+   843→    orderBy: { startAt: "asc" },
+   844→    take: 10,
+   845→  });
+   846→  for (const t of trips) {
+   847→    const pending = round2(tripTarget(t) - t.paidAmount);
+   848→    if (pending <= EPS) continue;
+   849→    list.push({
+   850→      key: `trip-pay-${t.id}`,
+   851→      severity: "WARNING",
+   852→      title: `Trip payment pending — ${t.vehicle.name}`,
+   853→      message: `${t.client?.name ?? "Client"} owes ₹${pending.toLocaleString("en-IN")} (${t.rentalType.toLowerCase()} from ${dayKey(t.startAt)}).`,
+   854→      view: "trips",
+   855→      params: { tripId: t.id },
+   856→    });
+   857→  }
+   858→
+   859→  const dismissed = await db.notificationDismiss.findMany({ select: { key: true } });
+   860→  const dismissedSet = new Set(dismissed.map((d) => d.key));
+   861→  return list
+   862→    .filter((n) => !dismissedSet.has(n.key))
+   863→    .sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
+   864→}
+   865→
+   866→// ---------- misc ----------
+   867→
+   868→/** Next sequential code like EMP-007 / VEH-003 based on existing rows. */
+   869→export async function nextCode(prefix: string, kind: "employee" | "vehicle"): Promise<string> {
+   870→  const rows =
+   871→    kind === "employee"
+   872→      ? await db.employee.findMany({ where: { code: { startsWith: `${prefix}-` } }, select: { code: true } })
+   873→      : await db.vehicle.findMany({ where: { code: { startsWith: `${prefix}-` } }, select: { code: true } });
+   874→  let max = 0;
+   875→  for (const r of rows) {
+   876→    const n = parseInt(r.code.slice(prefix.length + 1), 10);
+   877→    if (Number.isFinite(n) && n > max) max = n;
+   878→  }
+   879→  return `${prefix}-${String(max + 1).padStart(3, "0")}`;
+   880→}
+   881→
+   882→export function requireEnum<T extends string>(value: unknown, allowed: readonly T[], label: string): T {
+   883→  const v = String(value ?? "").toUpperCase();
+   884→  if (!allowed.includes(v as T)) {
+   885→    throw new HttpError(400, `Invalid ${label}: must be one of ${allowed.join(", ")}`);
+   886→  }
+   887→  return v as T;
+   888→}
+   889→
+   890→export function requirePositiveAmount(value: unknown, label = "Amount"): number {
+   891→  const n = typeof value === "string" ? parseFloat(value) : Number(value);
+   892→  if (!Number.isFinite(n) || n <= 0) throw new HttpError(400, `${label} must be greater than 0`);
+   893→  return round2(n);
+   894→}
+   895→
+   896→export function optionalAmount(value: unknown, fallback = 0): number {
+   897→  if (value === undefined || value === null || value === "") return fallback;
+   898→  const n = typeof value === "string" ? parseFloat(value) : Number(value);
+   899→  if (!Number.isFinite(n)) throw new HttpError(400, "Invalid number value");
+   900→  return round2(n);
+   901→}
+   902→

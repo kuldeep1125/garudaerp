@@ -27,6 +27,7 @@ import {
   InitialAvatar, MoneyInput, Option, SelectInput, SettlementRec, SHIFT_UNITS, ShiftBadgeInline, errMessage, fmtDay,
   todayStr, useMutation,
 } from "./_shared";
+import { EmployeeFormDialog } from "@/components/shared/employee-form-dialog";
 
 interface AdjustmentRec {
   id: string; employeeId?: string; employeeName?: string; date: string;
@@ -115,7 +116,6 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
   const [advanceOpen, setAdvanceOpen] = useState(false);
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [editForm, setEditForm] = useState({ fullName: "", mobile: "", designation: "", standardRate: "", skills: "", city: "", upiId: "", bankDetails: "", notes: "" });
   const { mutate, saving } = useMutation();
 
   const load = useCallback(async () => {
@@ -148,34 +148,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
     if (res.ok) void load();
   };
 
-  const openEdit = () => {
-    const e = data?.employee;
-    setEditForm({
-      fullName: e?.fullName ?? "", mobile: e?.mobile ?? "", designation: e?.designation ?? "",
-      standardRate: e?.standardRate ? String(e.standardRate) : "", skills: e?.skills ?? "",
-      city: e?.city ?? "", upiId: e?.upiId ?? "", bankDetails: e?.bankDetails ?? "", notes: e?.notes ?? "",
-    });
-    setEditOpen(true);
-  };
-
-  const submitEdit = async () => {
-    if (!editForm.fullName.trim()) { toast.error("Full name is required"); return; }
-    const res = await mutate(
-      () => api.put(`/api/employees/${id}`, {
-        fullName: editForm.fullName.trim(),
-        mobile: editForm.mobile || undefined,
-        designation: editForm.designation || undefined,
-        standardRate: editForm.standardRate ? parseAmount(editForm.standardRate) : undefined,
-        skills: editForm.skills || undefined,
-        city: editForm.city || undefined,
-        upiId: editForm.upiId || undefined,
-        bankDetails: editForm.bankDetails || undefined,
-        notes: editForm.notes || undefined,
-      }),
-      "Profile updated"
-    );
-    if (res.ok) { setEditOpen(false); void load(); }
-  };
+  const openEdit = () => setEditOpen(true);
 
   const workColumns: Column<DeploymentRec>[] = [
     { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
@@ -637,36 +610,10 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
       <GiveAdvanceDialog open={advanceOpen} onOpenChange={setAdvanceOpen} defaultEmployeeId={id} employees={emp ? [{ id: emp.id, fullName: emp.fullName, code: emp.code, standardRate: emp.standardRate, advanceBalance: emp.advanceBalance }] : undefined} onDone={afterAdvance} />
       <AddAdjustmentDialog open={adjustOpen} onOpenChange={setAdjustOpen} employeeId={id} onDone={load} />
 
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Edit profile</DialogTitle>
-            <DialogDescription>Update contact, rate and payment details.</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Full name" required className="sm:col-span-2">
-              <Input value={editForm.fullName} onChange={(e) => setEditForm((f) => ({ ...f, fullName: e.target.value }))} className="h-10" />
-            </Field>
-            <Field label="Mobile"><Input value={editForm.mobile} onChange={(e) => setEditForm((f) => ({ ...f, mobile: e.target.value }))} className="h-10" /></Field>
-            <Field label="Designation"><Input value={editForm.designation} onChange={(e) => setEditForm((f) => ({ ...f, designation: e.target.value }))} className="h-10" /></Field>
-            <Field
-              label="Payout rate (₹/shift)"
-              hint="Applies to future deployments only — past records keep their original rate."
-            >
-              <MoneyInput value={editForm.standardRate} onChange={(v) => setEditForm((f) => ({ ...f, standardRate: v }))} className="h-10" />
-            </Field>
-            <Field label="City"><Input value={editForm.city} onChange={(e) => setEditForm((f) => ({ ...f, city: e.target.value }))} className="h-10" /></Field>
-            <Field label="Skills" className="sm:col-span-2"><Input value={editForm.skills} onChange={(e) => setEditForm((f) => ({ ...f, skills: e.target.value }))} className="h-10" /></Field>
-            <Field label="UPI ID"><Input value={editForm.upiId} onChange={(e) => setEditForm((f) => ({ ...f, upiId: e.target.value }))} className="h-10" /></Field>
-            <Field label="Bank details"><Input value={editForm.bankDetails} onChange={(e) => setEditForm((f) => ({ ...f, bankDetails: e.target.value }))} className="h-10" /></Field>
-            <Field label="Notes" className="sm:col-span-2"><Input value={editForm.notes} onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))} className="h-10" /></Field>
-          </div>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => setEditOpen(false)}>Cancel</Button>
-            <Button className="min-h-10 flex-1 sm:flex-none" onClick={submitEdit} disabled={saving}>{saving ? "Saving…" : "Save changes"}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Full-parity edit dialog — the SAME component the employees list uses,
+          so every field (employment type, salary, overtime, rent, contractor,
+          contact, bank) is editable from the detail page too. */}
+      <EmployeeFormDialog open={editOpen} onOpenChange={setEditOpen} employee={emp ?? null} onDone={load} />
     </div>
   );
 }

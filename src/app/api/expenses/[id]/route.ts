@@ -2,7 +2,9 @@ import { db } from "@/lib/db";
 import { handleRoute, readBody, parseDate, HttpError } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
-import { requirePositiveAmount, resolveExpenseAttribution, expenseKindForCategory } from "@/app/api/_lib/engine";
+import {
+  BUSINESSES, requireEnum, requirePositiveAmount, resolveExpenseAttribution, expenseKindForCategory,
+} from "@/app/api/_lib/engine";
 
 export const PUT = handleRoute(async ({ owner, params, req }) => {
   const { id } = params;
@@ -18,6 +20,12 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
   if (body.notes !== undefined) data.notes = body.notes === null || body.notes === "" ? null : String(body.notes);
   if (body.reason !== undefined) data.reason = body.reason === null || body.reason === "" ? null : String(body.reason);
 
+  // Business is editable on PUT (mirrors POST) — the edit dialog sends it.
+  const business = body.business !== undefined
+    ? requireEnum(body.business, BUSINESSES, "business")
+    : existing.business;
+  if (body.business !== undefined) data.business = business;
+
   if (body.categoryId !== undefined) {
     if (body.categoryId === null || body.categoryId === "") {
       data.categoryId = null;
@@ -25,11 +33,25 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
     } else {
       const cat = await db.expenseCategory.findUnique({ where: { id: String(body.categoryId) } });
       if (!cat) throw new HttpError(404, "Expense category not found");
+      // Same category↔business rule as POST: the category must belong to the
+      // (possibly new) business or be COMMON.
+      if (cat.business !== business && cat.business !== "COMMON") {
+        throw new HttpError(400, `Category "${cat.name}" belongs to ${cat.business}, not ${business}`);
+      }
       data.categoryId = cat.id;
       data.categoryName = cat.name;
     }
+  } else if (body.business !== undefined && business !== existing.business && existing.categoryId) {
+    // Business switched without an explicit category: the kept category must
+    // still be valid for the new business (never silently keep a mismatched one).
+    const cat = await db.expenseCategory.findUnique({ where: { id: existing.categoryId } });
+    if (cat && cat.business !== business && cat.business !== "COMMON") {
+      throw new HttpError(400, `Category "${cat.name}" belongs to ${cat.business}, not ${business} — pick a category for the new business`);
+    }
   }
-  // Re-stamp capital/operating whenever the category (name) changes.
+
+  // Re-stamp capital/operating in the same pass that resolves business+category —
+  // kind depends only on the final category name, so it always ends up correct.
   if (data.categoryName !== undefined) {
     data.kind = expenseKindForCategory(data.categoryName as string | null);
   }
@@ -44,6 +66,11 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
       data.vehicleId = vehicle.id;
       data.vehicleName = vehicle.name;
     }
+  } else if (body.business !== undefined && business !== "TRANSPORT" && existing.vehicleId) {
+    // Mirror POST's invariant (vehicleId only for TRANSPORT): moving the expense
+    // to MANPOWER detaches the vehicle — matches what the edit form shows.
+    data.vehicleId = null;
+    data.vehicleName = null;
   }
 
   // Owner attribution: explicit isCommon flag wins; otherwise the selected owner.
@@ -65,9 +92,9 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
     action: "UPDATE",
     module: "EXPENSE",
     recordId: id,
-    recordLabel: `${existing.business} ₹${expense.amount.toLocaleString("en-IN")} — ${expense.categoryName ?? "Uncategorized"}`,
-    previousValue: { amount: existing.amount, description: existing.description, categoryName: existing.categoryName, date: existing.date, isCommon: existing.isCommon, spentByName: existing.spentByName, reason: existing.reason },
-    newValue: { amount: expense.amount, description: expense.description, categoryName: expense.categoryName, date: expense.date, isCommon: expense.isCommon, spentByName: expense.spentByName, reason: expense.reason },
+    recordLabel: `${expense.business} ₹${expense.amount.toLocaleString("en-IN")} — ${expense.categoryName ?? "Uncategorized"}`,
+    previousValue: { amount: existing.amount, business: existing.business, description: existing.description, categoryName: existing.categoryName, kind: existing.kind, date: existing.date, isCommon: existing.isCommon, spentByName: existing.spentByName, reason: existing.reason, vehicleName: existing.vehicleName },
+    newValue: { amount: expense.amount, business: expense.business, description: expense.description, categoryName: expense.categoryName, kind: expense.kind, date: expense.date, isCommon: expense.isCommon, spentByName: expense.spentByName, reason: expense.reason, vehicleName: expense.vehicleName },
   });
   return expense;
 });
