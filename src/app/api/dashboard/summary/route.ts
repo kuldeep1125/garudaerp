@@ -20,11 +20,11 @@ export const GET = handleRoute(async ({ req }) => {
   const revenue = round2(manpower.expectedBilling + transport.revenue);
   const expenses = round2(manpower.expenses + transport.expenses);
   // CANONICAL NET RESULT — identical definition to reports/profitability and
-  // monthly-metrics: revenue − employee payout − operating expenses. Employee
-  // payout is a real cost and MUST be deducted here too, otherwise this card
-  // disagrees with the Reports page (the exact mismatch class that is
-  // non-negotiable for this app).
-  const net = round2(revenue - manpower.payout - expenses);
+  // monthly-metrics: revenue + employee-rent income − employee cost − operating
+  // expenses. Employee cost = shift payouts + salaried salary accrual + overtime
+  // + extra contractor cuts (the same `payout` metric Reports uses). Every new
+  // "net" surface MUST reuse manpowerCostBreakdown or it WILL mismatch.
+  const net = round2(revenue + manpower.rentIncome - manpower.payout - expenses);
   return {
     range: { from: dayKey(from), to: dayKey(to) },
     manpower,
@@ -32,6 +32,7 @@ export const GET = handleRoute(async ({ req }) => {
     combined: {
       revenue,
       employeePayout: manpower.payout,
+      rentIncome: manpower.rentIncome,
       expenses,
       net,
       manpowerMargin: manpower.grossMargin,

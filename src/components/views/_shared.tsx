@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -49,6 +50,16 @@ export interface EmployeeRec {
   skills?: string | null;
   standardRate?: number | null;
   rateType?: string | null;
+  employmentType?: string | null; // NON_SALARIED | SALARIED
+  monthlySalary?: number | null;
+  overtimeThreshold?: number | null;
+  overtimeRate?: number | null;
+  onBusinessRent?: boolean | null;
+  rentAmount?: number | null;
+  rentMode?: string | null; // MONTH | DAY
+  hasContractor?: boolean | null;
+  contractorName?: string | null;
+  contractorRateCut?: number | null;
   status: string;
   bankDetails?: string | null;
   upiId?: string | null;
@@ -72,6 +83,9 @@ export interface DeploymentRec {
   payoutAmount?: number;
   adjustmentAmount?: number | null;
   adjustmentNote?: string | null;
+  contractorName?: string | null;
+  contractorRateCut?: number | null;
+  contractorCut?: number | null;
   paidStatus?: string;
   paidAmount?: number | null;
   notes?: string | null;
@@ -143,6 +157,7 @@ export interface SettlementRec {
   additions?: number;
   advanceDeducted?: number;
   otherDeductions?: number;
+  contractorCut?: number;
   netPayable?: number;
   advanceCarryForward?: number | null;
   status: string;
@@ -749,6 +764,11 @@ export interface PickerEmployee {
   fullName: string;
   code?: string | null;
   standardRate?: number | null;
+  employmentType?: string | null;
+  monthlySalary?: number | null;
+  hasContractor?: boolean | null;
+  contractorName?: string | null;
+  contractorRateCut?: number | null;
   advanceBalance?: number | null;
 }
 
@@ -837,8 +857,12 @@ export function EmployeePicker({ employees, value, onChange, multi = true, heigh
               )}
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{e.fullName}</p>
-                <p className="text-[11px] text-muted-foreground">
-                  {e.code ?? ""}{e.standardRate ? ` · ${formatINR(e.standardRate)}/shift` : ""}
+                <p className="truncate text-[11px] text-muted-foreground">
+                  {e.code ?? ""}
+                  {e.employmentType === "SALARIED"
+                    ? ` · Salaried ${formatINR(e.monthlySalary ?? 0)}/mo`
+                    : e.standardRate ? ` · ${formatINR(e.standardRate)}/shift` : ""}
+                  {e.hasContractor && e.contractorName ? ` · via ${e.contractorName}` : ""}
                 </p>
               </div>
               {blocked && blockedReason ? (
@@ -1181,6 +1205,30 @@ export const SHIFT_OPTIONS: Option[] = [
   { label: "Full (Day + Night)", value: "FULL" },
 ];
 
+/** Employee pay/contract badges: Salaried / Rent / Contractor — shown in list + detail. */
+export function EmployeePayBadges({ r, compact = false }: { r: EmployeeRec; compact?: boolean }) {
+  const salaried = r.employmentType === "SALARIED";
+  return (
+    <>
+      {salaried && (
+        <Badge variant="outline" className="border-teal-200 bg-teal-50 text-[10px] tabular-nums text-teal-700 dark:border-teal-900 dark:bg-teal-950 dark:text-teal-300">
+          Salaried {formatINR(r.monthlySalary ?? 0)}/mo
+        </Badge>
+      )}
+      {r.onBusinessRent && (
+        <Badge variant="outline" className="border-violet-200 bg-violet-50 text-[10px] tabular-nums text-violet-700 dark:border-violet-900 dark:bg-violet-950 dark:text-violet-300">
+          Rent {formatINR(r.rentAmount ?? 0)}/{(r.rentMode ?? "MONTH").toLowerCase() === "DAY" ? "day" : "mo"}
+        </Badge>
+      )}
+      {r.hasContractor && r.contractorName && !compact && (
+        <Badge variant="outline" className="border-amber-200 bg-amber-50 text-[10px] tabular-nums text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+          Via {r.contractorName}{(r.contractorRateCut ?? 0) > 0 ? ` · ${formatINR(r.contractorRateCut ?? 0)}/shift` : ""}
+        </Badge>
+      )}
+    </>
+  );
+}
+
 export const SHIFT_UNITS: Record<string, number> = { DAY: 1, NIGHT: 1, FULL: 2 };
 
 // ---------------------------------------------------------------------------
@@ -1306,20 +1354,30 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
     if (o?.billingRate !== undefined && o?.billingRate !== "") return parseAmount(o.billingRate);
     return property?.billingRate ?? 0;
   };
+  /** Salaried employees never earn per-shift payouts — their cost is the monthly salary. */
+  const isSalariedRow = (e: PickerEmployee) => e.employmentType === "SALARIED";
   const rowPayoutRate = (e: PickerEmployee) => {
+    if (isSalariedRow(e)) return 0;
     const o = rowState[e.id];
     if (o?.payoutRate !== undefined && o?.payoutRate !== "") return parseAmount(o.payoutRate);
     return e.standardRate ?? 0;
   };
+  /** Contractor commission for a row — snapshotted per deployment from the employee master. */
+  const rowContractorCut = (e: PickerEmployee) =>
+    e.hasContractor && e.contractorName && (e.contractorRateCut ?? 0) > 0
+      ? { name: e.contractorName, perShift: e.contractorRateCut ?? 0 }
+      : null;
 
   const totals = useMemo(() => {
-    let billing = 0, payout = 0;
+    let billing = 0, payout = 0, contractorCut = 0;
     for (const e of selectedEmployees) {
       const units = SHIFT_UNITS[rowShift(e.id)] ?? 1;
       billing += rowBillingRate(e) * units;
       payout += rowPayoutRate(e) * units;
+      const cut = rowContractorCut(e);
+      if (cut) contractorCut += cut.perShift * units;
     }
-    return { billing, payout, margin: billing - payout };
+    return { billing, payout: Math.round(payout * 100) / 100, contractorCut: Math.round(contractorCut * 100) / 100, margin: billing - payout };
   }, [selectedEmployees, rowState, property]);
 
   const buildBody = (ids: string[]) => ({
@@ -1520,6 +1578,8 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
                   const units = SHIFT_UNITS[shift] ?? 1;
                   const bRate = rowBillingRate(e);
                   const pRate = rowPayoutRate(e);
+                  const salaried = isSalariedRow(e);
+                  const cut = rowContractorCut(e);
                   return (
                     <div key={e.id} className={cn(
                       "rounded-xl border p-2.5 transition-colors",
@@ -1528,7 +1588,11 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
                       <div className="flex items-center justify-between gap-2">
                         <div className="min-w-0">
                           <p className="truncate text-xs font-medium">{e.fullName} <span className="text-muted-foreground">({e.code})</span></p>
-                          <p className="text-[10px] text-muted-foreground">Auto: bill {formatINR(property?.billingRate ?? 0)} · pay {formatINR(e.standardRate ?? 0)}/shift</p>
+                          <p className="text-[10px] text-muted-foreground">
+                            {salaried
+                              ? <>Auto: bill {formatINR(property?.billingRate ?? 0)} · <span className="font-semibold text-foreground">Salaried {formatINR(e.monthlySalary ?? 0)}/mo</span> — no per-shift pay</>
+                              : <>Auto: bill {formatINR(property?.billingRate ?? 0)} · pay {formatINR(e.standardRate ?? 0)}/shift</>}
+                          </p>
                         </div>
                         {/* Per-person shift segmented control */}
                         <div className="flex shrink-0 rounded-lg border bg-muted/50 p-0.5" role="group" aria-label={`Shift for ${e.fullName}`}>
@@ -1567,15 +1631,27 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
                           />
                         </div>
                         <div>
-                          <Label className="mb-1 block text-[10px] uppercase tracking-wide text-muted-foreground">Payout ₹/shift</Label>
+                          <Label className="mb-1 block text-[10px] uppercase tracking-wide text-muted-foreground">
+                            {salaried ? "Payout (salary model)" : "Payout ₹/shift"}
+                          </Label>
                           <MoneyInput
                             className="h-8 text-right text-xs tabular-nums"
-                            value={st.payoutRate ?? String(e.standardRate ?? 0)}
+                            value={salaried ? "0" : (st.payoutRate ?? String(e.standardRate ?? 0))}
                             onChange={(v) => setRowState((r) => ({ ...r, [e.id]: { ...r[e.id], payoutRate: v } }))}
+                            disabled={salaried}
                             aria-label={`Payout rate for ${e.fullName}`}
                           />
                         </div>
                       </div>
+                      {(cut || salaried) && clashes.length === 0 && (
+                        <p className="mt-1.5 text-left text-[10px] tabular-nums text-muted-foreground">
+                          {cut && (
+                            <>Contractor <span className="font-semibold text-foreground">{cut.name}</span> gets {formatINR(cut.perShift)}/shift → {formatINR(cut.perShift * units)} of this payout · employee nets {formatINR(Math.max(0, pRate * units - cut.perShift * units))}</>
+                          )}
+                          {cut && salaried && " · "}
+                          {salaried && <>Salaried — cost accrues via monthly salary, not per shift</>}
+                        </p>
+                      )}
                       {clashes.length > 0 ? (
                         <p className="mt-1.5 flex items-start gap-1 text-[10px] font-semibold text-red-600 dark:text-red-400">
                           <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />
@@ -1602,9 +1678,12 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
             </p>
           )}
           {step === 3 && (
-            <div className="mb-2.5 flex items-center justify-between rounded-lg bg-muted/60 px-3 py-2 text-xs font-medium tabular-nums">
+            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 rounded-lg bg-muted/60 px-3 py-2 text-xs font-medium tabular-nums">
               <span>Billing <span className="font-bold">{formatINR(totals.billing)}</span></span>
               <span>Payout <span className="font-bold">{formatINR(totals.payout)}</span></span>
+              {totals.contractorCut > 0 && (
+                <span title="Contractor commission is paid out of the payout above">Contractor cut <span className="font-bold">{formatINR(totals.contractorCut)}</span></span>
+              )}
               <span className={totals.margin >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>
                 Margin <span className="font-bold">{formatINR(totals.margin)}</span>
               </span>
@@ -1665,6 +1744,20 @@ export function DeployWizard({ open, onOpenChange, defaultDate, defaultPropertyI
 
 export function ShiftBadgeInline({ shift }: { shift: string }) {
   const s = String(shift).toUpperCase();
+  if (s === "SALARY") {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />Salary
+      </span>
+    );
+  }
+  if (s === "OVERTIME") {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />Overtime
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
       {s === "FULL" ? (

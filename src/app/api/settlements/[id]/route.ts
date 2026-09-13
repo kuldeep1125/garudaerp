@@ -16,7 +16,11 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
   const additions = body.additions !== undefined ? round2(Number(body.additions) || 0) : existing.additions;
   const otherDeductions =
     body.otherDeductions !== undefined ? round2(Math.max(0, Number(body.otherDeductions) || 0)) : existing.otherDeductions;
-  const netPayable = round2(existing.grossEarnings + additions - otherDeductions - existing.advanceDeducted);
+  // CANONICAL settlement math (never editable): net = gross + additions
+  // − other deductions − contractor commission − advance deduction.
+  const netPayable = round2(
+    existing.grossEarnings + additions - otherDeductions - (existing.contractorCut ?? 0) - existing.advanceDeducted,
+  );
   const notes = body.notes !== undefined ? (body.notes === null || body.notes === "" ? null : String(body.notes)) : existing.notes;
 
   const settlement = await db.settlement.update({

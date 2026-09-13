@@ -1,0 +1,648 @@
+     1→     1→// Shared server-side business engine for BizHub API routes.
+     2→     2→// Pure logic + data access helpers reused across endpoints (property FIFO ledger,
+     3→     3→// advance balances, settlement inputs, trip math, vehicle stats, notifications).
+     4→     4→// NOTE: private folder (underscore prefix) — never treated as a route by Next.js.
+     5→     5→import { db } from "@/lib/db";
+     6→     6→import { round2 } from "@/lib/money";
+     7→     7→import { HttpError, endOfDay, monthBounds, parseDate } from "@/lib/api-helpers";
+     8→     8→import type { Prisma } from "@prisma/client";
+     9→     9→
+    10→    10→export type Tx = Prisma.TransactionClient;
+    11→    11→
+    12→    12→// Re-export the standard route toolkit so route files can import everything from one place.
+    13→    13→export { handleRoute, readBody, requireFields, parseDate, parsePage, parseRange, monthBounds, endOfDay, HttpError } from "@/lib/api-helpers";
+    14→    14→export { logAudit } from "@/lib/audit";
+    15→    15→export { db } from "@/lib/db";
+    16→    16→
+    17→    17→/** Shift units: FULL = day + night = 2 paid/billed shift units. */
+    18→    18→export const SHIFT_UNITS: Record<string, number> = { DAY: 1, NIGHT: 1, FULL: 2 };
+    19→    19→export const SHIFTS = ["DAY", "NIGHT", "FULL"] as const;
+    20→    20→export const EMPLOYEE_STATUSES = ["ACTIVE", "INACTIVE"] as const;
+    21→    21→export const ADJUSTMENT_TYPES = ["BONUS", "OVERTIME", "DEDUCTION", "PENALTY", "OTHER"] as const;
+    22→    22→export const BUSINESSES = ["MANPOWER", "TRANSPORT"] as const;
+    23→    23→export const TRIP_STATUSES = ["CONFIRMED", "ACTIVE", "COMPLETED", "CANCELLED"] as const;
+    24→    24→
+    25→    25→export const EPS = 0.005;
+    26→    26→
+    27→    27→// ---------- owner capital movements (canonical predicate) ----------
+    28→    28→// Owner CONTRIBUTION (money in) / WITHDRAWAL (drawings) are capital movements,
+    29→    29→// NOT operating expenses. Every P&L aggregation must count OPERATING expenses
+    30→    30→// only — the Owner Breakdown surfaces capital flows separately. This constant
+    31→    31→// list is the single source of truth; Expense.kind is stamped from it on write.
+    32→    32→export const CAPITAL_CATEGORY_NAMES = ["OWNER CONTRIBUTION", "OWNER WITHDRAWAL"] as const;
+    33→    33→export const EXPENSE_KINDS = ["OPERATING", "CAPITAL"] as const;
+    34→    34→
+    35→    35→export function isCapitalCategoryName(name?: string | null): boolean {
+    36→    36→  return (CAPITAL_CATEGORY_NAMES as readonly string[]).includes((name ?? "").trim().toUpperCase());
+    37→    37→}
+    38→    38→
+    39→    39→/** Canonical expense kind stamp: capital when the category is an owner capital movement. */
+    40→    40→export function expenseKindForCategory(categoryName?: string | null): (typeof EXPENSE_KINDS)[number] {
+    41→    41→  return isCapitalCategoryName(categoryName) ? "CAPITAL" : "OPERATING";
+    42→    42→}
+    43→    43→
+    44→    44→export interface ExpenseAttribution {
+    45→    45→  isCommon: boolean;
+    46→    46→  spentById: string | null;
+    47→    47→  spentByName: string | null;
+    48→    48→}
+    49→    49→
+    50→    50→/**
+    51→    51→ * Resolves who the money is attributed to for an expense.
+    52→    52→ * - `isCommon: true` (or spentById === "COMMON") → shared by all owners & the business;
+    53→    53→ *   `spentBy` still records who physically took/spent the money (the acting user).
+    54→    54→ * - `spentById` of a real owner → attributed to that owner.
+    55→    55→ * - otherwise → attributed to the acting user.
+    56→    56→ */
+    57→    57→export async function resolveExpenseAttribution(
+    58→    58→  body: { isCommon?: unknown; spentById?: unknown },
+    59→    59→  actingOwner: { id: string; name: string },
+    60→    60→): Promise<ExpenseAttribution> {
+    61→    61→  if (body.isCommon === true || String(body.spentById ?? "") === "COMMON") {
+    62→    62→    return { isCommon: true, spentById: actingOwner.id, spentByName: actingOwner.name };
+    63→    63→  }
+    64→    64→  const wanted = body.spentById ? String(body.spentById) : "";
+    65→    65→  if (wanted && wanted !== actingOwner.id) {
+    66→    66→    const o = await db.owner.findUnique({ where: { id: wanted } });
+    67→    67→    if (!o || !o.isActive) throw new HttpError(404, "Selected owner not found");
+    68→    68→    return { isCommon: false, spentById: o.id, spentByName: o.name };
+    69→    69→  }
+    70→    70→  return { isCommon: false, spentById: actingOwner.id, spentByName: actingOwner.name };
+    71→    71→}
+    72→    72→
+    73→    73→// ---------- date helpers ----------
+    74→    74→
+    75→    75→export function dayKey(d: Date): string {
+    76→    76→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    77→    77→}
+    78→    78→
+    79→    79→export function monthKey(d: Date): string {
+    80→    80→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    81→    81→}
+    82→    82→
+    83→    83→export function parseYmd(s: string): Date {
+    84→    84→  const [y, m, d] = s.split("-").map(Number);
+    85→    85→  return new Date(y, (m ?? 1) - 1, d ?? 1);
+    86→    86→}
+    87→    87→
+    88→    88→export function addMonths(d: Date, n: number): Date {
+    89→    89→  const target = new Date(d.getFullYear(), d.getMonth() + n, 1);
+    90→    90→  const dim = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+    91→    91→  return new Date(target.getFullYear(), target.getMonth(), Math.min(d.getDate(), dim), d.getHours(), d.getMinutes());
+    92→    92→}
+    93→    93→
+    94→    94→export function startOfDay(d: Date): Date {
+    95→    95→  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    96→    96→}
+    97→    97→
+    98→    98→/** Range for reports: explicit from/to, else month param, else current month. */
+    99→    99→export function reportRange(sp: URLSearchParams): { from: Date; to: Date } {
+   100→   100→  const from = sp.get("from");
+   101→   101→  const to = sp.get("to");
+   102→   102→  if (from && to) return { from: parseDate(from), to: endOfDay(parseDate(to)) };
+   103→   103→  const month = sp.get("month");
+   104→   104→  if (month) return monthBounds(month);
+   105→   105→  const now = new Date();
+   106→   106→  return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: endOfDay(now) };
+   107→   107→}
+   108→   108→
+   109→   109→export function currentMonth(): string {
+   110→   110→  return monthKey(new Date());
+   111→   111→}
+   112→   112→
+   113→   113→// ---------- property ledger (FIFO) ----------
+   114→   114→
+   115→   115→export interface LedgerDay {
+   116→   116→  date: string;
+   117→   117→  billed: number;
+   118→   118→  paid: number;
+   119→   119→  outstanding: number;
+   120→   120→  status: "UNPAID" | "PARTIAL" | "PAID";
+   121→   121→}
+   122→   122→
+   123→   123→export interface PropertyLedger {
+   124→   124→  billed: number;
+   125→   125→  received: number;
+   126→   126→  outstanding: number;
+   127→   127→  oldestUnpaidDate: string | null;
+   128→   128→  unpaidCount: number;
+   129→   129→  days: LedgerDay[];
+   130→   130→  monthly: { month: string; billed: number; received: number }[];
+   131→   131→}
+   132→   132→
+   133→   133→type LedgerDepRow = { date: Date; billingAmount: number };
+   134→   134→type LedgerPayRow = { date: Date; amount: number };
+   135→   135→
+   136→   136→/**
+   137→   137→ * FIFO walk: billable deployments sorted by date consume the payment pool
+   138→   138→ * chronologically. Produces per-day rows + totals + monthly aggregates.
+   139→   139→ */
+   140→   140→export function ledgerFromRows(deployments: LedgerDepRow[], payments: LedgerPayRow[]): PropertyLedger {
+   141→   141→  const billed = round2(deployments.reduce((s, d) => s + d.billingAmount, 0));
+   142→   142→  const received = round2(payments.reduce((s, p) => s + p.amount, 0));
+   143→   143→
+   144→   144→  const byDay = new Map<string, { billed: number; paid: number; sort: number }>();
+   145→   145→  const monthlyMap = new Map<string, { billed: number; received: number }>();
+   146→   146→  const sorted = [...deployments].sort((a, b) => a.date.getTime() - b.date.getTime());
+   147→   147→  let pool = received;
+   148→   148→  for (const dep of sorted) {
+   149→   149→    const dk = dayKey(dep.date);
+   150→   150→    const row = byDay.get(dk) ?? { billed: 0, paid: 0, sort: dep.date.getTime() };
+   151→   151→    const alloc = Math.max(0, Math.min(dep.billingAmount, pool));
+   152→   152→    pool = round2(pool - alloc);
+   153→   153→    row.billed = round2(row.billed + dep.billingAmount);
+   154→   154→    row.paid = round2(row.paid + alloc);
+   155→   155→    byDay.set(dk, row);
+   156→   156→    const mk = monthKey(dep.date);
+   157→   157→    const mrow = monthlyMap.get(mk) ?? { billed: 0, received: 0 };
+   158→   158→    mrow.billed = round2(mrow.billed + dep.billingAmount);
+   159→   159→    monthlyMap.set(mk, mrow);
+   160→   160→  }
+   161→   161→  for (const p of payments) {
+   162→   162→    const mk = monthKey(p.date);
+   163→   163→    const mrow = monthlyMap.get(mk) ?? { billed: 0, received: 0 };
+   164→   164→    mrow.received = round2(mrow.received + p.amount);
+   165→   165→    monthlyMap.set(mk, mrow);
+   166→   166→  }
+   167→   167→
+   168→   168→  let running = 0;
+   169→   169→  let oldestUnpaidDate: string | null = null;
+   170→   170→  let unpaidCount = 0;
+   171→   171→  const days: LedgerDay[] = [...byDay.entries()]
+   172→   172→    .sort((a, b) => a[1].sort - b[1].sort)
+   173→   173→    .map(([date, row]) => {
+   174→   174→      running = round2(running + row.billed - row.paid);
+   175→   175→      const status: LedgerDay["status"] =
+   176→   176→        row.billed - row.paid <= EPS ? "PAID" : row.paid > EPS ? "PARTIAL" : "UNPAID";
+   177→   177→      if (status !== "PAID") {
+   178→   178→        unpaidCount++;
+   179→   179→        if (!oldestUnpaidDate) oldestUnpaidDate = date;
+   180→   180→      }
+   181→   181→      return { date, billed: row.billed, paid: row.paid, outstanding: running, status };
+   182→   182→    });
+   183→   183→
+   184→   184→  const monthly = [...monthlyMap.entries()]
+   185→   185→    .sort(([a], [b]) => a.localeCompare(b))
+   186→   186→    .map(([month, r]) => ({ month, billed: r.billed, received: r.received }));
+   187→   187→
+   188→   188→  return { billed, received, outstanding: round2(billed - received), oldestUnpaidDate, unpaidCount, days, monthly };
+   189→   189→}
+   190→   190→
+   191→   191→/**
+   192→   192→ * Computes FIFO ledgers for ALL properties in three bulk queries (no N+1).
+   193→   193→ * Returns property rows plus a ledger per property id.
+   194→   194→ */
+   195→   195→export async function loadAllLedgers(): Promise<{
+   196→   196→  properties: { id: string; name: string }[];
+   197→   197→  map: Map<string, PropertyLedger>;
+   198→   198→}> {
+   199→   199→  const [properties, deps, pays] = await Promise.all([
+   200→   200→    db.property.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
+   201→   201→    db.deployment.findMany({
+   202→   202→      select: { propertyId: true, date: true, billingAmount: true },
+   203→   203→      orderBy: { date: "asc" },
+   204→   204→    }),
+   205→   205→    db.propertyPayment.findMany({
+   206→   206→      select: { propertyId: true, date: true, amount: true },
+   207→   207→      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+   208→   208→    }),
+   209→   209→  ]);
+   210→   210→  const depBy = new Map<string, LedgerDepRow[]>();
+   211→   211→  for (const d of deps) {
+   212→   212→    const arr = depBy.get(d.propertyId) ?? [];
+   213→   213→    arr.push({ date: d.date, billingAmount: d.billingAmount });
+   214→   214→    depBy.set(d.propertyId, arr);
+   215→   215→  }
+   216→   216→  const payBy = new Map<string, LedgerPayRow[]>();
+   217→   217→  for (const p of pays) {
+   218→   218→    const arr = payBy.get(p.propertyId) ?? [];
+   219→   219→    arr.push({ date: p.date, amount: p.amount });
+   220→   220→    payBy.set(p.propertyId, arr);
+   221→   221→  }
+   222→   222→  const map = new Map<string, PropertyLedger>();
+   223→   223→  for (const p of properties) {
+   224→   224→    map.set(p.id, ledgerFromRows(depBy.get(p.id) ?? [], payBy.get(p.id) ?? []));
+   225→   225→  }
+   226→   226→  return { properties, map };
+   227→   227→}
+   228→   228→
+   229→   229→export async function loadPropertyLedger(propertyId: string): Promise<PropertyLedger> {
+   230→   230→  const [deps, pays] = await Promise.all([
+   231→   231→    db.deployment.findMany({
+   232→   232→      where: { propertyId },
+   233→   233→      select: { date: true, billingAmount: true },
+   234→   234→      orderBy: { date: "asc" },
+   235→   235→    }),
+   236→   236→    db.propertyPayment.findMany({
+   237→   237→      where: { propertyId },
+   238→   238→      select: { date: true, amount: true },
+   239→   239→      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+   240→   240→    }),
+   241→   241→  ]);
+   242→   242→  return ledgerFromRows(deps, pays);
+   243→   243→}
+   244→   244→
+   245→   245→/**
+   246→   246→ * Recomputes per-deployment paidAmount for a property via the FIFO pool.
+   247→   247→ * Call inside a transaction after payments/deployments/amounts change.
+   248→   248→ */
+   249→   249→export async function recomputeDeploymentPaid(tx: Tx, propertyId: string): Promise<void> {
+   250→   250→  const [deps, pays] = await Promise.all([
+   251→   251→    tx.deployment.findMany({
+   252→   252→      where: { propertyId },
+   253→   253→      select: { id: true, paidAmount: true, date: true, billingAmount: true },
+   254→   254→      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+   255→   255→    }),
+   256→   256→    tx.propertyPayment.findMany({
+   257→   257→      where: { propertyId },
+   258→   258→      select: { amount: true },
+   259→   259→      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+   260→   260→    }),
+   261→   261→  ]);
+   262→   262→  let pool = round2(pays.reduce((s, p) => s + p.amount, 0));
+   263→   263→  for (const dep of deps) {
+   264→   264→    const alloc = Math.max(0, Math.min(dep.billingAmount, pool));
+   265→   265→    pool = round2(pool - alloc);
+   266→   266→    if (Math.abs(dep.paidAmount - alloc) > EPS) {
+   267→   267→      await tx.deployment.update({ where: { id: dep.id }, data: { paidAmount: alloc } });
+   268→   268→    }
+   269→   269→  }
+   270→   270→}
+   271→   271→
+   272→   272→export function derivePaidStatus(billingAmount: number, paidAmount: number): "UNPAID" | "PARTIAL" | "PAID" {
+   273→   273→  if (paidAmount <= EPS) return "UNPAID";
+   274→   274→  if (paidAmount + EPS >= billingAmount && billingAmount > EPS) return "PAID";
+   275→   275→  return "PARTIAL";
+   276→   276→}
+   277→   277→
+   278→   278→/** API contract shape for a serialized deployment (dynamic passthrough fields + computed). */
+   279→   279→export type DeploymentDto = Record<string, unknown> & {
+   280→   280→  employeeName: string | null;
+   281→   281→  employeeCode: string | null;
+   282→   282→  propertyName: string | null;
+   283→   283→  paidStatus: string;
+   284→   284→};
+   285→   285→
+   286→   286→/** Maps a Deployment (with employee/property includes) to the API contract shape. */
+   287→   287→export function serializeDeployment(d: {
+   288→   288→  employee: { fullName: string; code: string } | null;
+   289→   289→  property: { name: string } | null;
+   290→   290→} & Record<string, unknown>): DeploymentDto {
+   291→   291→  const { employee, property, ...rest } = d;
+   292→   292→  return {
+   293→   293→    ...rest,
+   294→   294→    employeeName: employee?.fullName ?? null,
+   295→   295→    employeeCode: employee?.code ?? null,
+   296→   296→    propertyName: property?.name ?? null,
+   297→   297→    paidStatus: derivePaidStatus(Number(rest.billingAmount), Number(rest.paidAmount)),
+   298→   298→    shiftUnits: SHIFT_UNITS[String(rest.shift).toUpperCase()] ?? 1,
+   299→   299→  };
+   300→   300→}
+   301→   301→
+   302→   302→// ---------- employee advances ----------
+   303→   303→
+   304→   304→export interface AdvanceBalance {
+   305→   305→  totalTaken: number;
+   306→   306→  totalDeducted: number;
+   307→   307→  balance: number;
+   308→   308→}
+   309→   309→
+   310→   310→/** Σ advances − Σ settlements.advanceDeducted (status != CANCELLED) per employee. */
+   311→   311→export async function advanceBalanceMap(employeeIds?: string[]): Promise<Map<string, AdvanceBalance>> {
+   312→   312→  const empFilter = employeeIds ? { employeeId: { in: employeeIds } } : {};
+   313→   313→  const [adv, set] = await Promise.all([
+   314→   314→    db.advance.groupBy({ by: ["employeeId"], _sum: { amount: true }, where: empFilter }),
+   315→   315→    db.settlement.groupBy({
+   316→   316→      by: ["employeeId"],
+   317→   317→      _sum: { advanceDeducted: true },
+   318→   318→      where: { status: { not: "CANCELLED" }, ...empFilter },
+   319→   319→    }),
+   320→   320→  ]);
+   321→   321→  const map = new Map<string, AdvanceBalance>();
+   322→   322→  for (const row of adv) {
+   323→   323→    map.set(row.employeeId, { totalTaken: round2(row._sum.amount ?? 0), totalDeducted: 0, balance: round2(row._sum.amount ?? 0) });
+   324→   324→  }
+   325→   325→  for (const row of set) {
+   326→   326→    const cur = map.get(row.employeeId) ?? { totalTaken: 0, totalDeducted: 0, balance: 0 };
+   327→   327→    cur.totalDeducted = round2(row._sum.advanceDeducted ?? 0);
+   328→   328→    cur.balance = round2(cur.totalTaken - cur.totalDeducted);
+   329→   329→    map.set(row.employeeId, cur);
+   330→   330→  }
+   331→   331→  return map;
+   332→   332→}
+   333→   333→
+   334→   334→// ---------- trips ----------
+   335→   335→
+   336→   336→export function tripTarget(t: { finalAmount: number | null; agreedAmount: number; extraCharges: number }): number {
+   337→   337→  return round2(t.finalAmount ?? t.agreedAmount + t.extraCharges);
+   338→   338→}
+   339→   339→
+   340→   340→export function tripPaymentStatusFor(paidAmount: number, target: number): "PENDING" | "PARTIAL" | "PAID" {
+   341→   341→  if (paidAmount <= EPS) return "PENDING";
+   342→   342→  if (paidAmount + EPS < target) return "PARTIAL";
+   343→   343→  return "PAID";
+   344→   344→}
+   345→   345→
+   346→   346→/** Overlapping CONFIRMED/ACTIVE trip on the vehicle? (open-ended trip blocks everything after start) */
+   347→   347→export async function findOverlappingTrip(
+   348→   348→  vehicleId: string,
+   349→   349→  startAt: Date,
+   350→   350→  endAt: Date | null,
+   351→   351→  excludeTripId?: string
+   352→   352→) {
+   353→   353→  const trips = await db.trip.findMany({
+   354→   354→    where: { vehicleId, status: { in: ["CONFIRMED", "ACTIVE"] }, ...(excludeTripId ? { id: { not: excludeTripId } } : {}) },
+   355→   355→    select: { id: true, startAt: true, endAt: true },
+   356→   356→  });
+   357→   357→  const newStart = startAt.getTime();
+   358→   358→  const newEnd = endAt ? endAt.getTime() : Number.POSITIVE_INFINITY;
+   359→   359→  return trips.find((t) => t.startAt.getTime() <= newEnd && (t.endAt ? t.endAt.getTime() : Number.POSITIVE_INFINITY) >= newStart) ?? null;
+   360→   360→}
+   361→   361→
+   362→   362→// ---------- vehicle stats ----------
+   363→   363→
+   364→   364→export interface VehicleStat {
+   365→   365→  monthRevenue: number;
+   366→   366→  monthExpense: number;
+   367→   367→  monthEmi: number;
+   368→   368→  monthNet: number;
+   369→   369→  revenue: number;
+   370→   370→  expense: number;
+   371→   371→  emi: number;
+   372→   372→  net: number;
+   373→   373→}
+   374→   374→
+   375→   375→export function emptyVehicleStat(): VehicleStat {
+   376→   376→  return { monthRevenue: 0, monthExpense: 0, monthEmi: 0, monthNet: 0, revenue: 0, expense: 0, emi: 0, net: 0 };
+   377→   377→}
+   378→   378→
+   379→   379→/** Revenue = trip paidAmount (by startAt). Expenses exclude EMI; EMI tracked separately. */
+   380→   380→export async function vehicleStatsMap(vehicleIds: string[]): Promise<Map<string, VehicleStat>> {
+   381→   381→  const map = new Map<string, VehicleStat>();
+   382→   382→  if (!vehicleIds.length) return map;
+   383→   383→  for (const id of vehicleIds) map.set(id, emptyVehicleStat());
+   384→   384→  const now = new Date();
+   385→   385→  const mFrom = new Date(now.getFullYear(), now.getMonth(), 1);
+   386→   386→  const mTo = endOfDay(now);
+   387→   387→  const [trips, expenses] = await Promise.all([
+   388→   388→    db.trip.findMany({
+   389→   389→      where: { vehicleId: { in: vehicleIds }, status: { not: "CANCELLED" } },
+   390→   390→      select: { vehicleId: true, startAt: true, paidAmount: true },
+   391→   391→    }),
+   392→   392→    db.expense.findMany({
+   393→   393→      where: { vehicleId: { in: vehicleIds } },
+   394→   394→      select: { vehicleId: true, date: true, amount: true, categoryName: true, kind: true },
+   395→   395→    }),
+   396→   396→  ]);
+   397→   397→  for (const t of trips) {
+   398→   398→    const s = map.get(t.vehicleId);
+   399→   399→    if (!s) continue;
+   400→   400→    s.revenue = round2(s.revenue + t.paidAmount);
+   401→   401→    if (t.startAt >= mFrom && t.startAt <= mTo) s.monthRevenue = round2(s.monthRevenue + t.paidAmount);
+   402→   402→  }
+   403→   403→  for (const e of expenses) {
+   404→   404→    if (!e.vehicleId) continue; // nullable FK; filtered by query but guard anyway
+   405→   405→    const s = map.get(e.vehicleId);
+   406→   406→    if (!s) continue;
+   407→   407→    if (e.kind === "CAPITAL") continue; // owner capital movements are never vehicle opex (defensive)
+   408→   408→    const isEmi = (e.categoryName ?? "").toUpperCase() === "EMI";
+   409→   409→    if (!isEmi) s.expense = round2(s.expense + e.amount);
+   410→   410→    else s.emi = round2(s.emi + e.amount);
+   411→   411→    if (e.date >= mFrom && e.date <= mTo) {
+   412→   412→      if (!isEmi) s.monthExpense = round2(s.monthExpense + e.amount);
+   413→   413→      else s.monthEmi = round2(s.monthEmi + e.amount);
+   414→   414→    }
+   415→   415→  }
+   416→   416→  for (const s of map.values()) {
+   417→   417→    s.monthNet = round2(s.monthRevenue - s.monthExpense - s.monthEmi);
+   418→   418→    s.net = round2(s.revenue - s.expense - s.emi);
+   419→   419→  }
+   420→   420→  return map;
+   421→   421→}
+   422→   422→
+   423→   423→/** emiEndDate derived from loan config: emiStartDate + emiCount months. */
+   424→   424→export function deriveEmiEndDate(v: { emiStartDate: Date | null; emiCount: number | null }): Date | null {
+   425→   425→  if (!v.emiStartDate || !v.emiCount || v.emiCount <= 0) return null;
+   426→   426→  return addMonths(v.emiStartDate, v.emiCount);
+   427→   427→}
+   428→   428→
+   429→   429→// ---------- auto expense creation (EMI / maintenance) ----------
+   430→   430→
+   431→   431→/** Finds (or lazily creates) the given category within a business, falling back to COMMON. */
+   432→   432→export async function ensureCategory(name: string, business: string): Promise<{ id: string | null; name: string }> {
+   433→   433→  const found = await db.expenseCategory.findFirst({ where: { name, business } });
+   434→   434→  if (found) return { id: found.id, name: found.name };
+   435→   435→  const common = await db.expenseCategory.findFirst({ where: { name, business: "COMMON" } });
+   436→   436→  if (common) return { id: common.id, name: common.name };
+   437→   437→  try {
+   438→   438→    const created = await db.expenseCategory.create({ data: { name, business, kind: "FINANCIAL" } });
+   439→   439→    return { id: created.id, name: created.name };
+   440→   440→  } catch {
+   441→   441→    return { id: null, name };
+   442→   442→  }
+   443→   443→}
+   444→   444→
+   445→   445→// ---------- notifications engine ----------
+   446→   446→
+   447→   447→export interface AppNotification {
+   448→   448→  key: string;
+   449→   449→  severity: "INFO" | "WARNING" | "CRITICAL";
+   450→   450→  title: string;
+   451→   451→  message: string;
+   452→   452→  view: string;
+   453→   453→  params?: Record<string, unknown>;
+   454→   454→}
+   455→   455→
+   456→   456→const SEV_ORDER: Record<string, number> = { CRITICAL: 0, WARNING: 1, INFO: 2 };
+   457→   457→
+   458→   458→/** Live-computed notifications, filtered by dismissals, severity-sorted. */
+   459→   459→export async function computeNotifications(): Promise<AppNotification[]> {
+   460→   460→  const now = new Date();
+   461→   461→  const today = startOfDay(now);
+   462→   462→  const in7 = endOfDay(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 7));
+   463→   463→  const in30 = endOfDay(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 30));
+   464→   464→  const list: AppNotification[] = [];
+   465→   465→
+   466→   466→  // 1) Property outstanding balances
+   467→   467→  const { properties, map: ledgers } = await loadAllLedgers();
+   468→   468→  for (const p of properties) {
+   469→   469→    const led = ledgers.get(p.id);
+   470→   470→    if (!led || led.outstanding <= EPS) continue;
+   471→   471→    const daysOver = led.oldestUnpaidDate
+   472→   472→      ? Math.floor((today.getTime() - parseYmd(led.oldestUnpaidDate).getTime()) / 86400000)
+   473→   473→      : 0;
+   474→   474→    list.push({
+   475→   475→      key: `prop-outstanding-${p.id}`,
+   476→   476→      severity: daysOver > 14 ? "CRITICAL" : "WARNING",
+   477→   477→      title: `${p.name} — payment pending`,
+   478→   478→      message: `₹${led.outstanding.toLocaleString("en-IN")} outstanding across ${led.unpaidCount} unpaid day(s)${led.oldestUnpaidDate ? `; oldest since ${led.oldestUnpaidDate}` : ""}.`,
+   479→   479→      view: "payments",
+   480→   480→      params: { propertyId: p.id, propertyName: p.name },
+   481→   481→    });
+   482→   482→  }
+   483→   483→
+   484→   484→  // 2) Employee advance balances (top 3)
+   485→   485→  const balances = await advanceBalanceMap();
+   486→   486→  const owing = [...balances.entries()]
+   487→   487→    .filter(([, b]) => b.balance > EPS)
+   488→   488→    .sort((a, b) => b[1].balance - a[1].balance)
+   489→   489→    .slice(0, 3);
+   490→   490→  if (owing.length) {
+   491→   491→    const emps = await db.employee.findMany({
+   492→   492→      where: { id: { in: owing.map(([id]) => id) } },
+   493→   493→      select: { id: true, fullName: true, code: true },
+   494→   494→    });
+   495→   495→    const byId = new Map(emps.map((e) => [e.id, e]));
+   496→   496→    for (const [empId, bal] of owing) {
+   497→   497→      const emp = byId.get(empId);
+   498→   498→      if (!emp) continue;
+   499→   499→      list.push({
+   500→   500→        key: `emp-advance-${empId}`,
+   501→   501→        severity: "INFO",
+   502→   502→        title: `${emp.fullName} holds an advance`,
+   503→   503→        message: `Advance balance ₹${bal.balance.toLocaleString("en-IN")} — will be deducted in the next settlement.`,
+   504→   504→        view: "advances",
+   505→   505→        params: { employeeId: empId },
+   506→   506→      });
+   507→   507→    }
+   508→   508→  }
+   509→   509→
+   510→   510→  // 3) Previous-month settlements not finalized
+   511→   511→  const prevMonth = monthKey(addMonths(new Date(now.getFullYear(), now.getMonth(), 1), -1));
+   512→   512→  const draftCount = await db.settlement.count({ where: { month: prevMonth, status: "DRAFT" } });
+   513→   513→  if (draftCount > 0) {
+   514→   514→    list.push({
+   515→   515→      key: `settle-draft-${prevMonth}`,
+   516→   516→      severity: "WARNING",
+   517→   517→      title: "Previous month settlements pending",
+   518→   518→      message: `${draftCount} settlement draft(s) for ${prevMonth} not finalized yet.`,
+   519→   519→      view: "settlements",
+   520→   520→      params: { month: prevMonth },
+   521→   521→    });
+   522→   522→  }
+   523→   523→
+   524→   524→  // 4) EMI due within 7 days
+   525→   525→  const emis = await db.vehicleEmiPayment.findMany({
+   526→   526→    where: { status: "PENDING", dueDate: { gte: today, lte: in7 } },
+   527→   527→    include: { vehicle: { select: { name: true } } },
+   528→   528→    orderBy: { dueDate: "asc" },
+   529→   529→  });
+   530→   530→  for (const e of emis) {
+   531→   531→    list.push({
+   532→   532→      key: `emi-${e.id}`,
+   533→   533→      severity: "WARNING",
+   534→   534→      title: `EMI due — ${e.vehicle.name}`,
+   535→   535→      message: `₹${e.amount.toLocaleString("en-IN")} EMI for ${e.month} due on ${dayKey(e.dueDate)}.`,
+   536→   536→      view: "vehicle-detail",
+   537→   537→      params: { vehicleId: e.vehicleId },
+   538→   538→    });
+   539→   539→  }
+   540→   540→
+   541→   541→  // 5) Insurance / fitness expiry within 30 days
+   542→   542→  const vehicles = await db.vehicle.findMany({
+   543→   543→    select: { id: true, name: true, registrationNumber: true, insuranceExpiry: true, fitnessExpiry: true },
+   544→   544→  });
+   545→   545→  for (const v of vehicles) {
+   546→   546→    if (v.insuranceExpiry && v.insuranceExpiry.getTime() <= in30.getTime()) {
+   547→   547→      list.push({
+   548→   548→        key: `veh-ins-${v.id}`,
+   549→   549→        severity: v.insuranceExpiry < today ? "CRITICAL" : "WARNING",
+   550→   550→        title: `Insurance ${v.insuranceExpiry < today ? "expired" : "expiring"} — ${v.name}`,
+   551→   551→        message: `Insurance (${v.registrationNumber}) expires on ${dayKey(v.insuranceExpiry)}.`,
+   552→   552→        view: "vehicle-detail",
+   553→   553→        params: { vehicleId: v.id },
+   554→   554→      });
+   555→   555→    }
+   556→   556→    if (v.fitnessExpiry && v.fitnessExpiry.getTime() <= in30.getTime()) {
+   557→   557→      list.push({
+   558→   558→        key: `veh-fit-${v.id}`,
+   559→   559→        severity: v.fitnessExpiry < today ? "CRITICAL" : "WARNING",
+   560→   560→        title: `Fitness ${v.fitnessExpiry < today ? "expired" : "expiring"} — ${v.name}`,
+   561→   561→        message: `Fitness certificate for ${v.registrationNumber} expires on ${dayKey(v.fitnessExpiry)}.`,
+   562→   562→        view: "vehicle-detail",
+   563→   563→        params: { vehicleId: v.id },
+   564→   564→      });
+   565→   565→    }
+   566→   566→  }
+   567→   567→
+   568→   568→  // 6) Scheduled maintenance
+   569→   569→  const maintenances = await db.maintenance.findMany({
+   570→   570→    where: { status: "SCHEDULED" },
+   571→   571→    include: { vehicle: { select: { name: true } } },
+   572→   572→    orderBy: { date: "asc" },
+   573→   573→  });
+   574→   574→  for (const m of maintenances) {
+   575→   575→    list.push({
+   576→   576→      key: `mnt-${m.id}`,
+   577→   577→      severity: "INFO",
+   578→   578→      title: `Maintenance scheduled — ${m.vehicle.name}`,
+   579→   579→      message: `${m.type} on ${dayKey(m.date)}${m.description ? ` — ${m.description}` : ""}.`,
+   580→   580→      view: "vehicle-detail",
+   581→   581→      params: { vehicleId: m.vehicleId },
+   582→   582→    });
+   583→   583→  }
+   584→   584→
+   585→   585→  // 7) Trips with pending payments
+   586→   586→  const trips = await db.trip.findMany({
+   587→   587→    where: { status: { not: "CANCELLED" }, paymentStatus: { in: ["PENDING", "PARTIAL"] } },
+   588→   588→    include: { vehicle: { select: { name: true } }, client: { select: { name: true } } },
+   589→   589→    orderBy: { startAt: "asc" },
+   590→   590→    take: 10,
+   591→   591→  });
+   592→   592→  for (const t of trips) {
+   593→   593→    const pending = round2(tripTarget(t) - t.paidAmount);
+   594→   594→    if (pending <= EPS) continue;
+   595→   595→    list.push({
+   596→   596→      key: `trip-pay-${t.id}`,
+   597→   597→      severity: "WARNING",
+   598→   598→      title: `Trip payment pending — ${t.vehicle.name}`,
+   599→   599→      message: `${t.client?.name ?? "Client"} owes ₹${pending.toLocaleString("en-IN")} (${t.rentalType.toLowerCase()} from ${dayKey(t.startAt)}).`,
+   600→   600→      view: "trips",
+   601→   601→      params: { tripId: t.id },
+   602→   602→    });
+   603→   603→  }
+   604→   604→
+   605→   605→  const dismissed = await db.notificationDismiss.findMany({ select: { key: true } });
+   606→   606→  const dismissedSet = new Set(dismissed.map((d) => d.key));
+   607→   607→  return list
+   608→   608→    .filter((n) => !dismissedSet.has(n.key))
+   609→   609→    .sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
+   610→   610→}
+   611→   611→
+   612→   612→// ---------- misc ----------
+   613→   613→
+   614→   614→/** Next sequential code like EMP-007 / VEH-003 based on existing rows. */
+   615→   615→export async function nextCode(prefix: string, kind: "employee" | "vehicle"): Promise<string> {
+   616→   616→  const rows =
+   617→   617→    kind === "employee"
+   618→   618→      ? await db.employee.findMany({ where: { code: { startsWith: `${prefix}-` } }, select: { code: true } })
+   619→   619→      : await db.vehicle.findMany({ where: { code: { startsWith: `${prefix}-` } }, select: { code: true } });
+   620→   620→  let max = 0;
+   621→   621→  for (const r of rows) {
+   622→   622→    const n = parseInt(r.code.slice(prefix.length + 1), 10);
+   623→   623→    if (Number.isFinite(n) && n > max) max = n;
+   624→   624→  }
+   625→   625→  return `${prefix}-${String(max + 1).padStart(3, "0")}`;
+   626→   626→}
+   627→   627→
+   628→   628→export function requireEnum<T extends string>(value: unknown, allowed: readonly T[], label: string): T {
+   629→   629→  const v = String(value ?? "").toUpperCase();
+   630→   630→  if (!allowed.includes(v as T)) {
+   631→   631→    throw new HttpError(400, `Invalid ${label}: must be one of ${allowed.join(", ")}`);
+   632→   632→  }
+   633→   633→  return v as T;
+   634→   634→}
+   635→   635→
+   636→   636→export function requirePositiveAmount(value: unknown, label = "Amount"): number {
+   637→   637→  const n = typeof value === "string" ? parseFloat(value) : Number(value);
+   638→   638→  if (!Number.isFinite(n) || n <= 0) throw new HttpError(400, `${label} must be greater than 0`);
+   639→   639→  return round2(n);
+   640→   640→}
+   641→   641→
+   642→   642→export function optionalAmount(value: unknown, fallback = 0): number {
+   643→   643→  if (value === undefined || value === null || value === "") return fallback;
+   644→   644→  const n = typeof value === "string" ? parseFloat(value) : Number(value);
+   645→   645→  if (!Number.isFinite(n)) throw new HttpError(400, "Invalid number value");
+   646→   646→  return round2(n);
+   647→   647→}
+   648→   648→

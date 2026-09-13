@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  BarChart3, Building2, CalendarCheck, CarFront, Crown, Download, Info, MapPin, Play, Printer,
+  BarChart3, Building2, CalendarCheck, CarFront, Crown, Download, HardHat, Info, MapPin, Play, Printer,
   Receipt, ReceiptText, Route, TrendingUp, Users, Wallet, type LucideIcon,
 } from "lucide-react";
 import {
@@ -39,11 +39,12 @@ interface ReportDef {
 }
 
 const REPORTS: ReportDef[] = [
-  { type: "employee-earnings", title: "Employee Earnings", subtitle: "Shifts, advances & net pay by employee", icon: Users, config: "range" },
+  { type: "employee-earnings", title: "Employee Earnings", subtitle: "Shifts, salary, advances & net pay by employee", icon: Users, config: "range" },
   { type: "property-revenue", title: "Property Revenue", subtitle: "Billing vs collections by property", icon: Building2, config: "range" },
   { type: "collections", title: "Collections", subtitle: "Daily billed & received with outstanding", icon: Wallet, config: "range" },
   { type: "expenses", title: "Expenses", subtitle: "Expense entries by category & business", icon: Receipt, config: "range-business" },
-  { type: "profitability", title: "Profitability", subtitle: "Billing, payout, expenses & net margin", icon: TrendingUp, config: "range-business" },
+  { type: "profitability", title: "Profitability", subtitle: "Billing, employee cost, rent & net margin", icon: TrendingUp, config: "range-business" },
+  { type: "contractor-commissions", title: "Contractor Commissions", subtitle: "Commission per contractor & month", icon: HardHat, config: "range" },
   { type: "vehicle-profitability", title: "Vehicle Profitability", subtitle: "Revenue, opex, EMI & net by vehicle", icon: CarFront, config: "range" },
   { type: "trip-profit", title: "Trip Profitability", subtitle: "Per-trip revenue, estimated cost & margin", icon: Route, config: "range" },
   { type: "daily-operations", title: "Daily Operations", subtitle: "All deployments for a single day", icon: CalendarCheck, config: "date" },

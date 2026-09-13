@@ -44,6 +44,9 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
     body.adjustmentAmount !== undefined ? optionalAmount(body.adjustmentAmount, existing.adjustmentAmount) : existing.adjustmentAmount;
   const billingAmount = round2(billingRate * units + adjustmentAmount);
   const payoutAmount = round2(payoutRate * units);
+  // Contractor cut always recomputes from the snapshotted per-shift rate × units,
+  // so the stored math can never drift from rate + shift (same invariant as above).
+  const contractorCut = round2((existing.contractorRateCut ?? 0) * units);
 
   const updated = await db.$transaction(async (tx) => {
     const row = await tx.deployment.update({
@@ -56,6 +59,7 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
         adjustmentNote: body.adjustmentNote !== undefined ? (body.adjustmentNote === null || body.adjustmentNote === "" ? null : String(body.adjustmentNote)) : existing.adjustmentNote,
         billingAmount,
         payoutAmount,
+        contractorCut,
         notes: body.notes !== undefined ? (body.notes === null || body.notes === "" ? null : String(body.notes)) : existing.notes,
       },
       include: { employee: { select: { fullName: true, code: true } }, property: { select: { name: true } } },
@@ -73,8 +77,9 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
     previousValue: {
       shift: existing.shift, billingRate: existing.billingRate, payoutRate: existing.payoutRate,
       adjustmentAmount: existing.adjustmentAmount, billingAmount: existing.billingAmount, payoutAmount: existing.payoutAmount,
+      contractorCut: existing.contractorCut,
     },
-    newValue: { shift, billingRate, payoutRate, adjustmentAmount, billingAmount, payoutAmount },
+    newValue: { shift, billingRate, payoutRate, adjustmentAmount, billingAmount, payoutAmount, contractorCut },
   });
   return serializeDeployment(updated);
 });

@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import {
   Users, Truck, Wallet, IndianRupee, Landmark, CalendarCheck, Receipt, HandCoins, ReceiptText,
   Route, AlertTriangle, AlertCircle, Info, ChevronRight, Building2, RefreshCw, Activity, PieChart as PieChartIcon, History,
-  CalendarRange, TrendingUp, TrendingDown, Minus, Sparkles, CalendarDays, Printer,
+  CalendarRange, TrendingUp, TrendingDown, Minus, Sparkles, CalendarDays, Printer, HardHat, Home,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import { ErrorState, useAsync, AreaTrend, CHART_COLORS } from "./_shared";
@@ -36,6 +36,7 @@ interface AttentionItem {
 interface SummaryResp {
   manpower: {
     employeesDeployed: number; propertiesServed: number; expectedBilling: number; payout: number;
+    shiftPayout?: number; salary?: number; overtime?: number; rentIncome?: number; contractorCut?: number;
     grossMargin: number; received: number; pending: number; advancesGiven: number; expenses: number;
     dayShifts: number; nightShifts: number; deployments: number;
   };
@@ -44,12 +45,21 @@ interface SummaryResp {
     received: number; pending: number; monthRevenue: number; monthExpense: number;
     monthEmi: number; monthNet: number;
   };
-  combined: { revenue: number; expenses: number; employeePayout?: number; net: number; manpowerMargin: number; transportNet: number };
+  combined: { revenue: number; expenses: number; employeePayout?: number; rentIncome?: number; net: number; manpowerMargin: number; transportNet: number };
   collections: {
     totalBilled: number; totalReceived: number; totalOutstanding: number;
     byProperty: { propertyId: string; propertyName: string; outstanding: number }[];
   };
   attention: AttentionItem[];
+}
+
+interface ContractorStat {
+  name: string;
+  todayDeployments: number;
+  todayCommission: number;
+  monthDeployments: number;
+  monthCommission: number;
+  employees: string[];
 }
 
 interface TrendRow { date: string; billing: number; collections: number; transport: number; expenses: number }
@@ -63,6 +73,7 @@ interface MonthMetrics {
   deployments: number; manpowerBilling: number; manpowerPayout: number; manpowerMargin: number;
   manpowerOtherExpenses: number; collections: number; advances: number; trips: number;
   transportRevenue: number; transportCollected: number; transportOpex: number; transportEmi: number;
+  rentIncome?: number; contractorCut?: number; manpowerSalary?: number; manpowerOvertime?: number;
   net: number;
 }
 interface MonthlySummaryResp {
@@ -185,6 +196,11 @@ export default function DashboardView({ navigate }: ViewProps) {
     () => api.get<MonthlySummaryResp>(`/api/dashboard/monthly-summary?month=${summaryMonth}`),
     [summaryMonth]
   );
+  // Contractor commission cards — today + this month (independent of the range selector).
+  const { data: contractorsData, reload: reloadContractors } = useAsync<{ contractors: ContractorStat[]; known: string[] }>(
+    () => api.get<{ contractors: ContractorStat[]; known: string[] }>("/api/dashboard/contractors"),
+    []
+  );
 
   const m = data?.manpower;
   const t = data?.transport;
@@ -192,7 +208,7 @@ export default function DashboardView({ navigate }: ViewProps) {
   const net = data?.combined.net ?? 0;
   const busy = loading || trendLoading;
 
-  const refreshAll = () => { reload(); reloadTrend(); reloadAudit(); };
+  const refreshAll = () => { reload(); reloadTrend(); reloadAudit(); reloadContractors(); };
 
   const firstName = (owner?.name ?? "Owner").split(" ")[0];
   const expenseSplit = [
@@ -244,7 +260,7 @@ export default function DashboardView({ navigate }: ViewProps) {
             <StatCard label="Outstanding" value={formatINR(c?.totalOutstanding ?? 0, { compact: true })} icon={Building2} tone="negative" onClick={() => navigate("payments")} hint="All properties" />
             <StatCard label="Employee Payout" value={formatINR(m?.payout ?? 0, { compact: true })} icon={Users} onClick={() => navigate("manpower")} hint={`${m?.deployments ?? 0} deployments`} />
             <StatCard label="Transport Revenue" value={formatINR(t?.revenue ?? 0, { compact: true })} icon={Truck} tone="transport" onClick={() => navigate("transport")} hint={`${t?.onTripVehicles ?? 0} on trip`} />
-            <StatCard label="Net Result" value={formatINR(net, { compact: true })} icon={Landmark} tone={net >= 0 ? "positive" : "negative"} onClick={() => navigate("reports")} hint="Revenue − employee payout − expenses (same as Reports)" />
+            <StatCard label="Net Result" value={formatINR(net, { compact: true })} icon={Landmark} tone={net >= 0 ? "positive" : "negative"} onClick={() => navigate("reports")} hint="Revenue + employee rent − employee cost − expenses (same as Reports)" />
           </div>
 
           {/* First-run setup checklist — self-hides once the business is set up */}
@@ -344,6 +360,50 @@ export default function DashboardView({ navigate }: ViewProps) {
             </Card>
           </section>
 
+          {/* Contractor commission cards — today + this month, per contractor */}
+          {(contractorsData?.contractors?.length ?? 0) > 0 && (
+            <section aria-label="Contractor commissions">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-muted-foreground">Contractor commissions — today & this month</p>
+                <Button variant="ghost" size="sm" className="h-8 shrink-0 text-xs" onClick={() => navigate("reports")}>Reports</Button>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {contractorsData!.contractors.map((ctr) => (
+                  <Card key={ctr.name} className="border-amber-200/60 dark:border-amber-900">
+                    <CardHeader className="pb-2">
+                      <div className="flex items-center gap-3">
+                        <div className="shrink-0 rounded-xl bg-amber-100 p-2 dark:bg-amber-950">
+                          <HardHat className="h-5 w-5 text-amber-600 dark:text-amber-400" aria-hidden />
+                        </div>
+                        <div className="min-w-0">
+                          <CardTitle className="truncate text-base">{ctr.name}</CardTitle>
+                          <p className="truncate text-xs text-muted-foreground">{ctr.employees.length} employee{ctr.employees.length === 1 ? "" : "s"} · {ctr.monthDeployments} deployment{ctr.monthDeployments === 1 ? "" : "s"} this month</p>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="rounded-xl bg-muted/60 p-2.5 text-center">
+                          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Today</p>
+                          <p className="text-sm font-bold tabular-nums">{formatINR(ctr.todayCommission, { compact: true })}</p>
+                          <p className="text-[10px] tabular-nums text-muted-foreground">{ctr.todayDeployments} deployment{ctr.todayDeployments === 1 ? "" : "s"}</p>
+                        </div>
+                        <div className="rounded-xl bg-amber-50 p-2.5 text-center dark:bg-amber-950/40">
+                          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">This month</p>
+                          <p className="text-sm font-bold tabular-nums text-amber-700 dark:text-amber-300">{formatINR(ctr.monthCommission, { compact: true })}</p>
+                          <p className="text-[10px] tabular-nums text-muted-foreground">commission</p>
+                        </div>
+                      </div>
+                      <p className="mt-2 truncate text-[11px] text-muted-foreground" title={ctr.employees.join(", ")}>
+                        Via: {ctr.employees.join(", ")}
+                      </p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Business split */}
           <section aria-label="Business split" className="grid gap-3 md:grid-cols-2">
             <Card className="border-emerald-200/70 dark:border-emerald-900">
@@ -360,10 +420,18 @@ export default function DashboardView({ navigate }: ViewProps) {
               </CardHeader>
               <CardContent className="space-y-0.5">
                 <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Expected billing</span><span className="font-semibold tabular-nums">{formatINR(m?.expectedBilling ?? 0)}</span></div>
-                <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Employee payout</span><span className="font-semibold tabular-nums">{formatINR(m?.payout ?? 0)}</span></div>
+                {(m?.rentIncome ?? 0) > 0 && (
+                  <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Employee rent (income)</span><span className="font-semibold tabular-nums text-teal-600 dark:text-teal-400">+{formatINR(m?.rentIncome ?? 0)}</span></div>
+                )}
+                <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Employee cost</span><span className="font-semibold tabular-nums">{formatINR(m?.payout ?? 0)}</span></div>
+                {(m?.salary ?? 0) > 0 && (
+                  <p className="pb-0.5 text-[10px] tabular-nums text-muted-foreground">
+                    incl. salary {formatINR(m?.salary ?? 0)}{(m?.overtime ?? 0) > 0 ? ` + overtime ${formatINR(m?.overtime ?? 0)}` : ""}{(m?.contractorCut ?? 0) > 0 ? ` · contractor cut ${formatINR(m?.contractorCut ?? 0)}` : ""}
+                  </p>
+                )}
                 <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Gross margin</span><span className={cn("font-semibold tabular-nums", (m?.grossMargin ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{formatINR(m?.grossMargin ?? 0)}</span></div>
                 <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Other expenses</span><span className="font-semibold tabular-nums">{formatINR(m?.expenses ?? 0)}</span></div>
-                <div className="flex justify-between border-t pt-1.5 text-sm"><span className="text-muted-foreground">Net result</span><span className="font-bold tabular-nums">{formatINR((m?.grossMargin ?? 0) - (m?.expenses ?? 0))}</span></div>
+                <div className="flex justify-between border-t pt-1.5 text-sm"><span className="text-muted-foreground">Net result</span><span className="font-bold tabular-nums">{formatINR((m?.grossMargin ?? 0) + (m?.rentIncome ?? 0) - (m?.expenses ?? 0))}</span></div>
                 <Button variant="outline" size="sm" className="mt-3 h-9 w-full gap-1 sm:w-auto" onClick={() => navigate("manpower")}>
                   View details <ChevronRight className="h-3.5 w-3.5" aria-hidden />
                 </Button>
@@ -488,6 +556,16 @@ export default function DashboardView({ navigate }: ViewProps) {
                   <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">
                     EMI {formatINR(monthly.current.transportEmi, { compact: true })}
                   </span>
+                  {(monthly.current.rentIncome ?? 0) > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2 py-0.5 tabular-nums text-teal-700 dark:bg-teal-950/60 dark:text-teal-300">
+                      <Home className="h-3 w-3" aria-hidden />rent in {formatINR(monthly.current.rentIncome ?? 0, { compact: true })}
+                    </span>
+                  )}
+                  {(monthly.current.contractorCut ?? 0) > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 tabular-nums text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+                      <HardHat className="h-3 w-3" aria-hidden />contractor {formatINR(monthly.current.contractorCut ?? 0, { compact: true })}
+                    </span>
+                  )}
                 </div>
                 {monthly.insights.length > 0 && (
                   <div

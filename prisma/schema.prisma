@@ -36,7 +36,7 @@ model Session {
 }
 
 model AuditLog {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   ownerId       String?
   ownerName     String
   action        String // CREATE / UPDATE / DELETE / STATUS / LOGIN / FINALIZE / PAYMENT / GENERATE / UNDO
@@ -46,7 +46,7 @@ model AuditLog {
   previousValue String?
   newValue      String?
   undoneAt      DateTime?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime  @default(now())
 
   @@index([createdAt])
   @@index([module, createdAt])
@@ -56,8 +56,8 @@ model AuditLog {
 // ---------- Business 1: Manpower ----------
 
 model Employee {
-  id                     String       @id @default(cuid())
-  code                   String       @unique
+  id                     String    @id @default(cuid())
+  code                   String    @unique
   fullName               String
   photoUrl               String?
   dob                    DateTime?
@@ -67,18 +67,31 @@ model Employee {
   address                String?
   city                   String?
   emergencyContact       String?
-  joiningDate            DateTime     @default(now())
+  joiningDate            DateTime  @default(now())
   designation            String?
   skills                 String?
-  standardRate           Float        @default(0) // fixed payout rate per shift — snapshot into deployments
-  rateType               String       @default("PER_SHIFT")
-  status                 String       @default("ACTIVE") // ACTIVE/INACTIVE
+  standardRate           Float     @default(0) // fixed payout rate per shift — snapshot into deployments (NON_SALARIED only)
+  rateType               String    @default("PER_SHIFT")
+  // --- employment & pay model ---
+  employmentType         String    @default("NON_SALARIED") // NON_SALARIED (per-shift) | SALARIED (fixed monthly)
+  monthlySalary          Float     @default(0) // SALARIED: fixed monthly salary (cost accrues prorated per active day)
+  overtimeThreshold      Int       @default(30) // SALARIED: deployments in a month after which overtime kicks in
+  overtimeRate           Float     @default(0) // SALARIED: ₹ per deployment beyond the threshold
+  // --- business accommodation rent (employee rents the business flat/home → income for the business) ---
+  onBusinessRent         Boolean   @default(false)
+  rentAmount             Float     @default(0)
+  rentMode               String    @default("MONTH") // MONTH (₹/calendar month) | DAY (₹/day)
+  // --- contractor between business and employee (cut from the deployment payout, paid to the contractor) ---
+  hasContractor          Boolean   @default(false)
+  contractorName         String?
+  contractorRateCut      Float     @default(0) // ₹ per shift-unit — snapshot into deployments
+  status                 String    @default("ACTIVE") // ACTIVE/INACTIVE
   bankDetails            String?
   upiId                  String?
   preferredPaymentMethod String?
   notes                  String?
-  createdAt              DateTime     @default(now())
-  updatedAt              DateTime     @updatedAt
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   deployments Deployment[]
   advances    Advance[]
@@ -116,24 +129,30 @@ model Property {
 // Rates + amounts are snapshotted here at creation; later master-rate changes
 // never touch historical rows (the zero-mismatch guarantee).
 model Deployment {
-  id               String    @id @default(cuid())
-  date             DateTime
-  employeeId       String
-  employee         Employee  @relation(fields: [employeeId], references: [id])
-  propertyId       String
-  property         Property  @relation(fields: [propertyId], references: [id])
-  shift            String // DAY / NIGHT / FULL (FULL = day + night = 2 shift units)
-  billingRate      Float // per shift-unit, snapshotted
-  payoutRate       Float // per shift-unit, snapshotted
-  billingAmount    Float // billingRate × shift units (+ adjustment)
-  payoutAmount     Float // payoutRate × shift units
-  adjustmentAmount Float     @default(0)
-  adjustmentNote   String?
-  paidAmount       Float     @default(0) // derived/dynamic, persisted for quick list rendering
-  notes            String?
-  createdById      String?
-  createdByName    String?
-  createdAt        DateTime  @default(now())
+  id                String   @id @default(cuid())
+  date              DateTime
+  employeeId        String
+  employee          Employee @relation(fields: [employeeId], references: [id])
+  propertyId        String
+  property          Property @relation(fields: [propertyId], references: [id])
+  shift             String // DAY / NIGHT / FULL (FULL = day + night = 2 shift units)
+  billingRate       Float // per shift-unit, snapshotted
+  payoutRate        Float // per shift-unit, snapshotted
+  billingAmount     Float // billingRate × shift units (+ adjustment)
+  payoutAmount      Float // payoutRate × shift units
+  adjustmentAmount  Float    @default(0)
+  adjustmentNote    String?
+  // Contractor snapshot (zero-mismatch: captured at creation, later master changes
+  // never rewrite history). The cut is taken FROM the employee's payout and paid
+  // to the contractor — business cost = payoutAmount (split), not payout + cut.
+  contractorName    String?
+  contractorRateCut Float    @default(0) // ₹ per shift-unit, snapshotted
+  contractorCut     Float    @default(0) // rateCut × shift units
+  paidAmount        Float    @default(0) // derived/dynamic, persisted for quick list rendering
+  notes             String?
+  createdById       String?
+  createdByName     String?
+  createdAt         DateTime @default(now())
 
   @@unique([employeeId, propertyId, date, shift])
   @@index([date])
@@ -142,17 +161,17 @@ model Deployment {
 }
 
 model PropertyPayment {
-  id            String   @id @default(cuid())
-  propertyId    String
-  property      Property @relation(fields: [propertyId], references: [id])
-  date          DateTime
-  amount        Float
-  method        String?
-  reference     String?
-  notes         String?
-  receivedById  String?
+  id             String   @id @default(cuid())
+  propertyId     String
+  property       Property @relation(fields: [propertyId], references: [id])
+  date           DateTime
+  amount         Float
+  method         String?
+  reference      String?
+  notes          String?
+  receivedById   String?
   receivedByName String?
-  createdAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
 
   @@index([propertyId, date])
   @@index([date])
@@ -204,6 +223,7 @@ model Settlement {
   additions           Float     @default(0)
   advanceDeducted     Float     @default(0)
   otherDeductions     Float     @default(0)
+  contractorCut       Float     @default(0) // contractor commission deducted from the employee's payout this month
   netPayable          Float     @default(0)
   advanceCarryForward Float     @default(0)
   status              String    @default("DRAFT") // DRAFT/FINALIZED/PAID
@@ -215,8 +235,8 @@ model Settlement {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
-  lines     SettlementLine[]
-  advances  Advance[]
+  lines    SettlementLine[]
+  advances Advance[]
 
   @@unique([employeeId, month])
   @@index([month, status])
@@ -236,7 +256,7 @@ model SettlementLine {
 // ---------- Shared Finance ----------
 
 model Expense {
-  id            String    @id @default(cuid())
+  id            String   @id @default(cuid())
   date          DateTime
   business      String // MANPOWER / TRANSPORT
   categoryId    String?
@@ -246,17 +266,17 @@ model Expense {
   description   String?
   notes         String?
   vehicleId     String?
-  vehicle       Vehicle?  @relation(fields: [vehicleId], references: [id])
+  vehicle       Vehicle? @relation(fields: [vehicleId], references: [id])
   vehicleName   String?
   spentById     String?
   spentByName   String?
-  isCommon      Boolean @default(false) // shared by all owners & the business — not one owner's personal spend
+  isCommon      Boolean  @default(false) // shared by all owners & the business — not one owner's personal spend
   reason        String? // why the money was taken / spent (owner withdrawals, advances, etc.)
-  kind          String  @default("OPERATING") // OPERATING | CAPITAL (owner contribution / withdrawal — excluded from P&L expenses)
+  kind          String   @default("OPERATING") // OPERATING | CAPITAL (owner contribution / withdrawal — excluded from P&L expenses)
   createdById   String?
   createdByName String?
   reference     String? // idempotency key for auto-generated records (EMI-xxx, MNT-xxx, REC-xxx)
-  createdAt     DateTime  @default(now())
+  createdAt     DateTime @default(now())
 
   @@index([business, date])
   @@index([vehicleId])
@@ -265,59 +285,59 @@ model Expense {
 }
 
 model ExpenseCategory {
-  id        String  @id @default(cuid())
+  id        String   @id @default(cuid())
   name      String
   business  String // MANPOWER / TRANSPORT / COMMON
-  kind      String  @default("EXPENSE") // EXPENSE / FINANCIAL / OWNER
-  isActive  Boolean @default(true)
+  kind      String   @default("EXPENSE") // EXPENSE / FINANCIAL / OWNER
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
 
   @@unique([name, business])
 }
 
 model RecurringExpense {
-  id                String   @id @default(cuid())
-  name              String
-  business          String
-  categoryId        String?
-  categoryName      String?
-  amount            Float
-  frequency         String   @default("MONTHLY")
-  startDate         DateTime
-  endDate           DateTime?
-  method            String?
-  notes             String?
+  id                 String    @id @default(cuid())
+  name               String
+  business           String
+  categoryId         String?
+  categoryName       String?
+  amount             Float
+  frequency          String    @default("MONTHLY")
+  startDate          DateTime
+  endDate            DateTime?
+  method             String?
+  notes              String?
   lastGeneratedMonth String? // YYYY-MM
-  isActive          Boolean  @default(true)
-  createdAt         DateTime @default(now())
+  isActive           Boolean   @default(true)
+  createdAt          DateTime  @default(now())
 }
 
 // ---------- Business 2: Transport ----------
 
 model Vehicle {
-  id                String    @id @default(cuid())
-  code              String    @unique
-  registrationNumber String   @unique
-  name              String
-  make              String?
-  model             String?
-  variant           String?
-  year              Int?
-  purchaseDate      DateTime?
-  purchasePrice     Float?
-  status            String    @default("AVAILABLE") // AVAILABLE/RENTED/TRIP/MAINTENANCE/INACTIVE
-  insuranceCompany  String?
-  insuranceNumber   String?
-  insuranceExpiry   DateTime?
-  permitInfo        String?
-  fitnessExpiry     DateTime?
-  notes             String?
-  loanAmount        Float?
-  monthlyEmi        Float?
-  emiStartDate      DateTime?
-  emiCount          Int?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  code               String    @unique
+  registrationNumber String    @unique
+  name               String
+  make               String?
+  model              String?
+  variant            String?
+  year               Int?
+  purchaseDate       DateTime?
+  purchasePrice      Float?
+  status             String    @default("AVAILABLE") // AVAILABLE/RENTED/TRIP/MAINTENANCE/INACTIVE
+  insuranceCompany   String?
+  insuranceNumber    String?
+  insuranceExpiry    DateTime?
+  permitInfo         String?
+  fitnessExpiry      DateTime?
+  notes              String?
+  loanAmount         Float?
+  monthlyEmi         Float?
+  emiStartDate       DateTime?
+  emiCount           Int?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   trips       Trip[]
   expenses    Expense[]
@@ -326,46 +346,46 @@ model Vehicle {
 }
 
 model Client {
-  id            String   @id @default(cuid())
-  name          String
-  company       String?
-  phone         String?
-  whatsapp      String?
-  email         String?
-  address       String?
+  id             String   @id @default(cuid())
+  name           String
+  company        String?
+  phone          String?
+  whatsapp       String?
+  email          String?
+  address        String?
   billingDetails String?
-  notes         String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   trips Trip[]
 }
 
 model Trip {
-  id                String    @id @default(cuid())
-  vehicleId         String
-  vehicle           Vehicle   @relation(fields: [vehicleId], references: [id])
-  clientId          String
-  client            Client    @relation(fields: [clientId], references: [id])
-  startAt           DateTime
-  endAt             DateTime?
-  tripType          String    @default("RENTAL") // RENTAL / TRIP
-  rentalType        String    @default("DAILY") // DAILY/WEEKLY/MONTHLY/OUTSTATION/LOCAL
-  pickup            String?
-  destination       String?
-  driver            String?
-  agreedAmount      Float
-  advanceReceived   Float     @default(0)
-  extraCharges      Float     @default(0)
-  finalAmount       Float?
-  paidAmount        Float     @default(0)
-  paymentStatus     String    @default("PENDING") // PENDING/PARTIAL/PAID
-  status            String    @default("CONFIRMED") // CONFIRMED/ACTIVE/COMPLETED/CANCELLED
+  id                 String    @id @default(cuid())
+  vehicleId          String
+  vehicle            Vehicle   @relation(fields: [vehicleId], references: [id])
+  clientId           String
+  client             Client    @relation(fields: [clientId], references: [id])
+  startAt            DateTime
+  endAt              DateTime?
+  tripType           String    @default("RENTAL") // RENTAL / TRIP
+  rentalType         String    @default("DAILY") // DAILY/WEEKLY/MONTHLY/OUTSTATION/LOCAL
+  pickup             String?
+  destination        String?
+  driver             String?
+  agreedAmount       Float
+  advanceReceived    Float     @default(0)
+  extraCharges       Float     @default(0)
+  finalAmount        Float?
+  paidAmount         Float     @default(0)
+  paymentStatus      String    @default("PENDING") // PENDING/PARTIAL/PAID
+  status             String    @default("CONFIRMED") // CONFIRMED/ACTIVE/COMPLETED/CANCELLED
   fuelResponsibility String?
-  notes             String?
-  createdById       String?
-  createdByName     String?
-  createdAt         DateTime  @default(now())
+  notes              String?
+  createdById        String?
+  createdByName      String?
+  createdAt          DateTime  @default(now())
 
   @@index([vehicleId, startAt])
   @@index([status])
@@ -418,9 +438,9 @@ model AppSetting {
 }
 
 model Shift {
-  id        String @id @default(cuid())
-  name      String @unique
+  id        String  @id @default(cuid())
+  name      String  @unique
   startTime String?
   endTime   String?
-  sortOrder Int    @default(0)
+  sortOrder Int     @default(0)
 }

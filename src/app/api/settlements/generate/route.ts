@@ -2,14 +2,19 @@ import { db } from "@/lib/db";
 import { handleRoute, readBody, requireFields, monthBounds } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
-import { startOfDay } from "@/app/api/_lib/engine";
+import { startOfDay, salaryOvertimeForMonth } from "@/app/api/_lib/engine";
 
 /**
  * Settlement engine:
  * - Deletes previous DRAFT settlements of the month (releasing their linked advances).
  * - FINALIZED/PAID settlements are untouched; those employees are skipped.
  * - Generates DRAFTs for ACTIVE employees (plus non-active employees who worked in
- *   the month) that have billable deployments and/or adjustments.
+ *   the month) that have billable deployments and/or adjustments. Active SALARIED
+ *   employees always get a draft (salary is owed even with zero deployments).
+ * - SALARIED gross = monthlySalary + overtime ((deployments − threshold) × rate);
+ *   synthetic work lines record the salary and the overtime.
+ * - Contractor commission (Σ snapshotted cuts on the month's deployments) is
+ *   deducted from the employee's net and paid to the contractor.
  * - Advances are deducted FIFO by advance date; partially-consumed advances are linked.
  */
 export const POST = handleRoute(async ({ owner, req }) => {
@@ -22,7 +27,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
   const [activeEmployees, nonActiveWorked] = await Promise.all([
     db.employee.findMany({
       where: { status: "ACTIVE" },
-      select: { id: true, fullName: true, code: true, designation: true },
+      select: { id: true, fullName: true, code: true, designation: true, employmentType: true, monthlySalary: true, overtimeThreshold: true, overtimeRate: true },
     }),
     db.deployment.findMany({
       where: { date: { gte: from, lte: to }, employee: { status: { not: "ACTIVE" } } },
@@ -36,7 +41,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
   if (extraIds.length) {
     const extra = await db.employee.findMany({
       where: { id: { in: extraIds } },
-      select: { id: true, fullName: true, code: true, designation: true },
+      select: { id: true, fullName: true, code: true, designation: true, employmentType: true, monthlySalary: true, overtimeThreshold: true, overtimeRate: true },
     });
     candidates.push(...extra);
   }
@@ -45,7 +50,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
   const [deps, adjs, existingSettlements] = await Promise.all([
     db.deployment.findMany({
       where: { date: { gte: from, lte: to } },
-      select: { employeeId: true, date: true, propertyId: true, shift: true, payoutRate: true, payoutAmount: true, property: { select: { name: true } } },
+      select: { employeeId: true, date: true, propertyId: true, shift: true, payoutRate: true, payoutAmount: true, contractorCut: true, property: { select: { name: true } } },
       orderBy: { date: "asc" },
     }),
     db.adjustment.findMany({
@@ -79,16 +84,21 @@ export const POST = handleRoute(async ({ owner, req }) => {
     const out: {
       id: string; employeeId: string; employeeName: string; employeeCode: string; month: string;
       totalDays: number; dayShifts: number; nightShifts: number; grossEarnings: number;
-      additions: number; advanceDeducted: number; otherDeductions: number; netPayable: number;
-      advanceCarryForward: number; status: string;
+      additions: number; advanceDeducted: number; otherDeductions: number; contractorCut: number;
+      netPayable: number; advanceCarryForward: number; status: string;
     }[] = [];
 
     for (const emp of candidates) {
       if (lockedEmployeeIds.has(emp.id)) continue;
       const empDeps = depsByEmp.get(emp.id) ?? [];
       const additions = adjByEmp.get(emp.id) ?? 0;
-      if (!empDeps.length && Math.abs(additions) < 0.005) continue;
+      const isSalaried = emp.employmentType === "SALARIED";
+      if (!empDeps.length && Math.abs(additions) < 0.005 && !isSalaried) continue;
 
+      // Contractor commission for the month — snapshot Σ of the deployment cuts.
+      const contractorCut = round2(empDeps.reduce((s, d) => s + (d.contractorCut ?? 0), 0));
+
+      let grossEarnings = round2(empDeps.reduce((s, d) => s + d.payoutAmount, 0));
       const lines = empDeps.map((d) => ({
         date: d.date,
         propertyName: d.property.name,
@@ -96,7 +106,24 @@ export const POST = handleRoute(async ({ owner, req }) => {
         rate: d.payoutRate,
         amount: d.payoutAmount,
       }));
-      const grossEarnings = round2(empDeps.reduce((s, d) => s + d.payoutAmount, 0));
+
+      if (isSalaried) {
+        // Salaried pay model — deployments are attendance; salary + overtime are the gross.
+        const so = salaryOvertimeForMonth(emp, empDeps.length);
+        grossEarnings = so.total;
+        const monthEnd = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0);
+        lines.push({ date: monthEnd, propertyName: "Monthly salary", shift: "SALARY", rate: so.salary, amount: so.salary });
+        if (so.overtime > 0) {
+          lines.push({
+            date: monthEnd,
+            propertyName: `Overtime — ${so.extraDeployments} deployment(s) beyond ${so.threshold}`,
+            shift: "OVERTIME",
+            rate: so.overtime / so.extraDeployments,
+            amount: so.overtime,
+          });
+        }
+      }
+
       // FULL shift = day + night → counts in both buckets (2 shift units of work).
       const dayShifts = empDeps.filter((d) => { const s = d.shift.toUpperCase(); return s === "DAY" || s === "FULL"; }).length;
       const nightShifts = empDeps.filter((d) => { const s = d.shift.toUpperCase(); return s === "NIGHT" || s === "FULL"; }).length;
@@ -113,8 +140,9 @@ export const POST = handleRoute(async ({ owner, req }) => {
       ]);
       const balanceBefore = round2((advAgg._sum.amount ?? 0) - (setAgg._sum.advanceDeducted ?? 0));
 
-      // FIFO deduction over unconsumed advances, capped by net earnings available.
-      const available = Math.max(0, round2(grossEarnings + additions - otherDeductions));
+      // FIFO deduction over unconsumed advances, capped by net earnings available
+      // (after contractor commission — the contractor is paid first from the payout).
+      const available = Math.max(0, round2(grossEarnings + additions - otherDeductions - contractorCut));
       const openAdvances = await tx.advance.findMany({
         where: { employeeId: emp.id, settlementId: null },
         orderBy: [{ date: "asc" }, { createdAt: "asc" }],
@@ -132,7 +160,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
         linkedIds.push(adv.id);
       }
 
-      const netPayable = round2(grossEarnings + additions - otherDeductions - advanceDeducted);
+      const netPayable = round2(grossEarnings + additions - otherDeductions - contractorCut - advanceDeducted);
       const advanceCarryForward = round2(Math.max(0, balanceBefore - advanceDeducted));
 
       const settlement = await tx.settlement.create({
@@ -146,6 +174,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
           additions,
           advanceDeducted,
           otherDeductions,
+          contractorCut,
           netPayable,
           advanceCarryForward,
           status: "DRAFT",
@@ -172,6 +201,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
         additions,
         advanceDeducted,
         otherDeductions,
+        contractorCut,
         netPayable,
         advanceCarryForward,
         status: "DRAFT",

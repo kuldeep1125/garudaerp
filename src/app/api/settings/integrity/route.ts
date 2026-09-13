@@ -8,9 +8,9 @@ import { round2 } from "@/lib/money";
 export const GET = handleRoute(async () => {
   const [trips, settlements, props, deps, pays] = await Promise.all([
     db.trip.findMany({ select: { id: true, paidAmount: true, agreedAmount: true, finalAmount: true, extraCharges: true } }),
-    db.settlement.findMany({ select: { id: true, netPayable: true, grossEarnings: true, additions: true, advanceDeducted: true, otherDeductions: true } }),
+    db.settlement.findMany({ select: { id: true, netPayable: true, grossEarnings: true, additions: true, advanceDeducted: true, otherDeductions: true, contractorCut: true } }),
     db.property.findMany({ select: { id: true } }),
-    db.deployment.findMany({ select: { propertyId: true, billingAmount: true, paidAmount: true } }),
+    db.deployment.findMany({ select: { propertyId: true, billingAmount: true, paidAmount: true, shift: true, contractorRateCut: true, contractorCut: true } }),
     db.propertyPayment.findMany({ select: { propertyId: true, amount: true } }),
   ]);
 
@@ -39,12 +39,19 @@ export const GET = handleRoute(async () => {
     (t) => t.paidAmount > round2((t.finalAmount ?? t.agreedAmount + t.extraCharges) + 0.005)
   ).length;
 
-  // 5. Settlement header vs lines drift — netPayable must equal gross + additions − deductions
+  // 5. Settlement header vs lines drift — netPayable must equal gross + additions − deductions − contractor cut
   let settlementDrift = 0;
   for (const s of settlements) {
-    const expect = round2(s.grossEarnings + s.additions - s.advanceDeducted - s.otherDeductions);
+    const expect = round2(s.grossEarnings + s.additions - s.advanceDeducted - s.otherDeductions - (s.contractorCut ?? 0));
     if (Math.abs(expect - s.netPayable) > 0.01) settlementDrift++;
   }
+
+  // 5b. Contractor cut drift — stored cut must equal snapshotted rate × shift units
+  const SHIFT_UNITS = { DAY: 1, NIGHT: 1, FULL: 2 } as Record<string, number>;
+  const contractorCutDrift = deps.filter((d) => {
+    const expect = round2((d.contractorRateCut ?? 0) * (SHIFT_UNITS[d.shift.toUpperCase()] ?? 1));
+    return Math.abs(expect - (d.contractorCut ?? 0)) > 0.01;
+  }).length;
 
   // 6. Expenses with dangling category reference
   const catIds = new Set((await db.expenseCategory.findMany({ select: { id: true } })).map((c) => c.id));
@@ -57,6 +64,7 @@ export const GET = handleRoute(async () => {
     { id: "orphan-payments", label: "Orphan payments", detail: "Payments not linked to any property", count: orphanPayments },
     { id: "trip-overcollect", label: "Trip over-collection", detail: "Trips collected beyond their payable amount", count: overCollected },
     { id: "settlement-drift", label: "Settlement total drift", detail: "Settlement headers not matching their line items", count: settlementDrift },
+    { id: "contractor-cut-drift", label: "Contractor cut drift", detail: "Deployment contractor cuts not matching rate × shift units", count: contractorCutDrift },
     { id: "expense-category", label: "Missing category links", detail: "Expenses pointing to a deleted category", count: expenseCategoryMissing },
   ];
 

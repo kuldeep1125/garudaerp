@@ -39,7 +39,7 @@ const SHIFT_FILTER_OPTIONS: Option[] = [
   { label: "Full", value: "FULL" },
 ];
 
-interface Totals { billing: number; payout: number; margin: number; count: number }
+interface Totals { billing: number; payout: number; margin: number; contractorCut?: number; count: number }
 
 // --- Attendance month grid (per-employee × per-day shift units) ---
 interface AttendanceCell { date: string; shifts: number }
@@ -98,6 +98,7 @@ export default function DeploymentsView({ params }: ViewProps) {
   const [propertyId, setPropertyId] = useState(params?.propertyId ?? "");
   const [employeeId, setEmployeeId] = useState(params?.employeeId ?? "");
   const [shift, setShift] = useState("");
+  const [contractor, setContractor] = useState(""); // '' all · ONLY contractor rows · NONE · exact name
   const [wizardOpen, setWizardOpen] = useState(false);
   const [detail, setDetail] = useState<DeploymentRec | null>(null);
   const [editRates, setEditRates] = useState(false);
@@ -139,6 +140,16 @@ export default function DeploymentsView({ params }: ViewProps) {
     return () => { cancelled = true; };
   }, []);
 
+  // Contractor options for the contractor filter ("sort employees who have his name").
+  const [contractorOptions, setContractorOptions] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    api.get<{ known: string[]; contractors: { name: string }[] }>("/api/dashboard/contractors")
+      .then((d) => { if (!cancelled) setContractorOptions(d.known ?? []); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   const onRange = (r: RangeKey) => {
     setRangeKey(r);
     if (r === "today") { setDate(todayStr()); setFromTo({}); }
@@ -169,6 +180,7 @@ export default function DeploymentsView({ params }: ViewProps) {
         propertyId: propertyId || undefined,
         employeeId: employeeId || undefined,
         shift: shift || undefined,
+        contractor: contractor || undefined,
         pageSize: 200,
       });
       const d = await api.get<ListResp<DeploymentRec> & { totals?: Totals }>("/api/deployments" + query);
@@ -180,7 +192,7 @@ export default function DeploymentsView({ params }: ViewProps) {
     } finally {
       setLoading(false);
     }
-  }, [date, fromTo, propertyId, employeeId, shift]);
+  }, [date, fromTo, propertyId, employeeId, shift, contractor]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -280,6 +292,11 @@ export default function DeploymentsView({ params }: ViewProps) {
         <div className="min-w-0">
           <p className="truncate font-medium">{r.employeeName}</p>
           <p className="truncate text-[11px] text-muted-foreground">{r.employeeCode} · {r.propertyName}</p>
+          {r.contractorName && (
+            <p className="mt-0.5 truncate text-[10px] font-medium text-amber-700 tabular-nums dark:text-amber-400">
+              via {r.contractorName}{(r.contractorCut ?? 0) > 0 ? ` · cut ${formatINR(r.contractorCut ?? 0)}` : ""}
+            </p>
+          )}
         </div>
       ),
       value: (r) => r.employeeName,
@@ -493,14 +510,28 @@ export default function DeploymentsView({ params }: ViewProps) {
               <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Shift</Label>
               <SelectInput value={shift} onChange={setShift} options={SHIFT_FILTER_OPTIONS} placeholder="All shifts" />
             </div>
+            <div>
+              <Label className="mb-1.5 block text-[10px] uppercase tracking-wide text-muted-foreground">Contractor</Label>
+              <SelectInput
+                value={contractor}
+                onChange={setContractor}
+                options={[
+                  { label: "All deployments", value: "" },
+                  { label: "Only contractor staff", value: "ONLY" },
+                  { label: "Without contractor", value: "NONE" },
+                  ...contractorOptions.map((name) => ({ label: name, value: name })),
+                ]}
+                placeholder="All deployments"
+              />
+            </div>
           </div>
         </CardContent>
       </Card>
 
       {/* Totals */}
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
         {loading ? (
-          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)
+          Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)
         ) : (
           <>
             <Card className="border-border/70 shadow-sm"><CardContent className="p-3 sm:p-4">
@@ -520,6 +551,10 @@ export default function DeploymentsView({ params }: ViewProps) {
               <p className={cn("mt-1 text-lg sm:text-xl font-bold tabular-nums", (totals?.margin ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
                 {formatINR(totals?.margin ?? 0, { compact: true })}
               </p>
+            </CardContent></Card>
+            <Card className="border-amber-200/70 shadow-sm dark:border-amber-900"><CardContent className="p-3 sm:p-4">
+              <p className="text-[11px] sm:text-xs text-muted-foreground" title="Contractor commission inside the payout — paid to contractors">Contractor cut</p>
+              <p className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{formatINR(totals?.contractorCut ?? 0, { compact: true })}</p>
             </CardContent></Card>
           </>
         )}
@@ -622,6 +657,11 @@ export default function DeploymentsView({ params }: ViewProps) {
                 </div>
               </div>
 
+              {(detail.contractorName || (detail.contractorCut ?? 0) > 0) && (
+                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs tabular-nums text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                  Contractor {detail.contractorName} — commission {formatINR(detail.contractorCut ?? 0)} ({formatINR(detail.contractorRateCut ?? 0)} × {detailUnits}) from this payout · employee nets {formatINR(Math.max(0, (detail.payoutAmount ?? 0) - (detail.contractorCut ?? 0)))}
+                </p>
+              )}
               {(detail.adjustmentAmount ?? 0) !== 0 && (
                 <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
                   Adjustment {formatINR(detail.adjustmentAmount ?? 0)}{detail.adjustmentNote ? ` — ${detail.adjustmentNote}` : ""}

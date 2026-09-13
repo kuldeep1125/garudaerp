@@ -24,6 +24,260 @@ export const TRIP_STATUSES = ["CONFIRMED", "ACTIVE", "COMPLETED", "CANCELLED"] a
 
 export const EPS = 0.005;
 
+// ---------- employment types / rent / contractor (canonical constants) ----------
+export const EMPLOYMENT_TYPES = ["NON_SALARIED", "SALARIED"] as const;
+export const RENT_MODES = ["MONTH", "DAY"] as const;
+
+/**
+ * Manpower money model (the zero-mismatch contract):
+ *  - NON_SALARIED employee: cost = Σ deployment.payoutAmount (per shift, snapshot).
+ *  - SALARIED employee: deployments carry payout 0; cost accrues as
+ *    monthlySalary prorated per ACTIVE day + overtime = (deployments in month −
+ *    threshold) × overtimeRate. Settlement gross for a full month uses the SAME
+ *    formula, so settled statements always reconcile with accrued cost.
+ *  - Contractor cut: snapshotted per deployment, taken FROM the employee's
+ *    payout and paid to the contractor (business cost unchanged = split). Cuts
+ *    that exceed the deployment payout (only possible on salaried/edge rows)
+ *    are an EXTRA business cost and are added to the payout metric.
+ *  - Employee rent (employee rents the business flat): ACCRUED INCOME —
+ *    MONTH mode prorates rentAmount per active day over the calendar month,
+ *    DAY mode charges rentAmount per active day.
+ *  Canonical net: net = revenue + rentIncome − payout − operatingExpenses.
+ */
+export interface ManpowerCostBreakdown {
+  billing: number;
+  shiftPayout: number;
+  contractorCut: number; // memo — commission earned by contractors (inside shiftPayout in the normal case)
+  extraContractorCut: number; // cuts exceeding the deployment payout (salaried edge) — extra business cost
+  salary: number; // salaried accrual in range
+  overtime: number; // salaried overtime accrual in range
+  rentIncome: number; // employee-rent accrual in range (income)
+  payout: number; // THE employee-cost metric = shiftPayout + salary + overtime + extraContractorCut
+  salariedCount: number;
+  rentCount: number;
+  contractorCount: number;
+}
+
+export interface MonthSegment { from: Date; to: Date; month: string; daysInMonth: number }
+
+/** Splits [from, to] into calendar-month segments (clipped to the range). */
+export function monthSegments(from: Date, to: Date): MonthSegment[] {
+  const segs: MonthSegment[] = [];
+  let cur = new Date(from.getFullYear(), from.getMonth(), 1);
+  while (cur.getTime() <= to.getTime()) {
+    const next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+    const segEnd = new Date(next.getTime() - 1); // last ms of the month
+    const dim = new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate();
+    segs.push({
+      from: startOfDay(cur < from ? from : cur),
+      to: segEnd > to ? to : segEnd,
+      month: monthKey(cur),
+      daysInMonth: dim,
+    });
+    cur = next;
+  }
+  return segs;
+}
+
+function daysBetweenInclusive(a: Date, b: Date): number {
+  return Math.floor((startOfDay(b).getTime() - startOfDay(a).getTime()) / 86400000) + 1;
+}
+
+/**
+ * ACTIVE days for an employee inside a month segment: from joiningDate (or
+ * segment start) to segment end — capped at the last work date for INACTIVE
+ * employees (best available signal for "left the job").
+ */
+function activeDaysInSegment(
+  emp: { joiningDate: Date; status: string },
+  lastWork: Date | null,
+  seg: MonthSegment,
+): number {
+  const start = emp.joiningDate > seg.from ? emp.joiningDate : seg.from;
+  let end = seg.to;
+  if (emp.status !== "ACTIVE") {
+    const lw = lastWork ?? emp.joiningDate;
+    if (lw < end) end = lw;
+  }
+  if (end < start) return 0;
+  return Math.max(0, daysBetweenInclusive(start, end));
+}
+
+/** Salaried gross for one full month — the settlement formula (accrual for a full month matches this). */
+export function salaryOvertimeForMonth(
+  emp: { monthlySalary: number; overtimeThreshold: number; overtimeRate: number },
+  deploymentsInMonth: number,
+): { salary: number; overtime: number; total: number; extraDeployments: number; threshold: number } {
+  const threshold = emp.overtimeThreshold ?? 30;
+  const extra = Math.max(0, deploymentsInMonth - threshold);
+  const salary = round2(emp.monthlySalary ?? 0);
+  const overtime = round2(extra * (emp.overtimeRate ?? 0));
+  return { salary, overtime, total: round2(salary + overtime), extraDeployments: extra, threshold };
+}
+
+/** Salaried salary + overtime accrual for an arbitrary range (per-employee reports). */
+export async function salaryOvertimeForRange(
+  emp: { id: string; joiningDate: Date; status: string; employmentType: string; monthlySalary: number; overtimeThreshold: number; overtimeRate: number },
+  from: Date,
+  to: Date,
+  lastWork?: Date | null,
+): Promise<{ salary: number; overtime: number }> {
+  if (emp.employmentType !== "SALARIED") return { salary: 0, overtime: 0 };
+  const segments = monthSegments(from, to);
+  const segFrom = startOfDay(from);
+  let salary = 0;
+  let overtime = 0;
+  for (const seg of segments) {
+    const effSeg = { ...seg, from: seg.from < segFrom ? segFrom : seg.from };
+    if (effSeg.from > effSeg.to) continue;
+    const days = activeDaysInSegment(emp, lastWork ?? null, effSeg);
+    salary += (emp.monthlySalary ?? 0) * (days / effSeg.daysInMonth);
+    if ((emp.overtimeRate ?? 0) > 0) {
+      const count = await db.deployment.count({ where: { employeeId: emp.id, date: { gte: effSeg.from, lte: effSeg.to } } });
+      overtime += Math.max(0, count - (emp.overtimeThreshold ?? 30)) * (emp.overtimeRate ?? 0);
+    }
+  }
+  return { salary: round2(salary), overtime: round2(overtime) };
+}
+
+/** Employee rent accrual for one month segment. */
+export function rentForSegment(
+  emp: { onBusinessRent: boolean; rentAmount: number; rentMode: string },
+  activeDays: number,
+  seg: MonthSegment,
+): number {
+  if (!emp.onBusinessRent || activeDays <= 0) return 0;
+  if (String(emp.rentMode).toUpperCase() === "DAY") return round2((emp.rentAmount ?? 0) * activeDays);
+  return round2((emp.rentAmount ?? 0) * (activeDays / seg.daysInMonth));
+}
+
+/**
+ * THE canonical manpower cost/accrual aggregation for [from, to].
+ * dashboard/summary, reports/profitability and monthly-metrics ALL read from
+ * this function — numbers can never disagree across pages by construction.
+ */
+export async function manpowerCostBreakdown(from: Date, to: Date): Promise<ManpowerCostBreakdown> {
+  const [depAgg, cutRows, specials, lastWorks] = await Promise.all([
+    db.deployment.aggregate({
+      where: { date: { gte: from, lte: to } },
+      _sum: { billingAmount: true, payoutAmount: true, contractorCut: true },
+    }),
+    db.deployment.findMany({
+      where: { date: { gte: from, lte: to }, contractorCut: { gt: 0 } },
+      select: { payoutAmount: true, contractorCut: true },
+    }),
+    db.employee.findMany({
+      where: { OR: [{ employmentType: "SALARIED" }, { onBusinessRent: true }] },
+      select: { id: true, fullName: true, status: true, joiningDate: true, employmentType: true, monthlySalary: true, overtimeThreshold: true, overtimeRate: true, onBusinessRent: true, rentAmount: true, rentMode: true },
+    }),
+    db.deployment.groupBy({
+      by: ["employeeId"],
+      _max: { date: true },
+      where: { employee: { OR: [{ employmentType: "SALARIED" }, { onBusinessRent: true }] } },
+    }),
+  ]);
+
+  const billing = round2(depAgg._sum.billingAmount ?? 0);
+  const shiftPayout = round2(depAgg._sum.payoutAmount ?? 0);
+  const contractorCut = round2(depAgg._sum.contractorCut ?? 0);
+  let extraContractorCut = 0;
+  for (const r of cutRows) extraContractorCut += Math.max(0, r.contractorCut - r.payoutAmount);
+  extraContractorCut = round2(extraContractorCut);
+
+  const segments = monthSegments(from, to);
+  const lastWorkBy = new Map(lastWorks.map((r) => [r.employeeId, r._max.date as Date | null]));
+  let salary = 0;
+  let overtime = 0;
+  let rentIncome = 0;
+  const segFrom = startOfDay(from);
+  for (const emp of specials) {
+    for (const seg of segments) {
+      // only count days inside the requested range (segment is already clipped, but the
+      // segment start may precede `from` when the range starts mid-month — clamp again)
+      const effSeg = { ...seg, from: seg.from < segFrom ? segFrom : seg.from };
+      if (effSeg.from > effSeg.to) continue;
+      const lastWork = lastWorkBy.get(emp.id) ?? null;
+      const days = activeDaysInSegment(emp, lastWork, effSeg);
+      if (emp.employmentType === "SALARIED") {
+        salary += (emp.monthlySalary ?? 0) * (days / effSeg.daysInMonth);
+      }
+      rentIncome += rentForSegment(emp, days, effSeg);
+    }
+    // overtime: per month segment, deployments of this employee inside the segment
+    if (emp.employmentType === "SALARIED" && (emp.overtimeRate ?? 0) > 0) {
+      for (const seg of segments) {
+        const effSeg = { ...seg, from: seg.from < segFrom ? segFrom : seg.from };
+        const count = await db.deployment.count({
+          where: { employeeId: emp.id, date: { gte: effSeg.from, lte: effSeg.to } },
+        });
+        overtime += Math.max(0, count - (emp.overtimeThreshold ?? 30)) * (emp.overtimeRate ?? 0);
+      }
+    }
+  }
+  salary = round2(salary);
+  overtime = round2(overtime);
+  rentIncome = round2(rentIncome);
+
+  return {
+    billing,
+    shiftPayout,
+    contractorCut,
+    extraContractorCut,
+    salary,
+    overtime,
+    rentIncome,
+    payout: round2(shiftPayout + salary + overtime + extraContractorCut),
+    salariedCount: specials.filter((e) => e.employmentType === "SALARIED").length,
+    rentCount: specials.filter((e) => e.onBusinessRent).length,
+    contractorCount: 0, // filled by callers that need it (cheap separate query)
+  };
+}
+
+export interface ContractorStat {
+  name: string;
+  todayDeployments: number;
+  todayCommission: number;
+  monthDeployments: number;
+  monthCommission: number;
+  employees: string[];
+}
+
+/** Per-contractor commission: today + current month (dashboard cards). */
+export async function contractorStats(): Promise<ContractorStat[]> {
+  const now = new Date();
+  const dayStart = startOfDay(now);
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const rows = await db.deployment.findMany({
+    where: { contractorName: { not: null }, date: { gte: monthStart, lte: endOfDay(now) } },
+    select: { contractorName: true, date: true, contractorCut: true, employee: { select: { fullName: true } } },
+    orderBy: { date: "asc" },
+  });
+  const map = new Map<string, ContractorStat>();
+  for (const r of rows) {
+    const name = r.contractorName as string;
+    const stat = map.get(name) ?? { name, todayDeployments: 0, todayCommission: 0, monthDeployments: 0, monthCommission: 0, employees: [] };
+    stat.monthDeployments += 1;
+    stat.monthCommission = round2(stat.monthCommission + r.contractorCut);
+    if (!stat.employees.includes(r.employee.fullName)) stat.employees.push(r.employee.fullName);
+    if (r.date >= dayStart) {
+      stat.todayDeployments += 1;
+      stat.todayCommission = round2(stat.todayCommission + r.contractorCut);
+    }
+    map.set(name, stat);
+  }
+  return [...map.values()].sort((a, b) => b.monthCommission - a.monthCommission);
+}
+
+/** Distinct contractor names on the Employee master (for filters). */
+export async function contractorNames(): Promise<string[]> {
+  const rows = await db.employee.findMany({
+    where: { hasContractor: true, contractorName: { not: null } },
+    select: { contractorName: true },
+    orderBy: { contractorName: "asc" },
+  });
+  return [...new Set(rows.map((r) => r.contractorName as string))];
+}
+
 // ---------- owner capital movements (canonical predicate) ----------
 // Owner CONTRIBUTION (money in) / WITHDRAWAL (drawings) are capital movements,
 // NOT operating expenses. Every P&L aggregation must count OPERATING expenses

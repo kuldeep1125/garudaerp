@@ -13,17 +13,20 @@ export const GET = handleRoute(async ({ req }) => {
   const settlements = await db.settlement.findMany({
     where: { month },
     orderBy: { netPayable: "desc" },
-    include: { employee: { select: { fullName: true, code: true } } },
+    include: { employee: { select: { fullName: true, code: true, employmentType: true } } },
   });
 
   const rows = settlements.map((s) => ({
     id: s.id,
     employeeName: s.employee.fullName,
     employeeCode: s.employee.code,
+    employmentType: s.employee.employmentType === "SALARIED" ? "Salaried" : "Per-shift",
     totalDays: s.totalDays,
     gross: round2(s.grossEarnings),
     additions: round2(s.additions),
     advanceDeducted: round2(s.advanceDeducted),
+    otherDeductions: round2(s.otherDeductions),
+    contractorCut: round2(s.contractorCut),
     net: round2(s.netPayable),
     status: s.status,
   }));
@@ -33,6 +36,8 @@ export const GET = handleRoute(async ({ req }) => {
     gross: round2(rows.reduce((s, r) => s + r.gross, 0)),
     additions: round2(rows.reduce((s, r) => s + r.additions, 0)),
     advanceDeducted: round2(rows.reduce((s, r) => s + r.advanceDeducted, 0)),
+    otherDeductions: round2(rows.reduce((s, r) => s + r.otherDeductions, 0)),
+    contractorCut: round2(rows.reduce((s, r) => s + r.contractorCut, 0)),
     net: round2(rows.reduce((s, r) => s + r.net, 0)),
     count: rows.length,
   };
@@ -41,15 +46,19 @@ export const GET = handleRoute(async ({ req }) => {
     columns: [
       { key: "employeeName", label: "Employee", type: "string" },
       { key: "employeeCode", label: "Code", type: "string" },
+      { key: "employmentType", label: "Type", type: "string" },
       { key: "totalDays", label: "Days", type: "number" },
       { key: "gross", label: "Gross", type: "currency" },
       { key: "additions", label: "Additions", type: "currency" },
       { key: "advanceDeducted", label: "Advance Deducted", type: "currency" },
+      { key: "otherDeductions", label: "Other Deductions", type: "currency" },
+      { key: "contractorCut", label: "Contractor Cut", type: "currency" },
       { key: "net", label: "Net Payable", type: "currency" },
       { key: "status", label: "Status", type: "string" },
     ],
     rows,
     totals,
     meta: { month, from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) },
+    note: "Net payable = gross + additions − other deductions − contractor cut − advance deducted. Salaried gross = monthly salary + overtime (deployments beyond the threshold × rate).",
   };
 });

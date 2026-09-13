@@ -32,7 +32,7 @@ async function api(method: string, path: string, body?: unknown): Promise<{ stat
 
 /** DB-level purge of any ZQA-marked rows in FK-safe order (runs before AND after). */
 async function purgeQaRows() {
-  const qaEmps = await db.employee.findMany({ where: { fullName: { contains: "ZQA Worker" } }, select: { id: true } });
+  const qaEmps = await db.employee.findMany({ where: { OR: [{ fullName: { contains: "ZQA Worker" } }, { fullName: { contains: "ZQA Salaried" } }, { contractorName: { contains: "ZQA Contractor" } }, { fullName: { contains: "ZQA Contractor" } }] }, select: { id: true } });
   const qaProps = await db.property.findMany({ where: { name: { contains: "ZQA Palace" } }, select: { id: true } });
   const qaIds = [...qaEmps.map((e) => e.id), ...qaProps.map((p) => p.id)];
   if (qaIds.length) {
@@ -189,14 +189,15 @@ async function main() {
   ok("dashboard month expenses == operating-only scope", dashExpenses <= t.operating + 0.006, `dash ${dashExpenses} > operating ${t.operating}`);
 
   // ZERO-MISMATCH INVARIANT: dashboard "Net Result" MUST equal the
-  // profitability report's "Net" for the same period (revenue − employee
-  // payout − operating expenses). Guards the 850-vs-550 mismatch class.
+  // profitability report's "Net" for the same period (revenue + employee rent
+  // − employee cost − operating expenses). Guards the 850-vs-550 mismatch class.
   const profRep = await api("GET", `/api/reports/profitability?from=${from}&to=${to}`);
   const dashRanged = await api("GET", `/api/dashboard/summary?range=custom&from=${from}&to=${to}`);
   const dashNet = dashRanged.data.combined.net ?? 0;
-  const expectedNet = (dashRanged.data.combined.revenue ?? 0) - (dashRanged.data.combined.employeePayout ?? 0) - (dashRanged.data.combined.expenses ?? 0);
-  ok("dashboard net identity: revenue − payout − expenses", Math.abs(dashNet - expectedNet) < 0.006, `net ${dashNet} != ${expectedNet}`);
+  const expectedNet = (dashRanged.data.combined.revenue ?? 0) + (dashRanged.data.combined.rentIncome ?? 0) - (dashRanged.data.combined.employeePayout ?? 0) - (dashRanged.data.combined.expenses ?? 0);
+  ok("dashboard net identity: revenue + rent − payout − expenses", Math.abs(dashNet - expectedNet) < 0.006, `net ${dashNet} != ${expectedNet}`);
   ok("dashboard net == profitability net (same range)", Math.abs(dashNet - (profRep.data.totals?.net ?? 0)) < 0.006, `dash ${dashNet} vs reports ${profRep.data.totals?.net}`);
+  ok("dashboard rent == profitability rent income", Math.abs((dashRanged.data.manpower.rentIncome ?? 0) - (profRep.data.rows?.[0]?.rentIncome ?? 0)) < 0.006);
 
   // owner-expenses report reconciles with the owner-breakdown tab
   const repOwner = await api("GET", `/api/reports/owner-expenses?from=${from}&to=${to}`);
@@ -218,7 +219,6 @@ async function main() {
 
   // ---------- 5. settlement: user's exact scenario 700 − 100 = 600 ----------
   console.log("\n[5] settlement deduction (700−100→600)");
-  // property
   r = await api("POST", "/api/properties", { name: `${MARK} Palace`, type: "RESTAURANT", billingRate: 700, address: "QA" });
   const propStatus = r.status;
   const property = r.data;
@@ -263,6 +263,138 @@ async function main() {
   ok("bad date does not crash (200 or 400)", r.status === 200 || r.status === 400, `got ${r.status}`);
   r = await api("GET", "/api/expenses/owner-breakdown?from=2026-13-99&to=x");
   ok("breakdown bad dates handled", r.status === 200 || r.status === 400, `got ${r.status}`);
+
+  // ---------- 7. salaried / rent / contractor: full model ----------
+  console.log("\n[7] salaried + rent + contractor model");
+  // 7a. negative validation
+  r = await api("POST", "/api/employees", { fullName: `${MARK} Worker 2`, employmentType: "SALARIED", monthlySalary: 0 });
+  ok("salaried without salary rejected", r.status === 400, `got ${r.status}`);
+  r = await api("POST", "/api/employees", { fullName: `${MARK} Worker 2`, employmentType: "SALARIED", monthlySalary: 5000, overtimeThreshold: -1 });
+  ok("negative overtime threshold rejected", r.status === 400, `got ${r.status}`);
+  r = await api("POST", "/api/employees", { fullName: `${MARK} Worker 2`, standardRate: 500, onBusinessRent: true, rentAmount: 0 });
+  ok("rent without amount rejected", r.status === 400, `got ${r.status}`);
+  r = await api("POST", "/api/employees", { fullName: `${MARK} Worker 2`, standardRate: 500, hasContractor: true });
+  ok("contractor without name rejected", r.status === 400, `got ${r.status}`);
+  r = await api("POST", "/api/employees", { fullName: `${MARK} Worker 2` });
+  ok("non-salaried without rate rejected", r.status === 400, `got ${r.status}`);
+
+  // baseline for delta-based accrual assertions (current month, like the fixtures)
+  const dashBefore = await api("GET", `/api/dashboard/summary?range=custom&from=${from}&to=${to}`);
+  const mpBefore = dashBefore.data.manpower as {
+    payout: number; salary: number; overtime: number; rentIncome: number;
+  };
+  const ctrRepBefore = await api("GET", `/api/reports/contractor-commissions?from=${from}&to=${to}`);
+  const ctrBeforeTotal = ctrRepBefore.data.totals?.commission ?? 0;
+
+  // 7b. salaried + rent employee (settlement month = August; accrual month = current)
+  r = await api("POST", "/api/employees", {
+    fullName: `${MARK} Salaried`, employmentType: "SALARIED", monthlySalary: 6000,
+    overtimeThreshold: 30, overtimeRate: 0, onBusinessRent: true, rentAmount: 3000, rentMode: "MONTH",
+  });
+  ok("salaried employee created (standardRate forced 0)", (r.status === 200 || r.status === 201) && r.data.standardRate === 0, `status ${r.status}`);
+  const salEmp = r.data;
+  if (salEmp?.id) created.push({ kind: "employee", id: salEmp.id });
+  // 7c. overtime salaried: threshold 0, rate 200 → every deployment pays 200 extra in the month gross
+  r = await api("POST", "/api/employees", {
+    fullName: `${MARK} Salaried OT`, employmentType: "SALARIED", monthlySalary: 4000,
+    overtimeThreshold: 0, overtimeRate: 200,
+  });
+  ok("overtime salaried created", r.status === 200 || r.status === 201, `status ${r.status}`);
+  const otEmp = r.data;
+  if (otEmp?.id) created.push({ kind: "employee", id: otEmp.id });
+  // 7d. contractor employee: rate 700, contractor cut 100/shift
+  r = await api("POST", "/api/employees", {
+    fullName: `${MARK} Contractor Worker`, standardRate: 700,
+    hasContractor: true, contractorName: `${MARK} Contractor`, contractorRateCut: 100,
+  });
+  ok("contractor employee created", r.status === 200 || r.status === 201, `status ${r.status}`);
+  const cEmp = r.data;
+  if (cEmp?.id) created.push({ kind: "employee", id: cEmp.id });
+  r = await api("GET", `/api/employees?employmentType=SALARIED&pageSize=100`);
+  ok("employmentType filter works", (r.data.items as { employmentType: string }[]).every((e) => e.employmentType === "SALARIED"));
+
+  // deployments in AUGUST (settlement scope — never touches the user's September data)
+  r = await api("POST", "/api/deployments", {
+    propertyId: property.id, date: "2026-08-20",
+    entries: [{ employeeId: salEmp.id, shift: "DAY" }, { employeeId: otEmp.id, shift: "DAY" }, { employeeId: otEmp.id, shift: "NIGHT" }, { employeeId: cEmp.id, shift: "DAY" }],
+  });
+  const createdRows = (r.data?.created ?? []) as { id: string; employeeId: string; payoutRate: number; payoutAmount: number; contractorName: string | null; contractorCut: number }[];
+  for (const row of createdRows) created.push({ kind: "deployment", id: row.id });
+  ok("4 August deployments created", createdRows.length === 4, `got ${createdRows.length}`);
+  const salDep = createdRows.find((x) => x.employeeId === salEmp.id);
+  const otDeps = createdRows.filter((x) => x.employeeId === otEmp.id);
+  ok("overtime employee has 2 August deployments (DAY+NIGHT)", otDeps.length === 2, `got ${otDeps.length}`);
+  const cDep = createdRows.find((x) => x.employeeId === cEmp.id);
+  ok("salaried deployment payout forced 0", !!salDep && salDep.payoutRate === 0 && salDep.payoutAmount === 0, JSON.stringify(salDep));
+  ok("contractor deployment snapshot cut 100", !!cDep && cDep.contractorName === `${MARK} Contractor` && cDep.contractorCut === 100, JSON.stringify(cDep));
+  // shift change FULL re-derives the cut (rate × 2 units)
+  if (cDep) {
+    r = await api("PUT", `/api/deployments/${cDep.id}`, { shift: "FULL" });
+    ok("shift→FULL recomputes contractorCut 200", r.data?.contractorCut === 200, `got ${r.data?.contractorCut}`);
+    r = await api("PUT", `/api/deployments/${cDep.id}`, { shift: "DAY" });
+    ok("shift→DAY recomputes contractorCut 100", r.data?.contractorCut === 100, `got ${r.data?.contractorCut}`);
+  }
+
+  // 7e. August settlements: salaried gross = salary (+ overtime), contractor cut deducted
+  r = await api("POST", "/api/settlements/generate", { month: "2026-08" });
+  const salDraft = (r.data?.drafts ?? []).find((d: { employeeId: string }) => d.employeeId === salEmp.id);
+  const otDraft = (r.data?.drafts ?? []).find((d: { employeeId: string }) => d.employeeId === otEmp.id);
+  const cDraft = (r.data?.drafts ?? []).find((d: { employeeId: string }) => d.employeeId === cEmp.id);
+  if (salDraft) created.push({ kind: "settlement", id: salDraft.id });
+  if (otDraft) created.push({ kind: "settlement", id: otDraft.id });
+  if (cDraft) created.push({ kind: "settlement", id: cDraft.id });
+  ok("salaried draft exists without deployments in August? (deployed 08-20 → yes)", Boolean(salDraft));
+  ok("salaried gross == 6000 (1 deployment < 30 threshold, no overtime)", !!salDraft && Math.abs(salDraft.grossEarnings - 6000) < 0.006, `gross ${salDraft?.grossEarnings}`);
+  ok("salaried net == 6000", !!salDraft && Math.abs(salDraft.netPayable - 6000) < 0.006, `net ${salDraft?.netPayable}`);
+  ok("overtime gross == 4000 + 2×200", !!otDraft && Math.abs(otDraft.grossEarnings - 4400) < 0.006, `gross ${otDraft?.grossEarnings}`);
+  const salSt = salDraft ? await api("GET", `/api/settlements/${salDraft.id}/statement`) : null;
+  ok("salaried statement has synthetic SALARY line", (salSt?.data?.lines ?? []).some((l: { shift: string }) => l.shift === "SALARY"), JSON.stringify((salSt?.data?.lines ?? []).map((l: { shift: string }) => l.shift)));
+  ok("overtime statement has OVERTIME line", otDraft ? ((await api("GET", `/api/settlements/${otDraft.id}/statement`)).data?.lines ?? []).some((l: { shift: string }) => l.shift === "OVERTIME") : false);
+  ok("contractor draft: gross 700, cut 100, net 600", !!cDraft && Math.abs(cDraft.grossEarnings - 700) < 0.006 && Math.abs(cDraft.contractorCut - 100) < 0.006 && Math.abs(cDraft.netPayable - 600) < 0.006, JSON.stringify(cDraft));
+  if (cDraft) {
+    r = await api("PUT", `/api/settlements/${cDraft.id}`, { otherDeductions: 50 });
+    ok("contractor settlement: 700 − 100 cut − 50 other = 550", r.data?.netPayable === 550, `net ${r.data?.netPayable}`);
+  }
+
+  // 7f. accrual invariants for the CURRENT month (delta-based, joining-date prorated)
+  const dashAfter = await api("GET", `/api/dashboard/summary?range=custom&from=${from}&to=${to}`);
+  const mpAfter = dashAfter.data.manpower as { payout: number; salary: number; overtime: number; rentIncome: number };
+  const now = new Date();
+  const inRange = now.getFullYear() === 2026 && now.getMonth() === 8; // September 2026
+  if (inRange) {
+    const daysInSep = 30;
+    const activeDays = daysInSep - now.getDate() + 1; // joined today → today..Sep 30
+    const expSalary = 6000 * (activeDays / daysInSep) + 4000 * (activeDays / daysInSep);
+    const expRent = 3000 * (activeDays / daysInSep);
+    ok("salary accrual delta == prorated 6000+4000", Math.abs((mpAfter.salary - mpBefore.salary) - expSalary) < 0.02, `Δ ${(mpAfter.salary - mpBefore.salary).toFixed(2)} vs ${expSalary.toFixed(2)}`);
+    ok("rent accrual delta == prorated 3000", Math.abs((mpAfter.rentIncome - mpBefore.rentIncome) - expRent) < 0.02, `Δ ${(mpAfter.rentIncome - mpBefore.rentIncome).toFixed(2)} vs ${expRent.toFixed(2)}`);
+    ok("payout delta == salary delta (zero-shift salaried)", Math.abs((mpAfter.payout - mpBefore.payout) - expSalary) < 0.02);
+    ok("overtime accrual 0 in Sep (no Sep deployments)", Math.abs(mpAfter.overtime - mpBefore.overtime) < 0.006, `Δ ${mpAfter.overtime - mpBefore.overtime}`);
+  }
+  // net identity still holds with salary/rent in the mix
+  const expectedNet2 = (dashAfter.data.combined.revenue ?? 0) + (dashAfter.data.combined.rentIncome ?? 0) - (dashAfter.data.combined.employeePayout ?? 0) - (dashAfter.data.combined.expenses ?? 0);
+  ok("net identity holds after salary/rent fixtures", Math.abs((dashAfter.data.combined.net ?? 0) - expectedNet2) < 0.006);
+  const profAfter = await api("GET", `/api/reports/profitability?from=${from}&to=${to}`);
+  ok("dashboard net == profitability net after fixtures", Math.abs((dashAfter.data.combined.net ?? 0) - (profAfter.data.totals?.net ?? 0)) < 0.006, `${dashAfter.data.combined.net} vs ${profAfter.data.totals?.net}`);
+
+  // 7g. contractor-commissions report == Σ snapshotted cuts (deployment is in AUGUST)
+  r = await api("GET", `/api/reports/contractor-commissions?from=2026-08-01&to=2026-08-31&contractor=${encodeURIComponent(`${MARK} Contractor`)}`);
+  const ctrRows = r.data.rows as { commission: number; deployments: number; units: number }[];
+  ok("contractor report row: 1 deployment 1 unit 100", ctrRows.length === 1 && ctrRows[0].deployments === 1 && ctrRows[0].units === 1 && Math.abs(ctrRows[0].commission - 100) < 0.006, JSON.stringify(ctrRows));
+  r = await api("GET", `/api/reports/contractor-commissions?from=2026-08-01&to=2026-08-31`);
+  const ctrAugTotal = r.data.totals?.commission ?? 0;
+  ok("August contractor report total == 100 (cut snapshotted)", Math.abs(ctrAugTotal - 100) < 0.006, `got ${ctrAugTotal}`);
+  const ctrRepAfter = await api("GET", `/api/reports/contractor-commissions?from=${from}&to=${to}`);
+  ok("Sep contractor report delta == 0 (no Sep deployments)", Math.abs((ctrRepAfter.data.totals?.commission ?? 0) - ctrBeforeTotal) < 0.006, `Δ ${(ctrRepAfter.data.totals?.commission ?? 0) - ctrBeforeTotal}`);
+  // deployments contractor filter
+  r = await api("GET", "/api/deployments?contractor=ONLY&pageSize=200");
+  ok("deployments contractor=ONLY filter", (r.data.items as { contractorName: string | null }[]).every((i) => i.contractorName) && r.data.total >= 1);
+  r = await api("GET", `/api/deployments?contractor=${encodeURIComponent(`${MARK} Contractor`)}&from=2026-08-01&to=2026-08-31`);
+  ok("deployments filter by contractor name", r.data.total === 1 && r.data.totals.contractorCut === 100, `total ${r.data.total}`);
+
+  // 7h. integrity contractor-cut drift check must stay green
+  r = await api("GET", "/api/settings/integrity");
+  ok("integrity: contractor-cut drift 0", (r.data.checks as { id: string; count: number }[]).find((c) => c.id === "contractor-cut-drift")?.count === 0);
 
   // ---------- cleanup ----------
   console.log("\n[cleanup] removing QA rows");

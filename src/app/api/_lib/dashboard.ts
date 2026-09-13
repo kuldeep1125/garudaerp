@@ -10,6 +10,7 @@ import {
   vehicleStatsMap,
   loadAllLedgers,
   computeNotifications,
+  manpowerCostBreakdown,
   type AppNotification,
 } from "./engine";
 
@@ -17,7 +18,12 @@ export interface ManpowerBlock {
   employeesDeployed: number;
   propertiesServed: number;
   expectedBilling: number;
-  payout: number;
+  payout: number; // THE cost metric (shift payouts + salaried accrual + overtime + extra contractor cuts)
+  shiftPayout: number;
+  salary: number;
+  overtime: number;
+  rentIncome: number;
+  contractorCut: number;
   grossMargin: number;
   received: number;
   pending: number;
@@ -51,7 +57,7 @@ export interface CollectionsBlock {
 
 /** Manpower KPI block for [from, to]. Pending = all-time FIFO outstanding. */
 export async function manpowerBlock(from: Date, to: Date): Promise<ManpowerBlock> {
-  const [deps, payAgg, advAgg, expAgg, ledgers] = await Promise.all([
+  const [deps, payAgg, advAgg, expAgg, ledgers, cost] = await Promise.all([
     db.deployment.findMany({
       where: { date: { gte: from, lte: to } },
       select: { employeeId: true, propertyId: true, shift: true, billingAmount: true, payoutAmount: true },
@@ -60,18 +66,17 @@ export async function manpowerBlock(from: Date, to: Date): Promise<ManpowerBlock
     db.advance.aggregate({ where: { date: { gte: from, lte: to } }, _sum: { amount: true } }),
     db.expense.aggregate({ where: { business: "MANPOWER", kind: "OPERATING", date: { gte: from, lte: to } }, _sum: { amount: true } }),
     loadAllLedgers(),
+    // CANONICAL source for billing/payout/rent — the same function the Reports
+    // page and monthly summary use, so the numbers can never disagree.
+    manpowerCostBreakdown(from, to),
   ]);
   const employeeIds = new Set<string>();
   const propertyIds = new Set<string>();
-  let billing = 0;
-  let payout = 0;
   let dayShifts = 0;
   let nightShifts = 0;
   for (const d of deps) {
     employeeIds.add(d.employeeId);
     propertyIds.add(d.propertyId);
-    billing += d.billingAmount;
-    payout += d.payoutAmount;
     // FULL covers both halves of the day → counts in day AND night coverage.
     const s = d.shift.toUpperCase();
     if (s === "DAY" || s === "FULL") dayShifts++;
@@ -82,9 +87,14 @@ export async function manpowerBlock(from: Date, to: Date): Promise<ManpowerBlock
   return {
     employeesDeployed: employeeIds.size,
     propertiesServed: propertyIds.size,
-    expectedBilling: round2(billing),
-    payout: round2(payout),
-    grossMargin: round2(billing - payout),
+    expectedBilling: cost.billing,
+    payout: cost.payout,
+    shiftPayout: cost.shiftPayout,
+    salary: cost.salary,
+    overtime: cost.overtime,
+    rentIncome: cost.rentIncome,
+    contractorCut: cost.contractorCut,
+    grossMargin: round2(cost.billing - cost.payout),
     received: round2(payAgg._sum.amount ?? 0),
     pending: round2(Math.max(0, pending)),
     advancesGiven: round2(advAgg._sum.amount ?? 0),

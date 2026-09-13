@@ -298,6 +298,9 @@ export default function SettlementsView({ navigate }: ViewProps) {
                 <div className="rounded-xl border bg-muted/30 px-3.5 py-2">
                   <KV label="Gross earnings" value={formatINR(detail.grossEarnings ?? 0)} />
                   <KV label="Additions (bonus/OT)" value={formatINR(detail.additions ?? 0)} className="text-emerald-600 dark:text-emerald-400" />
+                  {(detail.contractorCut ?? 0) > 0 && (
+                    <KV label="Contractor commission" value={`−${formatINR(detail.contractorCut ?? 0)}`} className="text-amber-600 dark:text-amber-400" />
+                  )}
                   <KV label="Other deductions" value={(detail.otherDeductions ?? 0) > 0 ? `−${formatINR(detail.otherDeductions ?? 0)}` : formatINR(0)} />
                   <KV label="Advance deducted" value={`−${formatINR(detail.advanceDeducted ?? 0)}`} className="text-red-600 dark:text-red-400" />
                   {(detail.advanceCarryForward ?? 0) !== 0 && (
@@ -307,6 +310,9 @@ export default function SettlementsView({ navigate }: ViewProps) {
                     <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Net payable</span>
                     <span className={cn("text-lg font-bold tabular-nums", netTone)}>{formatINR(detail.netPayable ?? 0)}</span>
                   </div>
+                  {(detail.contractorCut ?? 0) > 0 && (
+                    <p className="mt-1.5 text-[10px] text-muted-foreground">Net = gross {formatINR(detail.grossEarnings ?? 0)} + additions {formatINR(detail.additions ?? 0)} − contractor {formatINR(detail.contractorCut ?? 0)} − other {formatINR(detail.otherDeductions ?? 0)} − advance {formatINR(detail.advanceDeducted ?? 0)}</p>
+                  )}
                 </div>
 
                 {/* DRAFT editing */}

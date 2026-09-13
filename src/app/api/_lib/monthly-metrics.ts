@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { round2 } from "@/lib/money";
-import {} from "./engine";
+import { manpowerCostBreakdown } from "./engine";
 
 // Shared month-metrics engine — used by:
 //   - GET /api/dashboard/monthly-summary   (dashboard card)
@@ -17,7 +17,12 @@ import {} from "./engine";
 export interface MonthMetrics {
   deployments: number;
   manpowerBilling: number;
-  manpowerPayout: number;
+  manpowerPayout: number; // full employee cost (shift payouts + salary + overtime + extra cuts)
+  manpowerShiftPayout: number;
+  manpowerSalary: number;
+  manpowerOvertime: number;
+  rentIncome: number;
+  contractorCut: number;
   manpowerMargin: number;
   manpowerOtherExpenses: number;
   collections: number;
@@ -57,7 +62,7 @@ export function shortMonthLabel(month: string): string {
 
 export async function metricsFor(month: string): Promise<MonthMetrics> {
   const { from, to } = boundsOf(month);
-  const [deps, payAgg, advAgg, trips, expenses] = await Promise.all([
+  const [deps, payAgg, advAgg, trips, expenses, cost] = await Promise.all([
     db.deployment.aggregate({
       where: { date: { gte: from, lte: to } },
       _sum: { billingAmount: true, payoutAmount: true },
@@ -73,6 +78,8 @@ export async function metricsFor(month: string): Promise<MonthMetrics> {
       where: { date: { gte: from, lte: to } },
       select: { business: true, categoryName: true, amount: true, kind: true },
     }),
+    // CANONICAL manpower cost/rent — same function dashboard & reports use.
+    manpowerCostBreakdown(from, to),
   ]);
 
   let manpowerOther = 0;
@@ -95,14 +102,19 @@ export async function metricsFor(month: string): Promise<MonthMetrics> {
     transportCollected += t.paidAmount;
   }
 
-  const manpowerBilling = round2(deps._sum.billingAmount ?? 0);
-  const manpowerPayout = round2(deps._sum.payoutAmount ?? 0);
+  const manpowerBilling = cost.billing;
+  const manpowerPayout = cost.payout;
   const margin = round2(manpowerBilling - manpowerPayout);
 
   return {
     deployments: deps._count,
     manpowerBilling,
     manpowerPayout,
+    manpowerShiftPayout: cost.shiftPayout,
+    manpowerSalary: cost.salary,
+    manpowerOvertime: cost.overtime,
+    rentIncome: cost.rentIncome,
+    contractorCut: cost.contractorCut,
     manpowerMargin: margin,
     manpowerOtherExpenses: round2(manpowerOther),
     collections: round2(payAgg._sum.amount ?? 0),
@@ -112,7 +124,9 @@ export async function metricsFor(month: string): Promise<MonthMetrics> {
     transportCollected: round2(transportCollected),
     transportOpex: round2(transportOpex),
     transportEmi: round2(transportEmi),
-    net: round2(margin - manpowerOther + transportRevenue - transportOpex - transportEmi),
+    // CANONICAL: net = billing + rent − employee cost − manpower expenses
+    //            + transport revenue − transport opex − transport EMI.
+    net: round2(margin + cost.rentIncome - manpowerOther + transportRevenue - transportOpex - transportEmi),
   };
 }
 
@@ -123,7 +137,7 @@ export function pctChange(cur: number, prev: number): number | null {
 }
 
 export const MONTH_METRICS_NOTE =
-  "Money semantics: manpower billing counts deployments dated in the month; transport revenue counts trips starting in the month (billing basis); collections are payments received in the month and may settle earlier billing.";
+  "Money semantics: manpower billing counts deployments dated in the month; employee cost includes salaried salary + overtime accrual and contractor cuts; rent from employees in business accommodation counts as income; transport revenue counts trips starting in the month (billing basis); collections are payments received in the month and may settle earlier billing.";
 
 export function buildInsights(cur: MonthMetrics, prev: MonthMetrics, prevMonth: string): string[] {
   const insights: string[] = [];

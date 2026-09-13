@@ -23,7 +23,7 @@ import {
   Phone, MessageCircle, HandCoins, Pencil, CalendarDays, Wallet, ReceiptText, Activity,
 } from "lucide-react";
 import {
-  AdvanceRec, AreaTrend, CHART_COLORS, DeploymentRec, EmployeeRec, Field, GiveAdvanceDialog,
+  EmployeePayBadges, AdvanceRec, AreaTrend, CHART_COLORS, DeploymentRec, EmployeeRec, Field, GiveAdvanceDialog,
   InitialAvatar, MoneyInput, Option, SelectInput, SettlementRec, SHIFT_UNITS, ShiftBadgeInline, errMessage, fmtDay,
   todayStr, useMutation,
 } from "./_shared";
@@ -302,7 +302,15 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
                 Joined {fmtDay(emp.joiningDate)} · {emp.city || "—"}
               </p>
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                <Badge variant="outline" className="tabular-nums">{formatINR(emp.standardRate ?? 0)}/shift</Badge>
+                {emp.employmentType === "SALARIED" ? (
+                  <Badge variant="outline" className="tabular-nums">{formatINR(emp.monthlySalary ?? 0)}/month · salaried</Badge>
+                ) : (
+                  <Badge variant="outline" className="tabular-nums">{formatINR(emp.standardRate ?? 0)}/shift</Badge>
+                )}
+                {(emp.overtimeRate ?? 0) > 0 && (
+                  <Badge variant="outline" className="tabular-nums">OT {formatINR(emp.overtimeRate ?? 0)} after {emp.overtimeThreshold ?? 30}/mo</Badge>
+                )}
+                <EmployeePayBadges r={emp} />
                 {(emp.advanceBalance ?? 0) > 0 ? (
                   <Badge variant="outline" className="border-red-200 bg-red-50 tabular-nums text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
                     Advance due {formatINR(emp.advanceBalance ?? 0)}
@@ -344,6 +352,38 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
         </div>
 
         <TabsContent value="work" className="mt-3 space-y-3">
+          {/* Pay model strip — salary / overtime / rent / contractor in one glance */}
+          {(emp.employmentType === "SALARIED" || emp.onBusinessRent || (emp.hasContractor && emp.contractorName)) && (
+            <Card>
+              <CardContent className="grid gap-2 p-4 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                {emp.employmentType === "SALARIED" && (
+                  <div className="rounded-lg bg-muted/50 p-2.5">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Salary model</p>
+                    <p className="mt-0.5 font-semibold tabular-nums">{formatINR(emp.monthlySalary ?? 0)}/month</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {(emp.overtimeRate ?? 0) > 0
+                        ? `Overtime ₹${emp.overtimeRate} per deployment beyond ${emp.overtimeThreshold ?? 30}/mo`
+                        : "No overtime configured"}
+                    </p>
+                  </div>
+                )}
+                {emp.onBusinessRent && (
+                  <div className="rounded-lg bg-muted/50 p-2.5">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Business rent (income)</p>
+                    <p className="mt-0.5 font-semibold tabular-nums">{formatINR(emp.rentAmount ?? 0)}/{(emp.rentMode ?? "MONTH").toLowerCase() === "DAY" ? "day" : "month"}</p>
+                    <p className="text-[11px] text-muted-foreground">Stays in the business flat/home; rent counts as business income.</p>
+                  </div>
+                )}
+                {emp.hasContractor && emp.contractorName && (
+                  <div className="rounded-lg bg-muted/50 p-2.5">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Contractor</p>
+                    <p className="mt-0.5 font-semibold">{emp.contractorName}</p>
+                    <p className="text-[11px] text-muted-foreground tabular-nums">{formatINR(emp.contractorRateCut ?? 0)}/shift cut from payout, paid to the contractor</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
           {/* Last-30-days activity: presence strip + billing trend */}
           <Card>
             <CardContent className="p-4">

@@ -30,9 +30,13 @@ export const GET = handleRoute(async ({ req }) => {
   const propertyId = sp.get("propertyId");
   const employeeId = sp.get("employeeId");
   const shift = sp.get("shift");
+  const contractor = sp.get("contractor"); // "" all · "NONE" without contractor · "ONLY" any contractor · exact contractor name
   if (propertyId) where.propertyId = propertyId;
   if (employeeId) where.employeeId = employeeId;
   if (shift) where.shift = shift.toUpperCase();
+  if (contractor === "NONE") where.contractorName = null;
+  else if (contractor === "ONLY") where.contractorName = { not: null };
+  else if (contractor) where.contractorName = contractor;
 
   const [rows, total, agg] = await Promise.all([
     db.deployment.findMany({
@@ -45,7 +49,7 @@ export const GET = handleRoute(async ({ req }) => {
     db.deployment.count({ where }),
     db.deployment.aggregate({
       where,
-      _sum: { billingAmount: true, payoutAmount: true },
+      _sum: { billingAmount: true, payoutAmount: true, contractorCut: true },
       _count: true,
     }),
   ]);
@@ -56,7 +60,13 @@ export const GET = handleRoute(async ({ req }) => {
     total,
     page,
     pageSize,
-    totals: { billing, payout, margin: round2(billing - payout), count: agg._count },
+    totals: {
+      billing,
+      payout,
+      margin: round2(billing - payout),
+      contractorCut: round2(agg._sum.contractorCut ?? 0),
+      count: agg._count,
+    },
   };
 });
 
@@ -123,6 +133,9 @@ export const POST = handleRoute(async ({ owner, req }) => {
     payoutRate: number;
     billingAmount: number;
     payoutAmount: number;
+    contractorName: string | null;
+    contractorRateCut: number;
+    contractorCut: number;
   }[] = [];
   const skipped: { employeeName: string; reason: string }[] = [];
 
@@ -190,13 +203,24 @@ export const POST = handleRoute(async ({ owner, req }) => {
     const billingRate = entry.billingRate !== undefined && entry.billingRate !== null && entry.billingRate !== ""
       ? round2(Number(entry.billingRate))
       : round2(property.billingRate);
-    const payoutRate = entry.payoutRate !== undefined && entry.payoutRate !== null && entry.payoutRate !== ""
-      ? round2(Number(entry.payoutRate))
-      : round2(emp.standardRate);
+    // SALARIED employees are costed via their monthly salary — deployments never
+    // pay per shift (payout forced to 0; an explicit override cannot sneak a cost in).
+    const isSalaried = emp.employmentType === "SALARIED";
+    const payoutRate = isSalaried
+      ? 0
+      : entry.payoutRate !== undefined && entry.payoutRate !== null && entry.payoutRate !== ""
+        ? round2(Number(entry.payoutRate))
+        : round2(emp.standardRate);
     if (!Number.isFinite(billingRate) || !Number.isFinite(payoutRate) || billingRate < 0 || payoutRate < 0) {
       skipped.push({ employeeName: employeeLabel, reason: "Invalid rate value" });
       continue;
     }
+    // Contractor snapshot — captured at creation; later master changes never
+    // rewrite history (the zero-mismatch guarantee). The cut is taken FROM the
+    // employee's payout and paid to the contractor.
+    const hasCut = emp.hasContractor && !!emp.contractorName && (emp.contractorRateCut ?? 0) > 0;
+    const contractorRateCut = hasCut ? round2(emp.contractorRateCut) : 0;
+    const contractorCut = round2(contractorRateCut * units);
     planned.push({
       employeeId: emp.id,
       employeeName: employeeLabel,
@@ -206,6 +230,9 @@ export const POST = handleRoute(async ({ owner, req }) => {
       payoutRate,
       billingAmount: round2(billingRate * units),
       payoutAmount: round2(payoutRate * units),
+      contractorName: hasCut ? emp.contractorName : null,
+      contractorRateCut,
+      contractorCut,
     });
   }
 
@@ -245,6 +272,9 @@ export const POST = handleRoute(async ({ owner, req }) => {
           payoutRate: p.payoutRate,
           billingAmount: p.billingAmount,
           payoutAmount: p.payoutAmount,
+          contractorName: p.contractorName,
+          contractorRateCut: p.contractorRateCut,
+          contractorCut: p.contractorCut,
           notes: body.notes ? String(body.notes) : null,
           createdById: owner.id,
           createdByName: owner.name,
@@ -266,7 +296,7 @@ export const POST = handleRoute(async ({ owner, req }) => {
     recordLabel: `${created.length} deployment(s) — ${property.name} ${String(body.date)}`,
     newValue: {
       count: created.length,
-      rows: planned.map((p) => ({ employee: p.employeeName, shift: p.shift, units: p.units, billingRate: p.billingRate, payoutRate: p.payoutRate })),
+      rows: planned.map((p) => ({ employee: p.employeeName, shift: p.shift, units: p.units, billingRate: p.billingRate, payoutRate: p.payoutRate, contractor: p.contractorName, contractorCut: p.contractorCut })),
     },
   });
 

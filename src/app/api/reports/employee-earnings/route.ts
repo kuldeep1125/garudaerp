@@ -1,10 +1,12 @@
 import { db } from "@/lib/db";
 import { handleRoute } from "@/lib/api-helpers";
 import { round2 } from "@/lib/money";
-import { dayKey, reportRange } from "@/app/api/_lib/engine";
+import { dayKey, reportRange, salaryOvertimeForRange } from "@/app/api/_lib/engine";
 
 // GET /api/reports/employee-earnings?from=&to=[&employeeId=]
-// Per-employee payout summary for deployments + advances in the range.
+// Per-employee earnings for the range: shift payouts + salaried salary/overtime
+// accrual (the SAME formula the cost metrics use), advances deducted, and the
+// contractor commission shown separately (paid out of the payout).
 // When employeeId is given, the response additionally carries:
 //   employee  — profile header (name, code, designation, status)
 //   days      — day-by-day sheet: date → property → shift → earnings
@@ -14,7 +16,7 @@ export const GET = handleRoute(async ({ req }) => {
   const { from, to } = reportRange(sp);
   const employeeId = sp.get("employeeId");
 
-  const [deps, advAgg] = await Promise.all([
+  const [deps, advAgg, cutAgg, salaried] = await Promise.all([
     db.deployment.findMany({
       where: {
         date: { gte: from, lte: to },
@@ -29,6 +31,7 @@ export const GET = handleRoute(async ({ req }) => {
         shift: true,
         payoutRate: true,
         payoutAmount: true,
+        contractorCut: true,
       },
       orderBy: [{ employeeId: "asc" }, { date: "asc" }, { shift: "asc" }],
     }),
@@ -37,21 +40,31 @@ export const GET = handleRoute(async ({ req }) => {
       _sum: { amount: true },
       where: { date: { gte: from, lte: to }, ...(employeeId ? { employeeId } : {}) },
     }),
+    db.deployment.groupBy({
+      by: ["employeeId"],
+      _sum: { contractorCut: true },
+      where: { date: { gte: from, lte: to }, contractorCut: { gt: 0 }, ...(employeeId ? { employeeId } : {}) },
+    }),
+    // Salaried employees earn salary even with zero deployments — include them all.
+    db.employee.findMany({
+      where: { employmentType: "SALARIED", ...(employeeId ? { id: employeeId } : {}) },
+      select: { id: true, fullName: true, code: true, designation: true, status: true, joiningDate: true, employmentType: true, monthlySalary: true, overtimeThreshold: true, overtimeRate: true },
+    }),
   ]);
 
-  const byEmp = new Map<
-    string,
-    {
-      employeeName: string; employeeCode: string; designation: string | null;
-      shifts: number; dayShifts: number; nightShifts: number; props: Set<string>; earnings: number;
-    }
-  >();
+  interface EmpRow {
+    employeeName: string; employeeCode: string; designation: string | null;
+    shifts: number; dayShifts: number; nightShifts: number; props: Set<string>; earnings: number;
+    salary: number; overtime: number;
+  }
+  const byEmp = new Map<string, EmpRow>();
   for (const d of deps) {
     const row = byEmp.get(d.employeeId) ?? {
       employeeName: d.employee.fullName,
       employeeCode: d.employee.code,
       designation: d.employee.designation,
       shifts: 0, dayShifts: 0, nightShifts: 0, props: new Set<string>(), earnings: 0,
+      salary: 0, overtime: 0,
     };
     row.shifts++;
     const s = d.shift.toUpperCase();
@@ -61,11 +74,28 @@ export const GET = handleRoute(async ({ req }) => {
     row.earnings = round2(row.earnings + d.payoutAmount);
     byEmp.set(d.employeeId, row);
   }
+  // Salaried accrual merged in — zero-deployment salaried employees get their own row.
+  for (const emp of salaried) {
+    const so = await salaryOvertimeForRange(emp, from, to);
+    const row = byEmp.get(emp.id) ?? {
+      employeeName: emp.fullName,
+      employeeCode: emp.code,
+      designation: emp.designation,
+      shifts: 0, dayShifts: 0, nightShifts: 0, props: new Set<string>(), earnings: 0,
+      salary: 0, overtime: 0,
+    };
+    row.salary = so.salary;
+    row.overtime = so.overtime;
+    row.earnings = round2(row.earnings + so.salary + so.overtime);
+    byEmp.set(emp.id, row);
+  }
   const advBy = new Map(advAgg.map((a) => [a.employeeId, round2(a._sum.amount ?? 0)]));
+  const cutBy = new Map(cutAgg.map((a) => [a.employeeId, round2(a._sum.contractorCut ?? 0)]));
 
   const rows = [...byEmp.entries()]
     .map(([employeeId2, r]) => {
       const advances = advBy.get(employeeId2) ?? 0;
+      const contractorCut = cutBy.get(employeeId2) ?? 0;
       return {
         employeeId: employeeId2,
         employeeName: r.employeeName,
@@ -75,8 +105,11 @@ export const GET = handleRoute(async ({ req }) => {
         nightShifts: r.nightShifts,
         properties: r.props.size,
         earnings: r.earnings,
+        salaryPart: r.salary,
+        overtimePart: r.overtime,
         advances,
-        netPayable: round2(r.earnings - advances),
+        contractorCut,
+        netPayable: round2(r.earnings - advances - contractorCut),
       };
     })
     .sort((a, b) => b.earnings - a.earnings);
@@ -85,6 +118,7 @@ export const GET = handleRoute(async ({ req }) => {
     shifts: rows.reduce((s, r) => s + r.shifts, 0),
     earnings: round2(rows.reduce((s, r) => s + r.earnings, 0)),
     advances: round2(rows.reduce((s, r) => s + r.advances, 0)),
+    contractorCut: round2(rows.reduce((s, r) => s + r.contractorCut, 0)),
     netPayable: round2(rows.reduce((s, r) => s + r.netPayable, 0)),
   };
 
@@ -97,12 +131,16 @@ export const GET = handleRoute(async ({ req }) => {
       { key: "nightShifts", label: "Night", type: "number" },
       { key: "properties", label: "Properties", type: "number" },
       { key: "earnings", label: "Earnings", type: "currency" },
+      { key: "salaryPart", label: "· Salary", type: "currency" },
+      { key: "overtimePart", label: "· Overtime", type: "currency" },
       { key: "advances", label: "Advances", type: "currency" },
+      { key: "contractorCut", label: "Contractor Cut", type: "currency" },
       { key: "netPayable", label: "Net Payable", type: "currency" },
     ],
     rows,
     totals,
     meta: { from: dayKey(from), to: dayKey(to) },
+    note: "Earnings = shift payouts + salaried salary + overtime accrual. Net payable = earnings − advances − contractor commission (the contractor's cut is paid out of the employee's payout).",
   };
 
   // ---- Drill-down: single employee day-by-day movement sheet ----
