@@ -10,6 +10,11 @@ const nextConfig: NextConfig = {
   // Hide the floating dev-tools badge (overlaps the mobile bottom nav and
   // confuses preview users); dev-only, production unaffected.
   devIndicators: false,
+  allowedDevOrigins: [
+    "172.30.227.225",
+    "localhost",
+    "127.0.0.1",
+  ],
 };
 
 export default nextConfig;
