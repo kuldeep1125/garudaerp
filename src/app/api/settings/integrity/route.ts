@@ -8,7 +8,7 @@ import { round2 } from "@/lib/money";
 export const GET = handleRoute(async () => {
   const [trips, settlements, props, deps, pays] = await Promise.all([
     db.trip.findMany({ select: { id: true, paidAmount: true, agreedAmount: true, finalAmount: true, extraCharges: true } }),
-    db.settlement.findMany({ select: { id: true, netPayable: true, grossEarnings: true, additions: true, advanceDeducted: true, otherDeductions: true, contractorCut: true } }),
+    db.settlement.findMany({ select: { id: true, netPayable: true, grossEarnings: true, additions: true, advanceDeducted: true, otherDeductions: true, rentDeducted: true, contractorCut: true } }), // [FIXED] select rentDeducted
     db.property.findMany({ select: { id: true } }),
     db.deployment.findMany({ select: { propertyId: true, billingAmount: true, paidAmount: true, shift: true, contractorRateCut: true, contractorCut: true } }),
     db.propertyPayment.findMany({ select: { propertyId: true, amount: true } }),
@@ -39,10 +39,10 @@ export const GET = handleRoute(async () => {
     (t) => t.paidAmount > round2((t.finalAmount ?? t.agreedAmount + t.extraCharges) + 0.005)
   ).length;
 
-  // 5. Settlement header vs lines drift — netPayable must equal gross + additions − deductions − contractor cut
+  // 5. Settlement header vs lines drift — netPayable must equal gross + additions − rent − deductions − contractor cut
   let settlementDrift = 0;
   for (const s of settlements) {
-    const expect = round2(s.grossEarnings + s.additions - s.advanceDeducted - s.otherDeductions - (s.contractorCut ?? 0));
+    const expect = round2(s.grossEarnings + s.additions - s.advanceDeducted - s.otherDeductions - (s.rentDeducted ?? 0) - (s.contractorCut ?? 0)); // [FIXED] deduct rentDeducted
     if (Math.abs(expect - s.netPayable) > 0.01) settlementDrift++;
   }
 

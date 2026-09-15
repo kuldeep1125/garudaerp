@@ -52,7 +52,8 @@ export interface ManpowerCostBreakdown {
   salary: number; // salaried accrual in range
   overtime: number; // salaried overtime accrual in range
   rentIncome: number; // employee-rent accrual in range (income)
-  payout: number; // THE employee-cost metric = shiftPayout + salary + overtime + extraContractorCut
+  grossPayout: number; // [ADDED] gross employee cost = shift payouts + salary + overtime + extra contractor cuts
+  payout: number; // [FIXED] NET employee payout after accommodation rent deduction = Math.max(0, grossPayout - rentIncome)
   salariedCount: number;
   rentCount: number;
   contractorCount: number;
@@ -243,6 +244,7 @@ export async function salaryRentOvertimeForRange(
 export interface SalariedMonthPay {
   salary: number;
   overtime: number;
+  rent: number; // [ADDED] accommodation rent for active days in month
   total: number;
   extraDeployments: number;
   threshold: number;
@@ -254,6 +256,7 @@ export interface SalariedMonthPay {
  * aligned 1:1 with the accrual the dashboards show (same active-day proration,
  * same effective-dated history), so a settled month always reconciles:
  *  - salary: prorated per ACTIVE day, piecewise across pay-history changes
+ *  - rent: accommodation rent prorated per ACTIVE day, piecewise across pay changes
  *  - overtime: (deployments in month − threshold) × rate, params as of month end
  *  - wasSalaried: whether the terms in effect at month end were salaried
  */
@@ -265,28 +268,71 @@ export async function salariedMonthPay(args: {
   lastWork: Date | null;
   deploymentsInMonth: number;
   current: PayValues;
+  cutOffDate?: Date | null; // [ADDED] optional cut-off date (e.g. today or custom date)
 }): Promise<SalariedMonthPay> {
   const { from, to } = monthBounds(args.month);
+  const effectiveTo = args.cutOffDate && args.cutOffDate.getTime() < to.getTime() ? args.cutOffDate : to; // [ADDED]
   const rows = (await db.employeePayHistory.findMany({
     where: { employeeId: args.employeeId },
     orderBy: { effectiveFrom: "asc" },
   })) as PayHistoryRow[];
   const fallback = args.current;
-  const endValues = payAsOf(rows, to, fallback);
+  const endValues = payAsOf(rows, effectiveTo, fallback); // [FIXED] evaluated at cut-off date
   const wasSalaried = endValues.employmentType === "SALARIED";
   const daysInMonth = new Date(from.getFullYear(), from.getMonth() + 1, 0).getDate();
-  const seg: MonthSegment = { from, to, month: args.month, daysInMonth };
+  const seg: MonthSegment = { from, to: effectiveTo, month: args.month, daysInMonth }; // [FIXED]
   let salary = 0;
-  for (const sub of paySegments(rows, from, to, fallback)) {
+  let rent = 0;
+  for (const sub of paySegments(rows, from, effectiveTo, fallback)) { // [FIXED]
     const days = activeDaysInSegment({ joiningDate: args.joiningDate, status: args.status }, args.lastWork, { ...seg, from: sub.from, to: sub.to });
-    if (days > 0 && sub.values.employmentType === "SALARIED") {
-      salary += (sub.values.monthlySalary ?? 0) * (days / daysInMonth);
+    if (days > 0) {
+      if (sub.values.employmentType === "SALARIED") {
+        salary += (sub.values.monthlySalary ?? 0) * (days / daysInMonth);
+      }
+      rent += rentForValues(sub.values, days, daysInMonth); // [ADDED]
     }
   }
   const extra = Math.max(0, args.deploymentsInMonth - (endValues.overtimeThreshold ?? 30));
   const sal = round2(salary);
   const overtime = wasSalaried ? round2(extra * (endValues.overtimeRate ?? 0)) : 0;
-  return { salary: sal, overtime, total: round2(sal + overtime), extraDeployments: extra, threshold: endValues.overtimeThreshold ?? 30, wasSalaried };
+  return {
+    salary: sal,
+    overtime,
+    rent: round2(rent), // [ADDED]
+    total: round2(sal + overtime),
+    extraDeployments: extra,
+    threshold: endValues.overtimeThreshold ?? 30,
+    wasSalaried,
+  };
+}
+
+/** [ADDED] Accommodation rent for any employee in a settlement month (salaried or per-shift). */
+export async function monthRentForEmployee(args: {
+  employeeId: string;
+  month: string;
+  joiningDate: Date;
+  status: string;
+  lastWork: Date | null;
+  current: PayValues;
+  cutOffDate?: Date | null; // [ADDED] optional cut-off date
+}): Promise<number> {
+  const { from, to } = monthBounds(args.month);
+  const effectiveTo = args.cutOffDate && args.cutOffDate.getTime() < to.getTime() ? args.cutOffDate : to; // [ADDED]
+  const rows = (await db.employeePayHistory.findMany({
+    where: { employeeId: args.employeeId },
+    orderBy: { effectiveFrom: "asc" },
+  })) as PayHistoryRow[];
+  const fallback = args.current;
+  const daysInMonth = new Date(from.getFullYear(), from.getMonth() + 1, 0).getDate();
+  const seg: MonthSegment = { from, to: effectiveTo, month: args.month, daysInMonth }; // [FIXED]
+  let rent = 0;
+  for (const sub of paySegments(rows, from, effectiveTo, fallback)) { // [FIXED]
+    const days = activeDaysInSegment({ joiningDate: args.joiningDate, status: args.status }, args.lastWork, { ...seg, from: sub.from, to: sub.to });
+    if (days > 0) {
+      rent += rentForValues(sub.values, days, daysInMonth);
+    }
+  }
+  return round2(rent);
 }
 
 /**
@@ -378,6 +424,8 @@ export async function manpowerCostBreakdown(from: Date, to: Date): Promise<Manpo
   salary = round2(salary);
   overtime = round2(overtime);
   rentIncome = round2(rentIncome);
+  const grossPayout = round2(shiftPayout + salary + overtime + extraContractorCut); // [ADDED]
+  const netPayout = Math.max(0, round2(grossPayout - rentIncome)); // [FIXED] Deduct accommodation rent from employee payout
 
   return {
     billing,
@@ -387,7 +435,8 @@ export async function manpowerCostBreakdown(from: Date, to: Date): Promise<Manpo
     salary,
     overtime,
     rentIncome,
-    payout: round2(shiftPayout + salary + overtime + extraContractorCut),
+    grossPayout, // [ADDED]
+    payout: netPayout, // [FIXED]
     salariedCount: specials.filter((e) => e.employmentType === "SALARIED").length,
     rentCount: specials.filter((e) => e.onBusinessRent).length,
     contractorCount: 0, // filled by callers that need it (cheap separate query)

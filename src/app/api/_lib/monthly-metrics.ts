@@ -17,7 +17,8 @@ import { manpowerCostBreakdown } from "./engine";
 export interface MonthMetrics {
   deployments: number;
   manpowerBilling: number;
-  manpowerPayout: number; // full employee cost (shift payouts + salary + overtime + extra cuts)
+  manpowerPayout: number; // [FIXED] net employee payout (after accommodation rent deduction)
+  manpowerGrossPayout?: number; // [ADDED] gross employee cost (shift payouts + salary + overtime + extra cuts)
   manpowerShiftPayout: number;
   manpowerSalary: number;
   manpowerOvertime: number;
@@ -103,13 +104,15 @@ export async function metricsFor(month: string): Promise<MonthMetrics> {
   }
 
   const manpowerBilling = cost.billing;
-  const manpowerPayout = cost.payout;
+  const manpowerPayout = cost.payout; // [FIXED] net employee payout after accommodation rent deduction
+  const excessRent = Math.max(0, round2(cost.rentIncome - cost.grossPayout)); // [FIXED]
   const margin = round2(manpowerBilling - manpowerPayout);
 
   return {
     deployments: deps._count,
     manpowerBilling,
     manpowerPayout,
+    manpowerGrossPayout: cost.grossPayout, // [ADDED]
     manpowerShiftPayout: cost.shiftPayout,
     manpowerSalary: cost.salary,
     manpowerOvertime: cost.overtime,
@@ -124,9 +127,9 @@ export async function metricsFor(month: string): Promise<MonthMetrics> {
     transportCollected: round2(transportCollected),
     transportOpex: round2(transportOpex),
     transportEmi: round2(transportEmi),
-    // CANONICAL: net = billing + rent − employee cost − manpower expenses
+    // CANONICAL: net = billing + excess rent − net payout − manpower expenses
     //            + transport revenue − transport opex − transport EMI.
-    net: round2(margin + cost.rentIncome - manpowerOther + transportRevenue - transportOpex - transportEmi),
+    net: round2(margin + excessRent - manpowerOther + transportRevenue - transportOpex - transportEmi),
   };
 }
 

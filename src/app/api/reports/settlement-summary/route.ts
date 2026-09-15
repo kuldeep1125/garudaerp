@@ -24,6 +24,7 @@ export const GET = handleRoute(async ({ req }) => {
     totalDays: s.totalDays,
     gross: round2(s.grossEarnings),
     additions: round2(s.additions),
+    rentDeducted: round2(s.rentDeducted ?? 0), // [ADDED]
     advanceDeducted: round2(s.advanceDeducted),
     otherDeductions: round2(s.otherDeductions),
     contractorCut: round2(s.contractorCut),
@@ -35,6 +36,7 @@ export const GET = handleRoute(async ({ req }) => {
     totalDays: rows.reduce((s, r) => s + r.totalDays, 0),
     gross: round2(rows.reduce((s, r) => s + r.gross, 0)),
     additions: round2(rows.reduce((s, r) => s + r.additions, 0)),
+    rentDeducted: round2(rows.reduce((s, r) => s + r.rentDeducted, 0)), // [ADDED]
     advanceDeducted: round2(rows.reduce((s, r) => s + r.advanceDeducted, 0)),
     otherDeductions: round2(rows.reduce((s, r) => s + r.otherDeductions, 0)),
     contractorCut: round2(rows.reduce((s, r) => s + r.contractorCut, 0)),
@@ -50,6 +52,7 @@ export const GET = handleRoute(async ({ req }) => {
       { key: "totalDays", label: "Days", type: "number" },
       { key: "gross", label: "Gross", type: "currency" },
       { key: "additions", label: "Additions", type: "currency" },
+      { key: "rentDeducted", label: "Rent Deducted", type: "currency" }, // [ADDED]
       { key: "advanceDeducted", label: "Advance Deducted", type: "currency" },
       { key: "otherDeductions", label: "Other Deductions", type: "currency" },
       { key: "contractorCut", label: "Contractor Cut", type: "currency" },
@@ -59,6 +62,6 @@ export const GET = handleRoute(async ({ req }) => {
     rows,
     totals,
     meta: { month, from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) },
-    note: "Net payable = gross + additions − other deductions − contractor cut − advance deducted. Salaried gross = monthly salary + overtime (deployments beyond the threshold × rate).",
+    note: "Net payable = gross + additions − rent deducted − other deductions − contractor cut − advance deducted. Salaried gross = monthly salary + overtime (deployments beyond the threshold × rate).", // [FIXED]
   };
 });

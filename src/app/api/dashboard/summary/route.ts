@@ -20,11 +20,11 @@ export const GET = handleRoute(async ({ req }) => {
   const revenue = round2(manpower.expectedBilling + transport.revenue);
   const expenses = round2(manpower.expenses + transport.expenses);
   // CANONICAL NET RESULT — identical definition to reports/profitability and
-  // monthly-metrics: revenue + employee-rent income − employee cost − operating
-  // expenses. Employee cost = shift payouts + salaried salary accrual + overtime
-  // + extra contractor cuts (the same `payout` metric Reports uses). Every new
-  // "net" surface MUST reuse manpowerCostBreakdown or it WILL mismatch.
-  const net = round2(revenue + manpower.rentIncome - manpower.payout - expenses);
+  // monthly-metrics: revenue + excess employee rent − net employee payout − operating
+  // expenses. Because manpower.payout is net of accommodation rent (gross payout − rentIncome),
+  // revenue + rentIncome − grossPayout − expenses === revenue + excessRent − netPayout − expenses.
+  const excessRent = Math.max(0, round2(manpower.rentIncome - manpower.grossPayout)); // [FIXED]
+  const net = round2(revenue + excessRent - manpower.payout - expenses); // [FIXED]
   return {
     range: { from: dayKey(from), to: dayKey(to) },
     manpower,

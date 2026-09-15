@@ -253,6 +253,7 @@ model Settlement {
   additions           Float     @default(0)
   advanceDeducted     Float     @default(0)
   otherDeductions     Float     @default(0)
+  rentDeducted        Float     @default(0) // [ADDED] accommodation rent deducted from employee salary/payout
   contractorCut       Float     @default(0) // contractor commission deducted from the employee's payout this month
   netPayable          Float     @default(0)
   advanceCarryForward Float     @default(0)

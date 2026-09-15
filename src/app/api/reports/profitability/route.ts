@@ -55,7 +55,7 @@ export const GET = handleRoute(async ({ req }) => {
 
   if (needManpower && cost && mpExpAgg) {
     const billing = cost.billing;
-    const employeeCost = cost.payout; // shift payouts + salary + overtime + extra contractor cuts
+    const employeeCost = cost.grossPayout; // [FIXED] gross employee cost (shift payouts + salary + overtime + extra contractor cuts)
     const rentIncome = cost.rentIncome;
     const otherExpenses = round2(mpExpAgg._sum.amount ?? 0);
     rows.push({

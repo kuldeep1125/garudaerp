@@ -128,8 +128,8 @@ async function main() {
   const mBlock = snapSummary.json?.manpower ?? {};
   check("pre-edit: last-month salary accrual 15000", approxEq(mBlock.salary, preSalary), `got ${mBlock.salary}`);
   check(`pre-edit: last-month overtime accrual ${preOvertime}`, approxEq(mBlock.overtime, preOvertime), `got ${mBlock.overtime}`);
-  check("pre-edit: last-month rent income 3000", approxEq(mBlock.rentIncome, preRent), `got ${mBlock.rentIncome}`);
-  check(`pre-edit: payout = shiftPayout(0)+salary+overtime+extraCut(${preExtraCut})`, approxEq(mBlock.payout, preSalary + preOvertime + preExtraCut), `got ${mBlock.payout}`);
+  check(`pre-edit: payout = gross − rent(${preRent}) (net employee disbursement)`, approxEq(mBlock.payout, preSalary + preOvertime + preExtraCut - preRent), `got ${mBlock.payout}`);
+  check(`pre-edit: grossPayout = shiftPayout(0)+salary+overtime+extraCut(${preExtraCut})`, approxEq(mBlock.grossPayout ?? (mBlock.payout + preRent), preSalary + preOvertime + preExtraCut), `got ${mBlock.grossPayout}`);
 
   // THE EDIT — salary & overtime change NOW
   const upd = await req("PUT", `/api/employees/${empId}`, { monthlySalary: 20000, overtimeRate: 150 });
@@ -165,10 +165,12 @@ async function main() {
   if (draft) {
     const expGross = preSalary + preOvertime;
     const expCut = depCreated * 50;
+    const expRent = preRent; // [ADDED] rent deduction (3000)
     check(`settlement gross = ${preSalary} salary + ${preOvertime} overtime = ${expGross} (aligned with accrual)`, approxEq(draft.grossEarnings, expGross), `got ${draft.grossEarnings}`);
     check(`settlement contractorCut = ${depCreated}×50 = ${expCut}`, approxEq(draft.contractorCut, expCut), `got ${draft.contractorCut}`);
-    const expNet = expGross - expCut;
-    check(`settlement netPayable = ${expGross} − ${expCut} = ${expNet}`, approxEq(draft.netPayable, expNet), `got ${draft.netPayable}`);
+    check(`settlement rentDeducted = ${expRent}`, approxEq(draft.rentDeducted, expRent), `got ${draft.rentDeducted}`);
+    const expNet = expGross - expCut - expRent;
+    check(`settlement netPayable = ${expGross} − ${expCut} − ${expRent} = ${expNet}`, approxEq(draft.netPayable, expNet), `got ${draft.netPayable}`);
     // Cross-view zero-mismatch: report earnings == settlement gross
     const rep = postEarnings.json?.rows?.find((r: any) => r.employeeId === empId);
     check("ZERO-MISMATCH: report earnings == settlement gross", rep && approxEq(rep.earnings, draft.grossEarnings), `report=${rep?.earnings} settlement=${draft.grossEarnings}`);

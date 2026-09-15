@@ -18,7 +18,8 @@ export interface ManpowerBlock {
   employeesDeployed: number;
   propertiesServed: number;
   expectedBilling: number;
-  payout: number; // THE cost metric (shift payouts + salaried accrual + overtime + extra contractor cuts)
+  grossPayout: number; // [ADDED] gross employee cost before rent deduction
+  payout: number; // [FIXED] NET employee payout after accommodation rent deduction
   shiftPayout: number;
   salary: number;
   overtime: number;
@@ -88,7 +89,8 @@ export async function manpowerBlock(from: Date, to: Date): Promise<ManpowerBlock
     employeesDeployed: employeeIds.size,
     propertiesServed: propertyIds.size,
     expectedBilling: cost.billing,
-    payout: cost.payout,
+    grossPayout: cost.grossPayout, // [ADDED]
+    payout: cost.payout, // [FIXED] net employee payout
     shiftPayout: cost.shiftPayout,
     salary: cost.salary,
     overtime: cost.overtime,
