@@ -258,7 +258,19 @@ export default function DashboardView({ navigate }: ViewProps) {
             <StatCard label="Today Billing" value={formatINR(m?.expectedBilling ?? 0, { compact: true })} icon={IndianRupee} onClick={() => navigate("manpower")} hint="Manpower expected" />
             <StatCard label="Collections" value={formatINR(m?.received ?? 0, { compact: true })} icon={Wallet} tone="positive" onClick={() => navigate("payments")} hint="Received in range" />
             <StatCard label="Outstanding" value={formatINR(c?.totalOutstanding ?? 0, { compact: true })} icon={Building2} tone="negative" onClick={() => navigate("payments")} hint="All properties" />
-            <StatCard label="Employee Payout" value={formatINR(m?.payout ?? 0, { compact: true })} icon={Users} onClick={() => navigate("manpower")} hint={`${m?.deployments ?? 0} deployments`} />
+            <StatCard
+              label="Employee Payout"
+              value={formatINR(m?.payout ?? 0, { compact: true })}
+              icon={Users}
+              onClick={() => navigate("manpower")}
+              hint={
+                (m?.rentIncome ?? 0) > 0
+                  ? `${m?.deployments ?? 0} deps · Net after −${formatINR(m?.rentIncome ?? 0, { compact: true })} rent`
+                  : (m?.deployments ?? 0) === 0 && (m?.salary ?? 0) > 0
+                  ? "Salaried accrual (0 deployments)"
+                  : `${m?.deployments ?? 0} deployments`
+              }
+            />
             <StatCard label="Transport Revenue" value={formatINR(t?.revenue ?? 0, { compact: true })} icon={Truck} tone="transport" onClick={() => navigate("transport")} hint={`${t?.onTripVehicles ?? 0} on trip`} />
             <StatCard label="Net Result" value={formatINR(net, { compact: true })} icon={Landmark} tone={net >= 0 ? "positive" : "negative"} onClick={() => navigate("reports")} hint="Revenue + employee rent − employee cost − expenses (same as Reports)" />
           </div>

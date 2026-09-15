@@ -21,6 +21,7 @@ import { AreaTrend, CHART_COLORS, ErrorState, useAsync } from "./_shared";
 
 interface ManpowerBlock {
   employeesDeployed: number; propertiesServed: number; expectedBilling: number; payout: number;
+  grossPayout?: number; rentIncome?: number;
   grossMargin: number; received: number; pending: number; advancesGiven: number; expenses: number;
   dayShifts: number; nightShifts: number; deployments: number;
 }
@@ -135,7 +136,13 @@ export default function ManpowerDashboardView({ navigate }: ViewProps) {
             <StatCard label="Employees Deployed" value={String(m?.employeesDeployed ?? 0)} icon={Users} onClick={() => navigate("deployments")} />
             <StatCard label="Properties Served" value={String(m?.propertiesServed ?? 0)} icon={Building2} onClick={() => navigate("properties")} />
             <StatCard label="Expected Billing" value={formatINR(m?.expectedBilling ?? 0, { compact: true })} icon={IndianRupee} tone="info" onClick={() => navigate("deployments")} />
-            <StatCard label="Employee Payout" value={formatINR(m?.payout ?? 0, { compact: true })} icon={TrendingDown} onClick={() => navigate("settlements")} />
+            <StatCard
+              label="Employee Payout"
+              value={formatINR(m?.payout ?? 0, { compact: true })}
+              icon={TrendingDown}
+              onClick={() => navigate("settlements")}
+              hint={(m?.rentIncome ?? 0) > 0 ? `Net after −${formatINR(m?.rentIncome ?? 0, { compact: true })} rent` : undefined}
+            />
             <StatCard label="Gross Margin" value={formatINR(m?.grossMargin ?? 0, { compact: true })} icon={IndianRupee} tone={(m?.grossMargin ?? 0) >= 0 ? "positive" : "negative"} onClick={() => navigate("reports")} />
             <StatCard label="Received" value={formatINR(m?.received ?? 0, { compact: true })} icon={Wallet} tone="positive" onClick={() => navigate("payments")} />
             <StatCard label="Pending" value={formatINR(m?.pending ?? 0, { compact: true })} icon={Wallet} tone="negative" onClick={() => navigate("payments")} />

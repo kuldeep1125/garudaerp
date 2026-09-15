@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { api } from "@/lib/api-client";
-import { parseAmount } from "@/lib/money";
+import { parseAmount, formatINR } from "@/lib/money"; // [FIXED] import formatINR
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -191,32 +191,47 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, onDone }: {
               <span className="text-sm font-medium">Lives in business flat/home (pays rent to the business)</span>
             </label>
             {form.onBusinessRent && (
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <Field label="Rent amount (₹)" required>
-                  <MoneyInput value={form.rentAmount} onChange={set("rentAmount")} className="h-10" placeholder="e.g. 3000" />
-                </Field>
-                <Field label="Rent mode" hint="Counted as business income in reports.">
-                  <div className="flex rounded-lg border bg-muted/50 p-1" role="group" aria-label="Rent mode">
-                    {([
-                      { value: "MONTH", label: "Per month" },
-                      { value: "DAY", label: "Per day" },
-                    ] as const).map((o) => (
-                      <button
-                        key={o.value}
-                        type="button"
-                        className={cn(
-                          "min-h-9 flex-1 rounded-md px-2 text-xs font-medium transition-colors",
-                          form.rentMode === o.value ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                        )}
-                        aria-pressed={form.rentMode === o.value}
-                        onClick={() => set("rentMode")(o.value)}
-                      >
-                        {o.label}
-                      </button>
-                    ))}
+              <>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <Field label="Rent amount (₹)" required>
+                    <MoneyInput value={form.rentAmount} onChange={set("rentAmount")} className="h-10" placeholder="e.g. 3000" />
+                  </Field>
+                  <Field label="Rent mode" hint="Auto-deducted from salary at monthly settlement.">
+                    <div className="flex rounded-lg border bg-muted/50 p-1" role="group" aria-label="Rent mode">
+                      {([
+                        { value: "MONTH", label: "Per month" },
+                        { value: "DAY", label: "Per day" },
+                      ] as const).map((o) => (
+                        <button
+                          key={o.value}
+                          type="button"
+                          className={cn(
+                            "min-h-9 flex-1 rounded-md px-2 text-xs font-medium transition-colors",
+                            form.rentMode === o.value ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                          )}
+                          aria-pressed={form.rentMode === o.value}
+                          onClick={() => set("rentMode")(o.value)}
+                        >
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+                  </Field>
+                </div>
+                {salaried && (
+                  <div className="mt-3 rounded-lg border border-teal-200 bg-teal-50/80 p-2.5 text-xs text-teal-950 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-200">
+                    <p className="font-semibold text-teal-900 dark:text-teal-100">
+                      Salary deduction preview:
+                    </p>
+                    <p className="mt-0.5">
+                      Net base salary: <span className="font-bold tabular-nums">{formatINR(Math.max(0, parseAmount(form.monthlySalary || "0") - parseAmount(form.rentAmount || "0")))}</span> / month (Gross {formatINR(parseAmount(form.monthlySalary || "0"))} − Rent {formatINR(parseAmount(form.rentAmount || "0"))}).
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-teal-800/80 dark:text-teal-300/80">
+                      Rent will be deducted directly from salary when monthly settlements are generated.
+                    </p>
                   </div>
-                </Field>
-              </div>
+                )}
+              </>
             )}
           </div>
 

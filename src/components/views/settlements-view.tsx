@@ -91,15 +91,48 @@ export default function SettlementsView({ navigate }: ViewProps) {
     setEditNotes(detail?.notes ?? "");
   }
 
+  // [ADDED] Generate options state
+  const [generateTarget, setGenerateTarget] = useState<"ALL" | "SPECIFIC">("ALL");
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>("");
+  const [settleType, setSettleType] = useState<"MONTH_END" | "TODAY" | "CUSTOM">("MONTH_END");
+  const [customDate, setCustomDate] = useState<string>(todayStr());
+
+  // [ADDED] Active employees for specific employee settlement dropdown
+  const { data: empListResp } = useAsync(
+    () => api.get<{ items: { id: string; fullName: string; code: string; employmentType: string }[] }>("/api/employees" + qs({ status: "ACTIVE", pageSize: 200 })),
+    []
+  );
+  const activeEmployees = empListResp?.items ?? [];
+  const empOptions: Option[] = [
+    { label: "Choose an employee…", value: "" },
+    ...activeEmployees.map((e) => ({
+      label: `${e.code ? `[${e.code}] ` : ""}${e.fullName} (${e.employmentType === "SALARIED" ? "Salaried" : "Per-shift"})`,
+      value: e.id,
+    })),
+  ];
+
   const generate = async () => {
+    if (generateTarget === "SPECIFIC" && !selectedEmployeeId) {
+      toast.error("Please select an employee to settle");
+      return;
+    }
     let generated = 0;
     const res = await mutate(async () => {
-      const d = await api.post<{ generated: number; drafts: number }>("/api/settlements/generate", { month });
+      const payload: Record<string, unknown> = {
+        month,
+        employeeId: generateTarget === "SPECIFIC" ? selectedEmployeeId : undefined,
+        settleType,
+        customDate: settleType === "CUSTOM" ? customDate : undefined,
+      };
+      const d = await api.post<{ generated: number; drafts: number; cutOffDate?: string }>("/api/settlements/generate", payload);
       generated = d.generated ?? 0;
       return d;
     });
     if (res.ok) {
-      toast.success(`Generated ${generated} draft settlement(s) for ${monthLabel(month)}`);
+      const empName = activeEmployees.find((e) => e.id === selectedEmployeeId)?.fullName;
+      const targetLabel = generateTarget === "SPECIFIC" && empName ? `for ${empName}` : "";
+      const cutLabel = settleType === "TODAY" ? "till today" : settleType === "CUSTOM" ? `till ${customDate}` : "for full month";
+      toast.success(`Generated ${generated} draft settlement(s) ${targetLabel} (${cutLabel})`);
       void reload();
     }
     setGenerateOpen(false);
@@ -151,6 +184,11 @@ export default function SettlementsView({ navigate }: ViewProps) {
     { key: "gross", label: t(lang, "col.gross"), className: "text-right", hideOnMobile: true, value: (r) => formatINR(r.grossEarnings ?? 0) },
     { key: "additions", label: t(lang, "col.additions"), className: "text-right", hideOnMobile: true, value: (r) => formatINR(r.additions ?? 0) },
     {
+      key: "rent", label: "Rent", className: "text-right", hideOnMobile: true,
+      render: (r) => (r.rentDeducted ?? 0) > 0 ? <span className="tabular-nums text-teal-600 dark:text-teal-400">−{formatINR(r.rentDeducted ?? 0)}</span> : <span className="text-muted-foreground">—</span>,
+      value: (r) => formatINR(r.rentDeducted ?? 0),
+    },
+    {
       key: "advance", label: t(lang, "col.advance"), className: "text-right",
       render: (r) => <span className="tabular-nums text-red-600 dark:text-red-400">−{formatINR(r.advanceDeducted ?? 0)}</span>,
       value: (r) => formatINR(r.advanceDeducted ?? 0),
@@ -172,28 +210,148 @@ export default function SettlementsView({ navigate }: ViewProps) {
         title={t(lang, "page.settlements")}
         subtitle={t(lang, "page.settlements.sub")}
         actions={
-          <AlertDialog open={generateOpen} onOpenChange={setGenerateOpen}>
-            <AlertDialogTrigger asChild>
-              <Button size="sm" className="h-9 gap-1.5" disabled={saving}>
-                <Wand2 className="h-4 w-4" aria-hidden />Generate Drafts
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Generate / regenerate drafts?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Drafts for <span className="font-medium">{monthLabel(month)}</span> will be rebuilt from deployments, adjustments and advances.
-                  Drafts regenerate; finalized statements are never touched.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel className="min-h-10">Cancel</AlertDialogCancel>
-                <AlertDialogAction className="min-h-10" onClick={(e) => { e.preventDefault(); void generate(); }}>
-                  {saving ? "Generating…" : "Generate"}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
+            <Button size="sm" className="h-9 gap-1.5" disabled={saving} onClick={() => setGenerateOpen(true)}>
+              <Wand2 className="h-4 w-4" aria-hidden />Generate Drafts
+            </Button>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Wand2 className="h-5 w-5 text-primary" aria-hidden />Generate Settlements
+                </DialogTitle>
+                <DialogDescription>
+                  Rebuild settlement drafts for <span className="font-semibold text-foreground">{monthLabel(month)}</span>. Finalized statements are always protected.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4 py-1 text-xs">
+                {/* 1 · Employee selection (All vs Specific) */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Target</label>
+                  <div className="grid grid-cols-2 gap-2" role="group" aria-label="Settlement target">
+                    <button
+                      type="button"
+                      onClick={() => setGenerateTarget("ALL")}
+                      className={cn(
+                        "rounded-lg border p-2.5 text-xs font-medium transition-colors text-center",
+                        generateTarget === "ALL"
+                          ? "border-primary bg-primary/10 text-primary font-semibold shadow-xs"
+                          : "hover:bg-muted/50 text-muted-foreground"
+                      )}
+                    >
+                      All Employees
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGenerateTarget("SPECIFIC")}
+                      className={cn(
+                        "rounded-lg border p-2.5 text-xs font-medium transition-colors text-center",
+                        generateTarget === "SPECIFIC"
+                          ? "border-primary bg-primary/10 text-primary font-semibold shadow-xs"
+                          : "hover:bg-muted/50 text-muted-foreground"
+                      )}
+                    >
+                      Specific Employee
+                    </button>
+                  </div>
+                </div>
+
+                {generateTarget === "SPECIFIC" && (
+                  <Field label="Select Employee" required>
+                    <SelectInput
+                      value={selectedEmployeeId}
+                      onChange={setSelectedEmployeeId}
+                      options={empOptions}
+                      placeholder="Choose employee…"
+                    />
+                  </Field>
+                )}
+
+                {/* 2 · Cut-off period selection */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Calculation Period</label>
+                  <div className="grid grid-cols-3 gap-2" role="group" aria-label="Settlement period">
+                    <button
+                      type="button"
+                      onClick={() => setSettleType("MONTH_END")}
+                      className={cn(
+                        "flex flex-col items-center justify-center rounded-lg border p-2 text-center transition-colors",
+                        settleType === "MONTH_END"
+                          ? "border-primary bg-primary/10 text-primary font-semibold shadow-xs"
+                          : "hover:bg-muted/50 text-muted-foreground"
+                      )}
+                    >
+                      <span className="font-medium">Month EOD</span>
+                      <span className="text-[10px] opacity-75">Full month</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSettleType("TODAY")}
+                      className={cn(
+                        "flex flex-col items-center justify-center rounded-lg border p-2 text-center transition-colors",
+                        settleType === "TODAY"
+                          ? "border-primary bg-primary/10 text-primary font-semibold shadow-xs"
+                          : "hover:bg-muted/50 text-muted-foreground"
+                      )}
+                    >
+                      <span className="font-medium">Till Date</span>
+                      <span className="text-[10px] opacity-75">Today</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSettleType("CUSTOM")}
+                      className={cn(
+                        "flex flex-col items-center justify-center rounded-lg border p-2 text-center transition-colors",
+                        settleType === "CUSTOM"
+                          ? "border-primary bg-primary/10 text-primary font-semibold shadow-xs"
+                          : "hover:bg-muted/50 text-muted-foreground"
+                      )}
+                    >
+                      <span className="font-medium">Custom Date</span>
+                      <span className="text-[10px] opacity-75">Pick day</span>
+                    </button>
+                  </div>
+                </div>
+
+                {settleType === "CUSTOM" && (
+                  <Field label="Cut-off Date" required hint="Deployments, salary proration, rent and advances will be calculated up to this date">
+                    <Input
+                      type="date"
+                      value={customDate}
+                      onChange={(e) => setCustomDate(e.target.value)}
+                      min={`${month}-01`}
+                      max={`${month}-31`}
+                      className="h-10"
+                    />
+                  </Field>
+                )}
+
+                {/* Calculation notice */}
+                <div className="rounded-lg border bg-muted/40 p-3 text-[11px] leading-relaxed text-muted-foreground space-y-1" role="note">
+                  <p className="font-semibold text-foreground">Zero-Mismatch Guarantee:</p>
+                  <p>• Salaried pay and accommodation rent are prorated by active calendar days up to the cut-off date.</p>
+                  <p>• Only deployments, adjustments, and advances on or before the cut-off date are included.</p>
+                  {generateTarget === "SPECIFIC" && (
+                    <p className="text-primary font-medium">• Only the selected employee's draft will be rebuilt; all other employees' drafts are preserved.</p>
+                  )}
+                </div>
+              </div>
+
+              <DialogFooter className="gap-2 sm:justify-end">
+                <Button variant="outline" className="min-h-10" onClick={() => setGenerateOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  className="min-h-10 gap-1.5"
+                  onClick={() => void generate()}
+                  disabled={saving || (generateTarget === "SPECIFIC" && !selectedEmployeeId)}
+                >
+                  <Wand2 className="h-4 w-4" aria-hidden />
+                  {saving ? "Generating…" : "Generate Drafts"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         }
       />
 
@@ -261,19 +419,19 @@ export default function SettlementsView({ navigate }: ViewProps) {
                 </DialogDescription>
               </DialogHeader>
 
-              <div className="space-y-3.5">
-                {/* Work lines */}
+              <div className="space-y-4 text-xs">
+                {/* Lines breakdown */}
                 <div>
-                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Work lines ({detailLines.length})</p>
-                  <div className="max-h-64 overflow-y-auto rounded-xl border">
-                    <table className="w-full text-xs">
-                      <thead className="sticky top-0 z-10 bg-muted">
+                  <p className="font-semibold text-muted-foreground">Work breakdown</p>
+                  <div className="mt-1.5 max-h-52 overflow-y-auto rounded-lg border">
+                    <table className="w-full text-left text-xs">
+                      <thead className="sticky top-0 border-b bg-muted/60 text-muted-foreground">
                         <tr>
-                          <th className="px-2.5 py-2 text-left font-medium">Date</th>
-                          <th className="px-2.5 py-2 text-left font-medium">Property</th>
-                          <th className="px-2.5 py-2 text-left font-medium">Shift</th>
-                          <th className="px-2.5 py-2 text-right font-medium">Rate</th>
-                          <th className="px-2.5 py-2 text-right font-medium">Amount</th>
+                          <th className="px-2.5 py-1.5">Date</th>
+                          <th className="px-2.5 py-1.5">Property</th>
+                          <th className="px-2.5 py-1.5">Shift</th>
+                          <th className="px-2.5 py-1.5 text-right">Rate</th>
+                          <th className="px-2.5 py-1.5 text-right">Amount</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -298,6 +456,9 @@ export default function SettlementsView({ navigate }: ViewProps) {
                 <div className="rounded-xl border bg-muted/30 px-3.5 py-2">
                   <KV label="Gross earnings" value={formatINR(detail.grossEarnings ?? 0)} />
                   <KV label="Additions (bonus/OT)" value={formatINR(detail.additions ?? 0)} className="text-emerald-600 dark:text-emerald-400" />
+                  {(detail.rentDeducted ?? 0) > 0 && (
+                    <KV label="Accommodation rent" value={`−${formatINR(detail.rentDeducted ?? 0)}`} className="text-teal-600 dark:text-teal-400" />
+                  )}
                   {(detail.contractorCut ?? 0) > 0 && (
                     <KV label="Contractor commission" value={`−${formatINR(detail.contractorCut ?? 0)}`} className="text-amber-600 dark:text-amber-400" />
                   )}
@@ -310,8 +471,14 @@ export default function SettlementsView({ navigate }: ViewProps) {
                     <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Net payable</span>
                     <span className={cn("text-lg font-bold tabular-nums", netTone)}>{formatINR(detail.netPayable ?? 0)}</span>
                   </div>
-                  {(detail.contractorCut ?? 0) > 0 && (
-                    <p className="mt-1.5 text-[10px] text-muted-foreground">Net = gross {formatINR(detail.grossEarnings ?? 0)} + additions {formatINR(detail.additions ?? 0)} − contractor {formatINR(detail.contractorCut ?? 0)} − other {formatINR(detail.otherDeductions ?? 0)} − advance {formatINR(detail.advanceDeducted ?? 0)}</p>
+                  {((detail.contractorCut ?? 0) > 0 || (detail.rentDeducted ?? 0) > 0) && (
+                    <p className="mt-1.5 text-[10px] text-muted-foreground">
+                      Net = gross {formatINR(detail.grossEarnings ?? 0)} + additions {formatINR(detail.additions ?? 0)}
+                      {(detail.rentDeducted ?? 0) > 0 ? ` − rent ${formatINR(detail.rentDeducted ?? 0)}` : ""}
+                      {(detail.contractorCut ?? 0) > 0 ? ` − contractor ${formatINR(detail.contractorCut ?? 0)}` : ""}
+                      {(detail.otherDeductions ?? 0) > 0 ? ` − other ${formatINR(detail.otherDeductions ?? 0)}` : ""}
+                      {(detail.advanceDeducted ?? 0) > 0 ? ` − advance ${formatINR(detail.advanceDeducted ?? 0)}` : ""}
+                    </p>
                   )}
                 </div>
 

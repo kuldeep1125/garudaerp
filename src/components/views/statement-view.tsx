@@ -153,7 +153,7 @@ export default function StatementView({ params, navigate }: ViewProps) {
                 <tr key={`${l.date}-${l.propertyName}-${i}`}>
                   <td className={cn(cellCls, "whitespace-nowrap tabular-nums")}>{fmtDay(l.date)}</td>
                   <td className={cellCls}>{l.propertyName}</td>
-                  <td className={cellCls}>{l.shift === "SALARY" ? "Salary" : l.shift === "OVERTIME" ? "Overtime" : l.shift === "NIGHT" ? "Night" : l.shift === "FULL" ? "Full" : "Day"}</td>
+                  <td className={cellCls}>{l.shift === "SALARY" ? "Salary" : l.shift === "OVERTIME" ? "Overtime" : l.shift === "RENT" ? "Rent" : l.shift === "NIGHT" ? "Night" : l.shift === "FULL" ? "Full" : "Day"}</td>
                   <td className={cn(cellCls, "text-right tabular-nums")}>{formatINR(l.rate, { decimals: true })}</td>
                   <td className={cn(cellCls, "text-right tabular-nums")}>{formatINR(l.amount, { decimals: true })}</td>
                 </tr>
@@ -181,6 +181,12 @@ export default function StatementView({ params, navigate }: ViewProps) {
               <span className="text-neutral-600 print:text-black">Additions</span>
               <span className="font-semibold tabular-nums">+{formatINR(s.additions ?? 0, { decimals: true })}</span>
             </div>
+            {(s.rentDeducted ?? 0) > 0 && (
+              <div className="flex justify-between border-b border-neutral-300 py-1.5">
+                <span className="text-neutral-600 print:text-black">Accommodation rent</span>
+                <span className="font-semibold tabular-nums text-teal-700 print:text-black">−{formatINR(s.rentDeducted ?? 0, { decimals: true })}</span>
+              </div>
+            )}
             {(s.contractorCut ?? 0) > 0 && (
               <div className="flex justify-between border-b border-neutral-300 py-1.5">
                 <span className="text-neutral-600 print:text-black">Contractor commission</span>

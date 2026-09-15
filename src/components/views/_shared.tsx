@@ -155,6 +155,7 @@ export interface SettlementRec {
   nightShifts?: number;
   grossEarnings?: number;
   additions?: number;
+  rentDeducted?: number; // [ADDED]
   advanceDeducted?: number;
   otherDeductions?: number;
   contractorCut?: number;

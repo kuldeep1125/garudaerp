@@ -342,9 +342,13 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
                 )}
                 {emp.onBusinessRent && (
                   <div className="rounded-lg bg-muted/50 p-2.5">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Business rent (income)</p>
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Business accommodation rent</p>
                     <p className="mt-0.5 font-semibold tabular-nums">{formatINR(emp.rentAmount ?? 0)}/{(emp.rentMode ?? "MONTH").toLowerCase() === "DAY" ? "day" : "month"}</p>
-                    <p className="text-[11px] text-muted-foreground">Stays in the business flat/home; rent counts as business income.</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {emp.employmentType === "SALARIED"
+                        ? `Auto-deducted from monthly salary on settlement (Net base: ${formatINR(Math.max(0, (emp.monthlySalary ?? 0) - (emp.rentAmount ?? 0)))}).`
+                        : "Auto-deducted from employee earnings on settlement."}
+                    </p>
                   </div>
                 )}
                 {emp.hasContractor && emp.contractorName && (
