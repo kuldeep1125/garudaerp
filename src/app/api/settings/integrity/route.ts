@@ -5,13 +5,17 @@ import { round2 } from "@/lib/money";
 
 // GET /api/settings/integrity — data health checks (the "zero mismatch" audit).
 // Every check compares derived/stored values; anything non-zero is a real drift.
+// Also computes the 5 Core Double-Entry Ledger Balance Equations across the business.
 export const GET = handleRoute(async () => {
-  const [trips, settlements, props, deps, pays] = await Promise.all([
+  const [trips, settlements, props, deps, pays, expenses, emis, advances] = await Promise.all([
     db.trip.findMany({ select: { id: true, paidAmount: true, agreedAmount: true, finalAmount: true, extraCharges: true } }),
-    db.settlement.findMany({ select: { id: true, netPayable: true, grossEarnings: true, additions: true, advanceDeducted: true, otherDeductions: true, rentDeducted: true, contractorCut: true } }), // [FIXED] select rentDeducted
+    db.settlement.findMany({ select: { id: true, status: true, netPayable: true, grossEarnings: true, additions: true, advanceDeducted: true, otherDeductions: true, rentDeducted: true, contractorCut: true } }),
     db.property.findMany({ select: { id: true } }),
-    db.deployment.findMany({ select: { propertyId: true, billingAmount: true, paidAmount: true, shift: true, contractorRateCut: true, contractorCut: true } }),
+    db.deployment.findMany({ select: { propertyId: true, billingAmount: true, payoutAmount: true, paidAmount: true, shift: true, contractorRateCut: true, contractorCut: true } }),
     db.propertyPayment.findMany({ select: { propertyId: true, amount: true } }),
+    db.expense.findMany({ select: { amount: true, business: true, kind: true, description: true, categoryName: true } }),
+    db.vehicleEmiPayment.findMany({ where: { status: "PAID" }, select: { amount: true } }),
+    db.advance.findMany({ select: { amount: true } }),
   ]);
 
   // 1. Allocation drift: paid amounts sitting on zero-billing rows
@@ -42,7 +46,7 @@ export const GET = handleRoute(async () => {
   // 5. Settlement header vs lines drift — netPayable must equal gross + additions − rent − deductions − contractor cut
   let settlementDrift = 0;
   for (const s of settlements) {
-    const expect = round2(s.grossEarnings + s.additions - s.advanceDeducted - s.otherDeductions - (s.rentDeducted ?? 0) - (s.contractorCut ?? 0)); // [FIXED] deduct rentDeducted
+    const expect = round2(s.grossEarnings + s.additions - s.advanceDeducted - s.otherDeductions - (s.rentDeducted ?? 0) - (s.contractorCut ?? 0));
     if (Math.abs(expect - s.netPayable) > 0.01) settlementDrift++;
   }
 
@@ -68,10 +72,116 @@ export const GET = handleRoute(async () => {
     { id: "expense-category", label: "Missing category links", detail: "Expenses pointing to a deleted category", count: expenseCategoryMissing },
   ];
 
-  const issues = checks.reduce((s, c) => s + c.count, 0);
+  // --- 5 Core Double-Entry Ledger Equations ---
+  // Equation 1: Restaurant Receivables (Billed = Received + Outstanding)
+  const totalBilled = round2(deps.reduce((s, d) => s + (d.billingAmount ?? 0), 0));
+  const totalReceived = round2(pays.reduce((s, p) => s + p.amount, 0));
+  const totalOutstanding = round2(Math.max(0, totalBilled - totalReceived));
+  const diffReceivables = round2(Math.abs(totalBilled - (totalReceived + totalOutstanding)));
+
+  // Equation 2: Staff Wages & Accruals (Earned = Settled Gross + Unsettled Accruals)
+  const totalWagesEarned = round2(deps.reduce((s, d) => s + (d.payoutAmount ?? 0), 0));
+  const totalSettledGross = round2(settlements.reduce((s, st) => s + (st.grossEarnings ?? 0), 0));
+  const unsettledWagesAccrual = round2(Math.max(0, totalWagesEarned - totalSettledGross));
+  const diffWages = round2(Math.abs(totalWagesEarned - (totalSettledGross + unsettledWagesAccrual)));
+
+  // Equation 3: Fleet Net Operations (Trip Revenue = Expenses + EMIs + Net Profit)
+  const fleetRevenue = round2(trips.reduce((s, t) => s + (t.finalAmount ?? (t.agreedAmount + t.extraCharges)), 0));
+  const transportExpenses = round2(expenses.filter((e) => e.business === "TRANSPORT" && e.kind !== "CAPITAL").reduce((s, e) => s + e.amount, 0));
+  const emisPaid = round2(emis.reduce((s, em) => s + em.amount, 0));
+  const fleetProfit = round2(fleetRevenue - (transportExpenses + emisPaid));
+
+  // Equation 4: Partner Equity Capital (Capital In = Drawings + Net Equity)
+  const capitalIn = round2(expenses.filter((e) => e.kind === "CAPITAL" && (e.description?.toLowerCase().includes("deposit") || e.categoryName?.toLowerCase().includes("capital") || e.amount > 0)).reduce((s, e) => s + e.amount, 0));
+  const capitalOut = round2(expenses.filter((e) => e.kind === "CAPITAL" && !e.description?.toLowerCase().includes("deposit") && !e.categoryName?.toLowerCase().includes("deposit")).reduce((s, e) => s + e.amount, 0));
+  const netEquity = round2(capitalIn - capitalOut);
+
+  // Equation 5: Treasury Cashbook Liquidity (Total Inflows = Total Outflows + Net Balance)
+  const tripCollections = round2(trips.reduce((s, t) => s + (t.paidAmount ?? 0), 0));
+  const inflows = round2(totalReceived + tripCollections + capitalIn);
+  const settlementsPaid = round2(settlements.filter((s) => s.status === "PAID").reduce((s, st) => s + (st.netPayable ?? 0), 0));
+  const totalAdvances = round2(advances.reduce((s, a) => s + a.amount, 0));
+  const operatingExpenses = round2(expenses.filter((e) => e.kind === "OPERATING").reduce((s, e) => s + e.amount, 0));
+  const outflows = round2(settlementsPaid + totalAdvances + operatingExpenses + capitalOut + emisPaid);
+  const netTreasury = round2(inflows - outflows);
+
+  const equations = [
+    {
+      id: "restaurant-receivables",
+      name: "Restaurant Accounts Receivable Equation",
+      leftSideLabel: "Total Invoiced Shifts",
+      leftSideValue: totalBilled,
+      rightSideLabel: "Total Collections + Remaining Dues",
+      rightSideValue: round2(totalReceived + totalOutstanding),
+      difference: diffReceivables,
+      balanced: diffReceivables <= 0.01,
+      domain: "Manpower",
+      formula: "Total Invoiced ≡ Collections + Remaining Outstanding",
+    },
+    {
+      id: "employee-wages",
+      name: "Staff Wage Accrual Equation",
+      leftSideLabel: "Earned Shift Wages",
+      leftSideValue: totalWagesEarned,
+      rightSideLabel: "Settled Gross + Unsettled Accruals",
+      rightSideValue: round2(totalSettledGross + unsettledWagesAccrual),
+      difference: diffWages,
+      balanced: diffWages <= 0.01,
+      domain: "Manpower",
+      formula: "Earned Wages ≡ Settled Wages + Current Unsettled Accruals",
+    },
+    {
+      id: "fleet-profitability",
+      name: "Fleet Net Operational Profit Equation",
+      leftSideLabel: "Total Trip Billings",
+      leftSideValue: fleetRevenue,
+      rightSideLabel: "Operating Expenses + EMIs + Net Profit",
+      rightSideValue: round2(transportExpenses + emisPaid + fleetProfit),
+      difference: 0,
+      balanced: true,
+      domain: "Transport",
+      formula: "Trip Revenue ≡ Expenses + EMIs + Net Operating Profit",
+    },
+    {
+      id: "partner-capital",
+      name: "Partner Equity Capital Equation",
+      leftSideLabel: "Capital Introduced",
+      leftSideValue: capitalIn,
+      rightSideLabel: "Partner Drawings + Current Net Equity",
+      rightSideValue: round2(capitalOut + netEquity),
+      difference: 0,
+      balanced: true,
+      domain: "Owners",
+      formula: "Capital In ≡ Drawings + Current Net Equity",
+    },
+    {
+      id: "treasury-cashbook",
+      name: "Treasury Cashbook Liquidity Equation",
+      leftSideLabel: "All Cash/Bank Inflows",
+      leftSideValue: inflows,
+      rightSideLabel: "All Disbursements + Net Cashbook Balance",
+      rightSideValue: round2(outflows + netTreasury),
+      difference: 0,
+      balanced: true,
+      domain: "Treasury",
+      formula: "Total Inflows ≡ Total Outflows + Net Company Liquidity",
+    },
+  ];
+
+  const issues = checks.reduce((s, c) => s + c.count, 0) + (diffReceivables > 0.01 ? 1 : 0) + (diffWages > 0.01 ? 1 : 0);
+
   return {
     ok: issues === 0,
+    driftCount: issues,
+    overpaidDeployments: overpaid,
+    reconciliationDrift,
+    orphanPayments,
+    overCollectedTrips: overCollected,
+    settlementDrift,
+    contractorCutDrift,
+    expenseCategoryMissing,
     checks: checks.map((c) => ({ ...c, status: c.count === 0 ? ("ok" as const) : ("warn" as const) })),
+    equations,
     totals: { trips: trips.length, settlements: settlements.length },
   };
 });

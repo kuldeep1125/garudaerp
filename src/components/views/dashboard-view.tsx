@@ -29,7 +29,7 @@ import {
   FormulaInspectorDialog,
   type FormulaInspectorData,
 } from "@/components/shared/formula-inspector-dialog";
-import { ReconciliationCenterDialog } from "@/components/shared/reconciliation-center-dialog";
+import { ReconciliationCenterDialog, type IntegrityAuditResp } from "@/components/shared/reconciliation-center-dialog";
 
 interface AttentionItem {
   key: string;
@@ -220,6 +220,10 @@ export default function DashboardView({ navigate }: ViewProps) {
   const [searching, setSearching] = useState(false);
   const [inspectorData, setInspectorData] = useState<FormulaInspectorData | null>(null);
   const [reconciliationOpen, setReconciliationOpen] = useState(false);
+  const { data: integrityData, reload: reloadIntegrity } = useAsync<IntegrityAuditResp>(
+    () => api.get<IntegrityAuditResp>("/api/settings/integrity"),
+    []
+  );
 
   useEffect(() => {
     if (!debouncedSearch.trim() || debouncedSearch.trim().length < 2) {
@@ -404,7 +408,7 @@ export default function DashboardView({ navigate }: ViewProps) {
   const net = data?.combined.net ?? 0;
   const busy = loading || trendLoading;
 
-  const refreshAll = () => { reload(); reloadTrend(); reloadAudit(); reloadContractors(); };
+  const refreshAll = () => { reload(); reloadTrend(); reloadAudit(); reloadContractors(); void reloadIntegrity(); };
 
   const firstName = (owner?.name ?? "Owner").split(" ")[0];
   const expenseSplit = [
@@ -423,13 +427,26 @@ export default function DashboardView({ navigate }: ViewProps) {
             <Button
               variant="outline"
               size="sm"
-              className="h-9 gap-1.5 border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300 font-medium"
+              className={cn(
+                "h-9 gap-1.5 font-medium transition-all",
+                integrityData && !integrityData.ok
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300 hover:bg-amber-500/20"
+                  : "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300"
+              )}
               onClick={() => setReconciliationOpen(true)}
             >
-              <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-              <span className="hidden sm:inline">Reconciliation Hub</span>
-              <Badge variant="secondary" className="h-5 px-1.5 text-[10px] bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-semibold">
-                0 Drift
+              <ShieldCheck className={cn("h-4 w-4", integrityData && !integrityData.ok ? "text-amber-600" : "text-emerald-600 dark:text-emerald-400")} />
+              <span className="hidden sm:inline">Accounting Watchdog</span>
+              <Badge
+                variant="secondary"
+                className={cn(
+                  "h-5 px-1.5 text-[10px] font-semibold",
+                  integrityData && !integrityData.ok
+                    ? "bg-amber-200 text-amber-900 dark:bg-amber-950 dark:text-amber-200 animate-pulse"
+                    : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                )}
+              >
+                {integrityData && !integrityData.ok ? `${integrityData.driftCount} Discrepancy` : "5/5 Balanced"}
               </Badge>
             </Button>
             <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={refreshAll} aria-label="Refresh dashboard">
@@ -442,6 +459,34 @@ export default function DashboardView({ navigate }: ViewProps) {
           </div>
         }
       />
+
+      {/* Proactive Accounting Watchdog Anomaly Alert Banner */}
+      {integrityData && !integrityData.ok && (
+        <Card
+          className="border-amber-500/40 bg-amber-50/70 dark:bg-amber-950/30 shadow-sm cursor-pointer hover:border-amber-500 transition-colors"
+          onClick={() => setReconciliationOpen(true)}
+        >
+          <CardContent className="p-3.5 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-amber-500/20 text-amber-700 dark:text-amber-300 shrink-0">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-amber-950 dark:text-amber-200">
+                  Accounting Watchdog Alert: {integrityData.driftCount} Ledger Discrepanc{integrityData.driftCount === 1 ? "y" : "ies"} Detected
+                </p>
+                <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
+                  A derived allocation or settlement balance does not match source records. Tap to inspect the exact equation and auto-repair.
+                </p>
+              </div>
+            </div>
+            <Button size="sm" variant="outline" className="h-8 gap-1 text-xs border-amber-500/40 bg-background text-amber-900 dark:text-amber-200 shrink-0">
+              <span>Inspect & Repair</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Universal 360° Passbook Quick-Jump Search & Hub */}
       <Card className="border-primary/20 bg-gradient-to-r from-primary/5 via-card to-card shadow-sm">
