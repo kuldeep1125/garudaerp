@@ -1,16 +1,11 @@
 import { db } from "@/lib/db";
-import { handleRoute, readBody, requireFields, parseDate, parsePage, HttpError } from "@/lib/api-helpers";
+import { handleRoute, readBody, requireFields, parseDate, parsePage, endOfDay, HttpError } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
 import {
   BUSINESSES, requireEnum, requirePositiveAmount, startOfDay, ensureCategory,
   resolveExpenseAttribution, expenseKindForCategory,
 } from "@/app/api/_lib/engine";
-
-function endOfDayInclusive(to: string): Date {
-  const d = parseDate(to);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
-}
 
 export const GET = handleRoute(async ({ req }) => {
   const sp = new URL(req.url).searchParams;
@@ -32,9 +27,9 @@ export const GET = handleRoute(async ({ req }) => {
   else if (ownerId) where.spentById = ownerId;
   if (kind === "OPERATING" || kind === "CAPITAL") where.kind = kind;
   if (search) where.description = { contains: search };
-  if (from && to) where.date = { gte: startOfDay(parseDate(from)), lte: endOfDayInclusive(to) };
+  if (from && to) where.date = { gte: startOfDay(parseDate(from)), lte: endOfDay(parseDate(to)) };
   else if (from) where.date = { gte: startOfDay(parseDate(from)) };
-  else if (to) where.date = { lte: endOfDayInclusive(to) };
+  else if (to) where.date = { lte: endOfDay(parseDate(to)) };
 
   const [rows, total, agg, byKind] = await Promise.all([
     db.expense.findMany({

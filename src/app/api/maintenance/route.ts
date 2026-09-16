@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { handleRoute, readBody, requireFields, parseDate, parsePage, HttpError } from "@/lib/api-helpers";
+import { handleRoute, readBody, requireFields, parseDate, parsePage, startOfDay, endOfDay, HttpError } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { dayKey, optionalAmount } from "@/app/api/_lib/engine";
 
@@ -16,9 +16,9 @@ export const GET = handleRoute(async ({ req }) => {
   const to = sp.get("to");
   if (vehicleId) where.vehicleId = vehicleId;
   if (status) where.status = status.toUpperCase();
-  if (from && to) where.date = { gte: startOfDay(parseDate(from)), lte: endOfDayInclusive(to) };
+  if (from && to) where.date = { gte: startOfDay(parseDate(from)), lte: endOfDay(parseDate(to)) };
   else if (from) where.date = { gte: startOfDay(parseDate(from)) };
-  else if (to) where.date = { lte: endOfDayInclusive(to) };
+  else if (to) where.date = { lte: endOfDay(parseDate(to)) };
 
   const [rows, total] = await Promise.all([
     db.maintenance.findMany({
@@ -33,15 +33,6 @@ export const GET = handleRoute(async ({ req }) => {
   const items = rows.map(({ vehicle, ...m }) => ({ ...m, vehicleName: vehicle.name, vehicleReg: vehicle.registrationNumber }));
   return { items, total, page, pageSize };
 });
-
-function startOfDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
-
-function endOfDayInclusive(to: string): Date {
-  const d = parseDate(to);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
-}
 
 // POST /api/maintenance — schedule a maintenance record (status SCHEDULED).
 export const POST = handleRoute(async ({ owner, req }) => {

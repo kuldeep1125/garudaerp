@@ -74,10 +74,10 @@ export function requireFields(body: Record<string, unknown>, fields: string[]) {
 }
 
 // IST offset is UTC+5h30m (330 minutes)
-const IST_OFFSET_MS = 330 * 60 * 1000;
+export const IST_OFFSET_MS = 330 * 60 * 1000;
 
-export function getISTDateParts(): { y: number; m: number; d: number; day: number } {
-  const ist = new Date(Date.now() + IST_OFFSET_MS);
+export function toISTParts(d: Date): { y: number; m: number; d: number; day: number } {
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
   return {
     y: ist.getUTCFullYear(),
     m: ist.getUTCMonth(),
@@ -86,12 +86,36 @@ export function getISTDateParts(): { y: number; m: number; d: number; day: numbe
   };
 }
 
+export function getISTDateParts(): { y: number; m: number; d: number; day: number } {
+  return toISTParts(new Date());
+}
+
 export function istStartOfDay(y: number, m: number, d: number): Date {
   return new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - IST_OFFSET_MS);
 }
 
 export function istEndOfDay(y: number, m: number, d: number): Date {
   return new Date(Date.UTC(y, m, d, 23, 59, 59, 999) - IST_OFFSET_MS);
+}
+
+export function startOfDay(d: Date): Date {
+  const { y, m, d: date } = toISTParts(d);
+  return istStartOfDay(y, m, date);
+}
+
+export function endOfDay(d: Date): Date {
+  const { y, m, d: date } = toISTParts(d);
+  return istEndOfDay(y, m, date);
+}
+
+export function dayKey(d: Date): string {
+  const { y, m, d: date } = toISTParts(d);
+  return `${y}-${String(m + 1).padStart(2, "0")}-${String(date).padStart(2, "0")}`;
+}
+
+export function monthKey(d: Date): string {
+  const { y, m } = toISTParts(d);
+  return `${y}-${String(m + 1).padStart(2, "0")}`;
 }
 
 export function parseDate(v: unknown, fallback?: Date): Date {
@@ -118,7 +142,7 @@ export function parseRange(searchParams: URLSearchParams): { from: Date; to: Dat
   const explicitFrom = searchParams.get("from");
   const explicitTo = searchParams.get("to");
   if (explicitFrom && explicitTo) {
-    return { from: parseDate(explicitFrom), to: endOfDay(parseDate(explicitTo)) };
+    return { from: startOfDay(parseDate(explicitFrom)), to: endOfDay(parseDate(explicitTo)) };
   }
   const { y, m, d, day } = getISTDateParts();
   const range = searchParams.get("range") ?? "today";
@@ -157,10 +181,6 @@ export function parseRange(searchParams: URLSearchParams): { from: Date; to: Dat
     default:
       return { from: istStartOfDay(y, m, d), to: istEndOfDay(y, m, d) };
   }
-}
-
-export function endOfDay(d: Date): Date {
-  return new Date(d.getTime() + (23 * 3600 + 59 * 60 + 59) * 1000 + 999);
 }
 
 export function monthBounds(month: string): { from: Date; to: Date } {

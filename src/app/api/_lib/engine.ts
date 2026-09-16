@@ -4,13 +4,37 @@
 // NOTE: private folder (underscore prefix) — never treated as a route by Next.js.
 import { db } from "@/lib/db";
 import { round2 } from "@/lib/money";
-import { HttpError, endOfDay, monthBounds, parseDate } from "@/lib/api-helpers";
+import {
+  HttpError,
+  endOfDay,
+  startOfDay,
+  dayKey,
+  monthKey,
+  monthBounds,
+  parseDate,
+  toISTParts,
+  istStartOfDay,
+  istEndOfDay,
+} from "@/lib/api-helpers";
 import type { Prisma } from "@prisma/client";
 
 export type Tx = Prisma.TransactionClient;
 
 // Re-export the standard route toolkit so route files can import everything from one place.
-export { handleRoute, readBody, requireFields, parseDate, parsePage, parseRange, monthBounds, endOfDay, HttpError } from "@/lib/api-helpers";
+export {
+  handleRoute,
+  readBody,
+  requireFields,
+  parseDate,
+  parsePage,
+  parseRange,
+  monthBounds,
+  startOfDay,
+  endOfDay,
+  dayKey,
+  monthKey,
+  HttpError,
+} from "@/lib/api-helpers";
 export { logAudit } from "@/lib/audit";
 export { db } from "@/lib/db";
 
@@ -64,24 +88,41 @@ export interface MonthSegment { from: Date; to: Date; month: string; daysInMonth
 /** Splits [from, to] into calendar-month segments (clipped to the range). */
 export function monthSegments(from: Date, to: Date): MonthSegment[] {
   const segs: MonthSegment[] = [];
-  let cur = new Date(from.getFullYear(), from.getMonth(), 1);
-  while (cur.getTime() <= to.getTime()) {
-    const next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
-    const segEnd = new Date(next.getTime() - 1); // last ms of the month
-    const dim = new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate();
-    segs.push({
-      from: startOfDay(cur < from ? from : cur),
-      to: segEnd > to ? to : segEnd,
-      month: monthKey(cur),
-      daysInMonth: dim,
-    });
-    cur = next;
+  const fromParts = toISTParts(from);
+  let curY = fromParts.y;
+  let curM = fromParts.m;
+
+  while (true) {
+    const segMonthStart = istStartOfDay(curY, curM, 1);
+    const dim = new Date(Date.UTC(curY, curM + 1, 0)).getUTCDate();
+    const segMonthEnd = istEndOfDay(curY, curM, dim);
+
+    const effFrom = from.getTime() > segMonthStart.getTime() ? from : segMonthStart;
+    const effTo = to.getTime() < segMonthEnd.getTime() ? to : segMonthEnd;
+
+    if (effFrom.getTime() <= effTo.getTime()) {
+      segs.push({
+        from: startOfDay(effFrom),
+        to: effTo,
+        month: `${curY}-${String(curM + 1).padStart(2, "0")}`,
+        daysInMonth: dim,
+      });
+    }
+
+    if (segMonthEnd.getTime() >= to.getTime()) break;
+    curM++;
+    if (curM > 11) {
+      curM = 0;
+      curY++;
+    }
   }
   return segs;
 }
 
-function daysBetweenInclusive(a: Date, b: Date): number {
-  return Math.floor((startOfDay(b).getTime() - startOfDay(a).getTime()) / 86400000) + 1;
+export function daysBetweenInclusive(a: Date, b: Date): number {
+  const start = startOfDay(a).getTime();
+  const end = startOfDay(b).getTime();
+  return Math.max(0, Math.round((end - start) / 86400000) + 1);
 }
 
 /**
@@ -279,7 +320,8 @@ export async function salariedMonthPay(args: {
   const fallback = args.current;
   const endValues = payAsOf(rows, effectiveTo, fallback); // [FIXED] evaluated at cut-off date
   const wasSalaried = endValues.employmentType === "SALARIED";
-  const daysInMonth = new Date(from.getFullYear(), from.getMonth() + 1, 0).getDate();
+  const { y: fromY, m: fromM } = toISTParts(from);
+  const daysInMonth = new Date(Date.UTC(fromY, fromM + 1, 0)).getUTCDate();
   const seg: MonthSegment = { from, to: effectiveTo, month: args.month, daysInMonth }; // [FIXED]
   let salary = 0;
   let rent = 0;
@@ -323,7 +365,8 @@ export async function monthRentForEmployee(args: {
     orderBy: { effectiveFrom: "asc" },
   })) as PayHistoryRow[];
   const fallback = args.current;
-  const daysInMonth = new Date(from.getFullYear(), from.getMonth() + 1, 0).getDate();
+  const { y: fromY, m: fromM } = toISTParts(from);
+  const daysInMonth = new Date(Date.UTC(fromY, fromM + 1, 0)).getUTCDate();
   const seg: MonthSegment = { from, to: effectiveTo, month: args.month, daysInMonth }; // [FIXED]
   let rent = 0;
   for (const sub of paySegments(rows, from, effectiveTo, fallback)) { // [FIXED]
@@ -456,7 +499,8 @@ export interface ContractorStat {
 export async function contractorStats(): Promise<ContractorStat[]> {
   const now = new Date();
   const dayStart = startOfDay(now);
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const { y, m } = toISTParts(now);
+  const monthStart = istStartOfDay(y, m, 1);
   const rows = await db.deployment.findMany({
     where: { contractorName: { not: null }, date: { gte: monthStart, lte: endOfDay(now) } },
     select: { contractorName: true, date: true, contractorCut: true, employee: { select: { fullName: true } } },
@@ -534,16 +578,6 @@ export async function resolveExpenseAttribution(
   return { isCommon: false, spentById: actingOwner.id, spentByName: actingOwner.name };
 }
 
-// ---------- date helpers ----------
-
-export function dayKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-export function monthKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
 /**
  * Historical-integrity guard: blocks any deployment mutation (edit/delete) in a
  * month already locked by a FINALIZED/PAID settlement — settled payroll rows are
@@ -566,17 +600,16 @@ export async function assertDeploymentMonthUnlocked(employeeId: string, date: Da
 
 export function parseYmd(s: string): Date {
   const [y, m, d] = s.split("-").map(Number);
-  return new Date(y, (m ?? 1) - 1, d ?? 1);
+  return istStartOfDay(y, (m ?? 1) - 1, d ?? 1);
 }
 
 export function addMonths(d: Date, n: number): Date {
-  const target = new Date(d.getFullYear(), d.getMonth() + n, 1);
-  const dim = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
-  return new Date(target.getFullYear(), target.getMonth(), Math.min(d.getDate(), dim), d.getHours(), d.getMinutes());
-}
-
-export function startOfDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const parts = toISTParts(d);
+  const targetYear = parts.y + Math.floor((parts.m + n) / 12);
+  const targetMonth = ((parts.m + n) % 12 + 12) % 12;
+  const dim = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+  const targetDay = Math.min(parts.d, dim);
+  return istStartOfDay(targetYear, targetMonth, targetDay);
 }
 
 /** Range for reports: explicit from/to, else month param, else current month. */
@@ -586,8 +619,8 @@ export function reportRange(sp: URLSearchParams): { from: Date; to: Date } {
   if (from && to) return { from: parseDate(from), to: endOfDay(parseDate(to)) };
   const month = sp.get("month");
   if (month) return monthBounds(month);
-  const now = new Date();
-  return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: endOfDay(now) };
+  const { y, m, d } = toISTParts(new Date());
+  return { from: istStartOfDay(y, m, 1), to: istEndOfDay(y, m, d) };
 }
 
 export function currentMonth(): string {
@@ -970,8 +1003,9 @@ const SEV_ORDER: Record<string, number> = { CRITICAL: 0, WARNING: 1, INFO: 2 };
 export async function computeNotifications(): Promise<AppNotification[]> {
   const now = new Date();
   const today = startOfDay(now);
-  const in7 = endOfDay(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 7));
-  const in30 = endOfDay(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 30));
+  const { y, m, d } = toISTParts(today);
+  const in7 = istEndOfDay(y, m, d + 7);
+  const in30 = istEndOfDay(y, m, d + 30);
   const list: AppNotification[] = [];
 
   // 1) Property outstanding balances

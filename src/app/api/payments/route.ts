@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { handleRoute, readBody, requireFields, parseDate, parsePage, HttpError } from "@/lib/api-helpers";
+import { handleRoute, readBody, requireFields, parseDate, parsePage, endOfDay, HttpError } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
 import { requirePositiveAmount, recomputeDeploymentPaid, startOfDay } from "@/app/api/_lib/engine";
@@ -12,9 +12,9 @@ export const GET = handleRoute(async ({ req }) => {
   const from = sp.get("from");
   const to = sp.get("to");
   if (propertyId) where.propertyId = propertyId;
-  if (from && to) where.date = { gte: startOfDay(parseDate(from)), lte: endOfDayInclusive(to) };
+  if (from && to) where.date = { gte: startOfDay(parseDate(from)), lte: endOfDay(parseDate(to)) };
   else if (from) where.date = { gte: startOfDay(parseDate(from)) };
-  else if (to) where.date = { lte: endOfDayInclusive(to) };
+  else if (to) where.date = { lte: endOfDay(parseDate(to)) };
 
   const [rows, total, agg] = await Promise.all([
     db.propertyPayment.findMany({
@@ -30,11 +30,6 @@ export const GET = handleRoute(async ({ req }) => {
   const items = rows.map(({ property, ...p }) => ({ ...p, propertyName: property.name }));
   return { items, total, page, pageSize, totals: { received: round2(agg._sum.amount ?? 0) } };
 });
-
-function endOfDayInclusive(to: string): Date {
-  const d = parseDate(to);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
-}
 
 export const POST = handleRoute(async ({ owner, req }) => {
   const body = await readBody<Record<string, unknown>>(req);

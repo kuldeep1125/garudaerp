@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { handleRoute, parseDate, parsePage } from "@/lib/api-helpers";
+import { handleRoute, parseDate, parsePage, endOfDay } from "@/lib/api-helpers";
 import { startOfDay } from "@/app/api/_lib/engine";
 
 // GET /api/audit?ownerId=&module=&action=&from=&to=&page=&pageSize=
@@ -15,9 +15,9 @@ export const GET = handleRoute(async ({ req }) => {
   if (ownerId) where.ownerId = ownerId;
   if (moduleFilter) where.module = moduleFilter.toUpperCase();
   if (action) where.action = action.toUpperCase();
-  if (from && to) where.createdAt = { gte: startOfDay(parseDate(from)), lte: endOfDayInclusive(to) };
+  if (from && to) where.createdAt = { gte: startOfDay(parseDate(from)), lte: endOfDay(parseDate(to)) };
   else if (from) where.createdAt = { gte: startOfDay(parseDate(from)) };
-  else if (to) where.createdAt = { lte: endOfDayInclusive(to) };
+  else if (to) where.createdAt = { lte: endOfDay(parseDate(to)) };
 
   const [items, total] = await Promise.all([
     db.auditLog.findMany({
@@ -30,8 +30,3 @@ export const GET = handleRoute(async ({ req }) => {
   ]);
   return { items, total, page, pageSize };
 });
-
-function endOfDayInclusive(to: string): Date {
-  const d = parseDate(to);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
-}

@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { handleRoute, readBody, requireFields, parseDate, parsePage, HttpError } from "@/lib/api-helpers";
+import { handleRoute, readBody, requireFields, parseDate, parsePage, endOfDay, HttpError } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
 import {
@@ -31,9 +31,9 @@ export const GET = handleRoute(async ({ req }) => {
   if (clientId) where.clientId = clientId;
   if (status) where.status = { in: status.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean) };
   if (paymentStatus) where.paymentStatus = { in: paymentStatus.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean) };
-  if (from && to) where.startAt = { gte: parseDate(from), lte: endOfDayInclusive(to) };
+  if (from && to) where.startAt = { gte: parseDate(from), lte: endOfDay(parseDate(to)) };
   else if (from) where.startAt = { gte: parseDate(from) };
-  else if (to) where.startAt = { lte: endOfDayInclusive(to) };
+  else if (to) where.startAt = { lte: endOfDay(parseDate(to)) };
 
   const [rows, total, all] = await Promise.all([
     db.trip.findMany({
@@ -66,11 +66,6 @@ export const GET = handleRoute(async ({ req }) => {
     totals: { revenue: round2(revenue), pending: round2(pending) },
   };
 });
-
-function endOfDayInclusive(to: string): Date {
-  const d = parseDate(to);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
-}
 
 // POST /api/trips — create trip/rental with vehicle-overlap validation + vehicle status flip.
 export const POST = handleRoute(async ({ owner, req }) => {

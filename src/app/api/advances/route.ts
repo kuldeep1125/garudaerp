@@ -1,12 +1,7 @@
 import { db } from "@/lib/db";
-import { handleRoute, readBody, requireFields, parseDate, parsePage, HttpError } from "@/lib/api-helpers";
+import { handleRoute, readBody, requireFields, parseDate, parsePage, endOfDay, HttpError } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { requirePositiveAmount, startOfDay } from "@/app/api/_lib/engine";
-
-function endOfDayInclusive(to: string): Date {
-  const d = parseDate(to);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
-}
 
 export const GET = handleRoute(async ({ req }) => {
   const sp = new URL(req.url).searchParams;
@@ -16,9 +11,9 @@ export const GET = handleRoute(async ({ req }) => {
   const from = sp.get("from");
   const to = sp.get("to");
   if (employeeId) where.employeeId = employeeId;
-  if (from && to) where.date = { gte: startOfDay(parseDate(from)), lte: endOfDayInclusive(to) };
+  if (from && to) where.date = { gte: startOfDay(parseDate(from)), lte: endOfDay(parseDate(to)) };
   else if (from) where.date = { gte: startOfDay(parseDate(from)) };
-  else if (to) where.date = { lte: endOfDayInclusive(to) };
+  else if (to) where.date = { lte: endOfDay(parseDate(to)) };
 
   const [rows, total, agg] = await Promise.all([
     db.advance.findMany({
