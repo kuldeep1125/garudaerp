@@ -31,6 +31,10 @@ import {
 } from "./_shared";
 import { EmployeeFormDialog } from "@/components/shared/employee-form-dialog";
 import { FormulaInspectorDialog, type FormulaInspectorData } from "@/components/shared/formula-inspector-dialog";
+import {
+  TransactionLineageDialog,
+  type TransactionLineageData,
+} from "@/components/shared/transaction-lineage-dialog";
 
 interface AdjustmentRec {
   id: string; employeeId?: string; employeeName?: string; date: string;
@@ -254,6 +258,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
   // [ADDED] Formula Inspector State
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorData, setInspectorData] = useState<FormulaInspectorData | null>(null);
+  const [lineageData, setLineageData] = useState<TransactionLineageData | null>(null);
 
   // [ADDED] Chronological Unified Passbook Ledger
   const passbook = useMemo(() => {
@@ -266,6 +271,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
       description: string;
       credit?: number;
       debit?: number;
+      rawRecord?: unknown;
     }> = [];
 
     // 1. Deployments
@@ -279,6 +285,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
         badgeTone: "emerald",
         description: `${d.propertyName} · Shift ${d.shift} (${formatINR(d.payoutRate)}/shift)`,
         credit: amt,
+        rawRecord: d,
       });
     }
 
@@ -292,6 +299,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
         badgeTone: "amber",
         description: a.reason || "Cash/UPI loan disbursed",
         debit: a.amount,
+        rawRecord: a,
       });
     }
 
@@ -310,6 +318,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
         description: adj.reason || `Direct payroll ${adj.type.toLowerCase()}`,
         credit: isCredit ? adj.amount : undefined,
         debit: !isCredit ? Math.abs(adj.amount) : undefined,
+        rawRecord: adj,
       });
     }
 
@@ -324,6 +333,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
         badgeTone: "gray",
         description: `Month ${s.month} Settlement (Rent: ${formatINR(s.rentDeducted ?? 0)}, Advance Recovered: ${formatINR(s.advanceDeducted ?? 0)})`,
         debit: s.netPayable,
+        rawRecord: s,
       });
     }
 
@@ -339,6 +349,142 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
     // Return descending for display
     return withBalance.reverse();
   }, [data?.deployments, data?.advances, data?.adjustments, data?.settlements]);
+
+  const openLineage = (ev: {
+    id: string;
+    date: string;
+    type: "EARNING" | "ADVANCE_GIVEN" | "RENT" | "ADJUSTMENT" | "SETTLEMENT";
+    typeLabel: string;
+    description: string;
+    credit?: number;
+    debit?: number;
+    rawRecord?: unknown;
+  }) => {
+    if (!emp) return;
+
+    switch (ev.type) {
+      case "EARNING": {
+        const d = ev.rawRecord as DeploymentRec;
+        const amt = (d?.payoutAmount ?? 0) + (d?.adjustmentAmount ?? 0);
+        setLineageData({
+          id: ev.id,
+          title: `Shift Earning: ${d?.propertyName || "Property"}`,
+          type: "PAYROLL EARNING (ACCRUAL)",
+          amount: amt,
+          date: fmtDay(ev.date),
+          createdAt: String(d?.date),
+          createdByName: "Operations Dispatch",
+          ruleExplanation: `Shift compensation for ${d?.shift || "Standard"} shift. Credited to employee wage liability at the standard rate of ${formatINR(d?.payoutRate ?? 0)}/shift.`,
+          impactedAccounts: [
+            {
+              account: "Direct Wages Cost (Operating)",
+              type: "debit",
+              amount: amt,
+              description: "Direct labor expense incurred",
+            },
+            {
+              account: "Wages Payable (Employee)",
+              type: "credit",
+              amount: amt,
+              description: `Owed to ${emp.fullName}`,
+            },
+          ],
+          linkedEntities: d?.propertyId ? [
+            {
+              label: "Serviced Restaurant",
+              name: d.propertyName,
+              onClick: () => navigate("properties", { id: d.propertyId }),
+            },
+          ] : undefined,
+        });
+        break;
+      }
+      case "ADVANCE_GIVEN": {
+        const a = ev.rawRecord as AdvanceRec;
+        setLineageData({
+          id: ev.id,
+          title: "Advance Loan Disbursed",
+          type: "ADVANCE (CASH OUTFLOW)",
+          amount: a?.amount ?? (ev.debit ?? 0),
+          date: fmtDay(ev.date),
+          createdAt: (a as unknown as { createdAt?: string }).createdAt || ev.date,
+          createdByName: (a as unknown as { createdByName?: string }).createdByName || "Finance / Cashier",
+          ruleExplanation: "Cash advance disbursed to employee. Creates an asset receivable to be recovered during monthly settlement payroll.",
+          impactedAccounts: [
+            {
+              account: "Staff Advance Asset (Receivable)",
+              type: "debit",
+              amount: a?.amount ?? (ev.debit ?? 0),
+              description: `Recovery asset held against ${emp.fullName}`,
+            },
+            {
+              account: "Cash / Bank Account",
+              type: "credit",
+              amount: a?.amount ?? (ev.debit ?? 0),
+              description: "Disbursed out of company funds",
+            },
+          ],
+          notes: a?.reason || undefined,
+        });
+        break;
+      }
+      case "ADJUSTMENT": {
+        const adj = ev.rawRecord as AdjustmentRec;
+        const amt = Math.abs(adj?.amount ?? (ev.credit || ev.debit || 0));
+        const isBonus = (adj?.amount ?? 0) >= 0;
+        setLineageData({
+          id: ev.id,
+          title: `Payroll Adjustment: ${adj?.type || "ADJUSTMENT"}`,
+          type: isBonus ? "BONUS (CREDIT)" : "PENALTY (DEDUCTION)",
+          amount: amt,
+          date: fmtDay(ev.date),
+          createdByName: adj?.createdByName || "Operations Manager",
+          ruleExplanation: adj?.reason || `Manual payroll adjustment of type ${adj?.type || "adjustment"}.`,
+          impactedAccounts: [
+            {
+              account: isBonus ? "Bonus & Incentive Cost" : "Payroll Liability (Employee)",
+              type: "debit",
+              amount: amt,
+              description: isBonus ? "Direct incentive expense" : "Deduction applied to employee",
+            },
+            {
+              account: isBonus ? "Payroll Liability (Employee)" : "Deduction Recovery / Penalty",
+              type: "credit",
+              amount: amt,
+              description: isBonus ? `Credited to ${emp.fullName}` : "Company recovery",
+            },
+          ],
+        });
+        break;
+      }
+      case "SETTLEMENT": {
+        const s = ev.rawRecord as SettlementRec;
+        setLineageData({
+          id: ev.id,
+          title: `Payroll Settlement (Month ${s?.month || "N/A"})`,
+          type: "SETTLEMENT (FINAL DISBURSEMENT)",
+          amount: s?.netPayable ?? (ev.debit ?? 0),
+          date: fmtDay(ev.date),
+          ruleExplanation: `Final settlement for month ${s?.month}. Includes automatic deduction of company accommodation rent (${formatINR(s?.rentDeducted ?? 0)}) and recovery of prior advances (${formatINR(s?.advanceDeducted ?? 0)}).`,
+          impactedAccounts: [
+            {
+              account: "Wages Payable (Employee)",
+              type: "debit",
+              amount: (s as unknown as { grossPayable?: number }).grossPayable ?? (s?.netPayable ?? (ev.debit ?? 0)),
+              description: "Clears accumulated shift & salary liabilities",
+            },
+            {
+              account: "Bank / Cash Payout",
+              type: "credit",
+              amount: s?.netPayable ?? (ev.debit ?? 0),
+              description: "Actual net salary disbursed to employee",
+            },
+          ],
+        });
+        break;
+      }
+    }
+  };
 
   const openInspector = (type: string) => {
     if (!emp) return;
@@ -699,6 +845,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
                 ]}
                 rows={passbook}
                 rowKey={(r) => r.id}
+                onRowClick={(r) => openLineage(r)}
                 emptyIcon={BookOpen}
                 emptyTitle="No Passbook Activity"
                 emptyDescription="Work shifts, advances, and settlements will automatically appear in this ledger."
@@ -1024,6 +1171,15 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
 
       {/* [ADDED] Universal Formula Inspector Dialog */}
       <FormulaInspectorDialog open={inspectorOpen} onOpenChange={setInspectorOpen} data={inspectorData} />
+
+      {/* [ADDED] Universal Transaction Lineage Dialog */}
+      <TransactionLineageDialog
+        open={Boolean(lineageData)}
+        onOpenChange={(open) => {
+          if (!open) setLineageData(null);
+        }}
+        data={lineageData}
+      />
     </div>
   );
 }

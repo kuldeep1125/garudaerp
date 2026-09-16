@@ -21,6 +21,10 @@ import {
   FormulaInspectorDialog,
   type FormulaInspectorData,
 } from "@/components/shared/formula-inspector-dialog";
+import {
+  TransactionLineageDialog,
+  type TransactionLineageData,
+} from "@/components/shared/transaction-lineage-dialog";
 import { toast } from "sonner";
 import {
   Building, Pencil, Phone, MessageCircle, Mail, MapPin, Wallet,
@@ -68,6 +72,7 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
   const [editOpen, setEditOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [inspectorData, setInspectorData] = useState<FormulaInspectorData | null>(null);
+  const [lineageData, setLineageData] = useState<TransactionLineageData | null>(null);
 
   const [form, setForm] = useState({
     name: "", brandName: "", type: "", billingRate: "", contactPerson: "", contactNumber: "",
@@ -314,6 +319,74 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
           ],
         });
         break;
+    }
+  };
+
+  const openLineage = (r: PropertyLedgerItem) => {
+    if (!data) return;
+    const p = data.property;
+
+    if (r.type === "INVOICE") {
+      const d = r.rawRecord as DeploymentRec;
+      setLineageData({
+        id: `deploy-${d.id}`,
+        title: `Shift Deployment: ${d.employeeName}`,
+        type: "INVOICE (ACCRUAL)",
+        amount: d.billingAmount ?? 0,
+        date: fmtDay(d.date),
+        createdAt: (d as unknown as { createdAt?: string }).createdAt || d.date,
+        createdByName: (d as unknown as { createdByName?: string }).createdByName || "Operations Dispatch",
+        ruleExplanation: `Shift worked at ${p.name}. Invoiced at the contracted rate of ${formatINR(d.billingRate ?? 0)}/shift. Payout wage liability of ${formatINR(d.payoutAmount ?? 0)} was simultaneously credited to the employee.`,
+        impactedAccounts: [
+          {
+            account: "Accounts Receivable (Property)",
+            type: "debit",
+            amount: d.billingAmount ?? 0,
+            description: `Receivable from ${p.name}`,
+          },
+          {
+            account: "Manpower Services Revenue",
+            type: "credit",
+            amount: d.billingAmount ?? 0,
+            description: "Operating service revenue earned",
+          },
+        ],
+        linkedEntities: [
+          {
+            label: "Deployed Employee",
+            name: d.employeeName,
+            onClick: () => navigate("employees", { id: d.employeeId }),
+          },
+        ],
+        notes: `Shift: ${d.shift} · Gross Margin: ${formatINR((d.billingAmount ?? 0) - (d.payoutAmount ?? 0))}`,
+      });
+    } else {
+      const pay = r.rawRecord as PaymentRec;
+      setLineageData({
+        id: `pay-${pay.id}`,
+        title: `Payment Received (${pay.method || "Direct"})`,
+        type: "PAYMENT (CASH INFLOW)",
+        amount: pay.amount ?? 0,
+        date: fmtDay(pay.date),
+        createdAt: (pay as unknown as { createdAt?: string }).createdAt || pay.date,
+        createdByName: (pay as unknown as { receivedByName?: string }).receivedByName || "Finance / Owner",
+        ruleExplanation: `Cash or bank receipt from ${p.name}. Applied to reduce the property's cumulative outstanding balance.`,
+        impactedAccounts: [
+          {
+            account: `${pay.method || "Bank"} Inflow`,
+            type: "debit",
+            amount: pay.amount ?? 0,
+            description: "Actual funds deposited into company accounts",
+          },
+          {
+            account: "Accounts Receivable (Property)",
+            type: "credit",
+            amount: pay.amount ?? 0,
+            description: `Settles invoice debt for ${p.name}`,
+          },
+        ],
+        notes: pay.reference ? `Reference: ${pay.reference}` : pay.notes || undefined,
+      });
     }
   };
 
@@ -626,6 +699,7 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
                 columns={ledgerColumns}
                 rows={statementLedger}
                 rowKey={(r) => r.id}
+                onRowClick={(r) => openLineage(r)}
                 emptyIcon={Receipt}
                 emptyTitle="No transactions recorded"
                 emptyDescription="Deploy staff or record payments to build the property statement ledger."
@@ -801,6 +875,15 @@ export default function PropertyDetailView({ params, navigate }: ViewProps) {
           if (!open) setInspectorData(null);
         }}
         data={inspectorData}
+      />
+
+      {/* Transaction Lineage Dialog */}
+      <TransactionLineageDialog
+        open={Boolean(lineageData)}
+        onOpenChange={(open) => {
+          if (!open) setLineageData(null);
+        }}
+        data={lineageData}
       />
     </div>
   );

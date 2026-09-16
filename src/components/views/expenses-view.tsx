@@ -39,6 +39,10 @@ import {
   AreaTrend, BarsCompare, CHART_COLORS, type ListResp, useAsync, useMutation, useDebounced, fmtDay,
   todayStr, undoRequest, UNDO_APPLIED_EVENT,
 } from "./_shared";
+import {
+  TransactionLineageDialog,
+  type TransactionLineageData,
+} from "@/components/shared/transaction-lineage-dialog";
 
 interface ExpenseCategoryRec { id: string; name: string; business: string; kind?: string; isActive?: boolean }
 interface OwnerRec { id: string; name: string }
@@ -1217,6 +1221,54 @@ export default function ExpensesView({ navigate }: ViewProps) {
   // Bulk selection + delete
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkConfirm, setBulkConfirm] = useState(false);
+  const [lineageData, setLineageData] = useState<TransactionLineageData | null>(null);
+
+  const openLineage = (r: ExpenseRec) => {
+    const isCap = r.kind === "CAPITAL" || isCapitalCategory(r.categoryName);
+    setLineageData({
+      id: `exp-${r.id}`,
+      title: `Expense: ${r.categoryName || "General Expense"}`,
+      type: isCap ? "CAPITAL TRANSACTION" : `${r.business} OPERATING EXPENSE`,
+      amount: r.amount,
+      date: fmtDay(r.date),
+      createdAt: (r as unknown as { createdAt?: string }).createdAt || String(r.date),
+      createdByName: r.spentByName || "Operations Admin",
+      ruleExplanation: isCap
+        ? "Owner capital transaction (deposit or withdrawal). Directly impacts owner equity and passbook balance without affecting business operating profit or loss."
+        : `Operational expenditure incurred for the ${r.business} division. Stamped as an operating expense feeding the financial P&L statement.`,
+      impactedAccounts: [
+        {
+          account: isCap ? "Owner Capital / Equity Account" : `${r.business} Operating Expense`,
+          type: "debit",
+          amount: r.amount,
+          description: isCap ? "Partner equity adjustment" : "Direct operating cost incurred",
+        },
+        {
+          account: r.method ? `${r.method} Account` : "Cash / Bank Account",
+          type: "credit",
+          amount: r.amount,
+          description: "Payment outflow from business funds",
+        },
+      ],
+      linkedEntities: [
+        ...(r.vehicleId ? [{
+          label: "Fleet Vehicle Asset",
+          name: r.vehicleName || "Vehicle",
+          onClick: () => navigate("vehicles", { id: r.vehicleId! }),
+        }] : []),
+        ...(r.spentById && !r.isCommon ? [{
+          label: "Paying Owner / Partner",
+          name: r.spentByName || "Owner",
+          onClick: () => navigate("owners", { id: r.spentById! }),
+        }] : []),
+      ],
+      notes: [
+        r.description ? `Description: ${r.description}` : null,
+        r.reason ? `Reason: ${r.reason}` : null,
+        r.method ? `Method: ${r.method}` : null,
+      ].filter(Boolean).join(" · ") || undefined,
+    });
+  };
 
   const onBusinessChange = (v: string) => {
     setBusiness(v);
@@ -1504,6 +1556,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
                     columns={columns}
                     rows={items}
                     rowKey={(r) => r.id}
+                    onRowClick={(r) => openLineage(r)}
                     exportName="expenses"
                     loading={expenses.loading}
                     emptyIcon={Receipt}
@@ -1711,6 +1764,13 @@ export default function ExpensesView({ navigate }: ViewProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Universal Transaction Lineage Dialog */}
+      <TransactionLineageDialog
+        open={Boolean(lineageData)}
+        onOpenChange={(o) => { if (!o) setLineageData(null); }}
+        data={lineageData}
+      />
     </div>
   );
 }
