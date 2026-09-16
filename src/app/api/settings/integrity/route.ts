@@ -79,11 +79,25 @@ export const GET = handleRoute(async () => {
   const totalOutstanding = round2(Math.max(0, totalBilled - totalReceived));
   const diffReceivables = round2(Math.abs(totalBilled - (totalReceived + totalOutstanding)));
 
-  // Equation 2: Staff Wages & Accruals (Earned = Settled Gross + Unsettled Accruals)
-  const totalWagesEarned = round2(deps.reduce((s, d) => s + (d.payoutAmount ?? 0), 0));
-  const totalSettledGross = round2(settlements.reduce((s, st) => s + (st.grossEarnings ?? 0), 0));
-  const unsettledWagesAccrual = round2(Math.max(0, totalWagesEarned - totalSettledGross));
-  const diffWages = round2(Math.abs(totalWagesEarned - (totalSettledGross + unsettledWagesAccrual)));
+  // Equation 2: Staff Wages & Accruals (Gross Compensation Recognized = Net Disbursements + Deductions + Unsettled Accruals)
+  const totalSettledGrossAndAdditions = round2(settlements.reduce((s, st) => s + (st.grossEarnings ?? 0) + (st.additions ?? 0), 0));
+  const totalSettledPayoutAndDeductions = round2(
+    settlements.reduce(
+      (s, st) =>
+        s +
+        (st.netPayable ?? 0) +
+        (st.advanceDeducted ?? 0) +
+        (st.rentDeducted ?? 0) +
+        (st.contractorCut ?? 0) +
+        (st.otherDeductions ?? 0),
+      0
+    )
+  );
+  const totalShiftWages = round2(deps.reduce((s, d) => s + (d.payoutAmount ?? 0), 0));
+  const unsettledShiftAccrual = round2(Math.max(0, totalShiftWages - totalSettledGrossAndAdditions));
+  const totalLaborEarned = round2(totalSettledGrossAndAdditions + unsettledShiftAccrual);
+  const totalLaborAccounted = round2(totalSettledPayoutAndDeductions + unsettledShiftAccrual);
+  const diffWages = round2(Math.abs(totalLaborEarned - totalLaborAccounted));
 
   // Equation 3: Fleet Net Operations (Trip Revenue = Expenses + EMIs + Net Profit)
   const fleetRevenue = round2(trips.reduce((s, t) => s + (t.finalAmount ?? (t.agreedAmount + t.extraCharges)), 0));
@@ -120,15 +134,15 @@ export const GET = handleRoute(async () => {
     },
     {
       id: "employee-wages",
-      name: "Staff Wage Accrual Equation",
-      leftSideLabel: "Earned Shift Wages",
-      leftSideValue: totalWagesEarned,
-      rightSideLabel: "Settled Gross + Unsettled Accruals",
-      rightSideValue: round2(totalSettledGross + unsettledWagesAccrual),
+      name: "Staff Wage & Compensation Accrual Equation",
+      leftSideLabel: "Gross Compensation (Salaries + Shifts)",
+      leftSideValue: totalLaborEarned,
+      rightSideLabel: "Net Payouts + Deductions + Accruals",
+      rightSideValue: totalLaborAccounted,
       difference: diffWages,
       balanced: diffWages <= 0.01,
       domain: "Manpower",
-      formula: "Earned Wages ≡ Settled Wages + Current Unsettled Accruals",
+      formula: "Gross Wages/Salaries ≡ Net Disbursements + Deductions + Accruals",
     },
     {
       id: "fleet-profitability",

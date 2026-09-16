@@ -73,10 +73,34 @@ export function requireFields(body: Record<string, unknown>, fields: string[]) {
   if (missing.length) throw new HttpError(400, `Missing required field(s): ${missing.join(", ")}`);
 }
 
+// IST offset is UTC+5h30m (330 minutes)
+const IST_OFFSET_MS = 330 * 60 * 1000;
+
+export function getISTDateParts(): { y: number; m: number; d: number; day: number } {
+  const ist = new Date(Date.now() + IST_OFFSET_MS);
+  return {
+    y: ist.getUTCFullYear(),
+    m: ist.getUTCMonth(),
+    d: ist.getUTCDate(),
+    day: ist.getUTCDay(),
+  };
+}
+
+export function istStartOfDay(y: number, m: number, d: number): Date {
+  return new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - IST_OFFSET_MS);
+}
+
+export function istEndOfDay(y: number, m: number, d: number): Date {
+  return new Date(Date.UTC(y, m, d, 23, 59, 59, 999) - IST_OFFSET_MS);
+}
+
 export function parseDate(v: unknown, fallback?: Date): Date {
   if (typeof v === "string" && v.length >= 10) {
-    // Date-only strings interpreted as IST-local days consistently
-    const d = new Date(v.length === 10 ? `${v}T00:00:00` : v);
+    if (v.length === 10 && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
+      const [y, m, d] = v.split("-").map(Number);
+      return istStartOfDay(y, m - 1, d);
+    }
+    const d = new Date(v);
     if (!Number.isNaN(d.getTime())) return d;
   }
   if (v instanceof Date) return v;
@@ -91,56 +115,57 @@ export function parsePage(searchParams: URLSearchParams) {
 }
 
 export function parseRange(searchParams: URLSearchParams): { from: Date; to: Date } {
-  // to is exclusive end-of-day for inclusive day filtering
   const explicitFrom = searchParams.get("from");
   const explicitTo = searchParams.get("to");
   if (explicitFrom && explicitTo) {
     return { from: parseDate(explicitFrom), to: endOfDay(parseDate(explicitTo)) };
   }
-  const now = new Date();
+  const { y, m, d, day } = getISTDateParts();
   const range = searchParams.get("range") ?? "today";
-  const y = now.getFullYear();
-  const m = now.getMonth();
-  const d = now.getDate();
   switch (range) {
     case "yesterday": {
-      const from = new Date(y, m, d - 1);
-      return { from, to: endOfDay(from) };
+      const prev = new Date(Date.UTC(y, m, d - 1));
+      const py = prev.getUTCFullYear(), pm = prev.getUTCMonth(), pd = prev.getUTCDate();
+      return { from: istStartOfDay(py, pm, pd), to: istEndOfDay(py, pm, pd) };
     }
     case "week": {
-      const day = now.getDay(); // 0 Sun
       const mondayOffset = day === 0 ? -6 : 1 - day;
-      return { from: new Date(y, m, d + mondayOffset), to: endOfDay(now) };
+      const mon = new Date(Date.UTC(y, m, d + mondayOffset));
+      return { from: istStartOfDay(mon.getUTCFullYear(), mon.getUTCMonth(), mon.getUTCDate()), to: istEndOfDay(y, m, d) };
     }
     case "lastweek": {
-      const day = now.getDay();
       const mondayOffset = day === 0 ? -6 : 1 - day;
-      const thisMonday = new Date(y, m, d + mondayOffset);
-      const lastMonday = new Date(thisMonday);
-      lastMonday.setDate(lastMonday.getDate() - 7);
-      const lastSunday = new Date(thisMonday);
-      lastSunday.setDate(lastSunday.getDate() - 1);
-      return { from: lastMonday, to: endOfDay(lastSunday) };
+      const lastMon = new Date(Date.UTC(y, m, d + mondayOffset - 7));
+      const lastSun = new Date(Date.UTC(y, m, d + mondayOffset - 1));
+      return {
+        from: istStartOfDay(lastMon.getUTCFullYear(), lastMon.getUTCMonth(), lastMon.getUTCDate()),
+        to: istEndOfDay(lastSun.getUTCFullYear(), lastSun.getUTCMonth(), lastSun.getUTCDate()),
+      };
     }
     case "month":
-      return { from: new Date(y, m, 1), to: endOfDay(now) };
+      return { from: istStartOfDay(y, m, 1), to: istEndOfDay(y, m, d) };
     case "lastmonth": {
-      const first = new Date(y, m - 1, 1);
-      const last = new Date(y, m, 0);
-      return { from: first, to: endOfDay(last) };
+      const prevMonthLastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      const prevMonth = m === 0 ? 11 : m - 1;
+      const prevYear = m === 0 ? y - 1 : y;
+      return {
+        from: istStartOfDay(prevYear, prevMonth, 1),
+        to: istEndOfDay(prevYear, prevMonth, prevMonthLastDay),
+      };
     }
     case "today":
     default:
-      return { from: new Date(y, m, d), to: endOfDay(new Date(y, m, d)) };
+      return { from: istStartOfDay(y, m, d), to: istEndOfDay(y, m, d) };
   }
 }
 
 export function endOfDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+  return new Date(d.getTime() + (23 * 3600 + 59 * 60 + 59) * 1000 + 999);
 }
 
 export function monthBounds(month: string): { from: Date; to: Date } {
   const [y, m] = month.split("-").map(Number);
   if (!y || !m || m < 1 || m > 12) throw new HttpError(400, "Invalid month format, expected YYYY-MM");
-  return { from: new Date(y, m - 1, 1), to: endOfDay(new Date(y, m, 0)) };
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return { from: istStartOfDay(y, m - 1, 1), to: istEndOfDay(y, m - 1, lastDay) };
 }
