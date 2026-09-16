@@ -1003,6 +1003,27 @@ export function GiveAdvanceDialog({ open, onOpenChange, defaultEmployeeId, emplo
               <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Festival, family emergency…" className="h-10" />
             </Field>
           </div>
+          {selected && parseAmount(amount) > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3 text-xs dark:border-amber-900/50 dark:bg-amber-950/20">
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span>Current Advance Due:</span>
+                <span className="font-semibold text-foreground">{formatINR(selected.advanceBalance ?? 0)}</span>
+              </div>
+              <div className="mt-1 flex items-center justify-between text-amber-700 dark:text-amber-300">
+                <span>+ This Advance:</span>
+                <span className="font-semibold">+{formatINR(parseAmount(amount))}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between border-t border-amber-200/60 pt-1.5 font-bold text-foreground dark:border-amber-900/60">
+                <span>Total Due at Next Settlement:</span>
+                <span className="text-sm text-red-600 dark:text-red-400">
+                  {formatINR((selected.advanceBalance ?? 0) + parseAmount(amount))}
+                </span>
+              </div>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                ⚡ <strong>Ripple Effect:</strong> Deducts {method} cash/bank balance and queues this full amount to automatically offset against {selected.fullName}&apos;s next monthly wage settlement.
+              </p>
+            </div>
+          )}
         </div>
         <ConfirmAmount
           amount={parseAmount(amount)}
@@ -1178,6 +1199,29 @@ export function RecordPaymentDialog({ open, onOpenChange, propertyId, properties
           <Field label="Notes">
             <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Optional" />
           </Field>
+          {Boolean(selected && parseAmount(amount) > 0) && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 text-xs dark:border-emerald-900/50 dark:bg-emerald-950/20">
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span>Current Outstanding Due:</span>
+                <span className="font-semibold text-foreground">
+                  {formatINR(data?.ledger.outstanding ?? properties.find((p) => p.id === selected)?.outstanding ?? 0)}
+                </span>
+              </div>
+              <div className="mt-1 flex items-center justify-between text-emerald-700 dark:text-emerald-300">
+                <span>- Incoming Payment ({method}):</span>
+                <span className="font-semibold">-{formatINR(parseAmount(amount))}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between border-t border-emerald-200/60 pt-1.5 font-bold text-foreground dark:border-emerald-900/60">
+                <span>Remaining Due After Entry:</span>
+                <span className="text-sm text-emerald-600 dark:text-emerald-400">
+                  {formatINR(Math.max(0, (data?.ledger.outstanding ?? properties.find((p) => p.id === selected)?.outstanding ?? 0) - parseAmount(amount)))}
+                </span>
+              </div>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                ⚡ <strong>Ripple Effect:</strong> Receipts will auto-allocate against oldest unpaid shifts via FIFO, update the business cashbook, and reflect in real-time on the Client 360° Passbook.
+              </p>
+            </div>
+          )}
         </div>
         <ConfirmAmount
           amount={parseAmount(amount)}

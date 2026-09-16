@@ -16,6 +16,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { toast } from "sonner";
 import { useLang, t } from "@/lib/i18n";
 import { Wallet, Plus, Building2, ArrowRight } from "lucide-react";
+import { TransactionLineageDialog, type TransactionLineageData } from "@/components/shared/transaction-lineage-dialog";
 import {
   ListResp, Option, PaymentRec, PropertyRec, RecordPaymentDialog, SelectInput, errMessage, fmtDay, useAsync,
 } from "./_shared";
@@ -33,6 +34,7 @@ export default function PaymentsView({ params, navigate }: ViewProps) {
   const [tab, setTab] = useState("outstanding");
   const [payFor, setPayFor] = useState<string | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
+  const [lineageData, setLineageData] = useState<TransactionLineageData | null>(null);
 
   // History filters
   const [historyProperty, setHistoryProperty] = useState(params?.propertyId ?? "");
@@ -97,6 +99,58 @@ export default function PaymentsView({ params, navigate }: ViewProps) {
     { key: "method", label: t(lang, "col.method"), value: (r) => r.method ?? "—" },
     { key: "reference", label: t(lang, "col.reference"), value: (r) => r.reference ?? "—", hideOnMobile: true },
     { key: "receivedBy", label: t(lang, "col.receivedBy"), value: (r) => r.receivedByName ?? "—", hideOnMobile: true },
+    {
+      key: "lineage",
+      label: "Trail",
+      className: "text-right",
+      render: (r) => (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2 text-xs font-medium text-primary hover:text-primary"
+          onClick={(e) => {
+            e.stopPropagation();
+            setLineageData({
+              id: r.id,
+              title: `Payment: ${r.propertyName ?? "Property"}`,
+              type: "Property Payment",
+              amount: r.amount,
+              date: r.date,
+              createdByName: r.receivedByName,
+              ruleExplanation: "Property collection reduces customer receivables via FIFO and increases company liquidity in Cash/Bank.",
+              impactedAccounts: [
+                {
+                  account: `Cash / Bank (${r.method ?? "UPI"})`,
+                  type: "debit",
+                  amount: r.amount,
+                  description: "Cash inflow received from restaurant",
+                },
+                {
+                  account: `Receivable: ${r.propertyName ?? "Property"}`,
+                  type: "credit",
+                  amount: r.amount,
+                  description: "Reduced outstanding balance via FIFO allocation",
+                },
+              ],
+              linkedEntities: [
+                {
+                  label: "Serviced Property",
+                  name: r.propertyName ?? "Property",
+                  onClick: () => {
+                    setLineageData(null);
+                    navigate("properties", { id: r.propertyId });
+                  },
+                },
+              ],
+              notes: r.reference ? `Ref: ${r.reference}` : undefined,
+            });
+          }}
+        >
+          View Trail →
+        </Button>
+      ),
+      value: () => "View Trail",
+    },
   ];
 
   const totalOutstanding = (pending.data?.items ?? []).reduce((s, i) => s + (i.outstanding ?? 0), 0);
@@ -158,13 +212,28 @@ export default function PaymentsView({ params, navigate }: ViewProps) {
                     {row.unpaidCount ? ` · ${row.unpaidCount} day${row.unpaidCount === 1 ? "" : "s"}` : ""}
                   </p>
                 </div>
-                <div className="shrink-0 text-right">
-                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Outstanding</p>
-                  <p className="text-lg font-bold tabular-nums text-red-600 dark:text-red-400">{formatINR(row.outstanding)}</p>
+                <div className="shrink-0 flex items-center gap-2">
+                  <div className="text-right">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Outstanding</p>
+                    <p className="text-lg font-bold tabular-nums text-red-600 dark:text-red-400">{formatINR(row.outstanding)}</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 gap-1 text-xs"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate("properties", { id: row.propertyId });
+                    }}
+                    title="View Property 360° Ledger"
+                  >
+                    <Building2 className="h-3.5 w-3.5 text-primary" />
+                    Ledger
+                  </Button>
+                  <Button size="icon" variant="ghost" className="h-9 w-9 sm:h-8 sm:w-8 shrink-0" aria-label="Open">
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
                 </div>
-                <Button size="icon" variant="ghost" className="h-9 w-9 sm:h-8 sm:w-8 shrink-0" aria-label="Open">
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
               </CardContent>
             </Card>
           ))}
@@ -218,6 +287,12 @@ export default function PaymentsView({ params, navigate }: ViewProps) {
         open={quickOpen}
         onOpenChange={setQuickOpen}
         onDone={refreshAll}
+      />
+
+      <TransactionLineageDialog
+        open={Boolean(lineageData)}
+        onOpenChange={(v) => !v && setLineageData(null)}
+        data={lineageData}
       />
 
       {/* Mobile FAB — alternate trigger for Record Payment */}

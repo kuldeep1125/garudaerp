@@ -24,7 +24,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useLang, t } from "@/lib/i18n";
 import {
-  ReceiptText, Users, Landmark, Banknote, CheckCircle2, Wand2, FileText, CalendarClock,
+  ReceiptText, Users, Landmark, Banknote, CheckCircle2, Wand2, FileText, CalendarClock, User,
 } from "lucide-react";
 import {
   type SettlementRec, type Option, SelectInput, Field, KV, MoneyInput, ShiftBadgeInline,
@@ -420,6 +420,60 @@ export default function SettlementsView({ navigate }: ViewProps) {
               </DialogHeader>
 
               <div className="space-y-4 text-xs">
+                {/* Visual Calculation Formula Card */}
+                <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 text-xs dark:border-indigo-900/50 dark:bg-indigo-950/20">
+                  <p className="font-semibold text-indigo-900 dark:text-indigo-300">Net Salary Equation & Lineage Proof</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 font-medium tabular-nums">
+                    <span className="rounded bg-background px-2 py-1 shadow-sm">
+                      Gross: {formatINR(detail.grossEarnings ?? 0)}
+                    </span>
+                    {(detail.additions ?? 0) > 0 && (
+                      <>
+                        <span className="text-muted-foreground">+</span>
+                        <span className="rounded bg-emerald-100 text-emerald-800 px-2 py-1 dark:bg-emerald-950 dark:text-emerald-300">
+                          Additions: {formatINR(detail.additions ?? 0)}
+                        </span>
+                      </>
+                    )}
+                    {(detail.rentDeducted ?? 0) > 0 && (
+                      <>
+                        <span className="text-muted-foreground">−</span>
+                        <span className="rounded bg-teal-100 text-teal-800 px-2 py-1 dark:bg-teal-950 dark:text-teal-300">
+                          Rent: {formatINR(detail.rentDeducted ?? 0)}
+                        </span>
+                      </>
+                    )}
+                    {(detail.contractorCut ?? 0) > 0 && (
+                      <>
+                        <span className="text-muted-foreground">−</span>
+                        <span className="rounded bg-amber-100 text-amber-800 px-2 py-1 dark:bg-amber-950 dark:text-amber-300">
+                          Contractor Cut: {formatINR(detail.contractorCut ?? 0)}
+                        </span>
+                      </>
+                    )}
+                    {(detail.otherDeductions ?? 0) > 0 && (
+                      <>
+                        <span className="text-muted-foreground">−</span>
+                        <span className="rounded bg-gray-200 text-gray-800 px-2 py-1 dark:bg-gray-800 dark:text-gray-300">
+                          Other: {formatINR(detail.otherDeductions ?? 0)}
+                        </span>
+                      </>
+                    )}
+                    {(detail.advanceDeducted ?? 0) > 0 && (
+                      <>
+                        <span className="text-muted-foreground">−</span>
+                        <span className="rounded bg-red-100 text-red-800 px-2 py-1 dark:bg-red-950 dark:text-red-300">
+                          Advance: {formatINR(detail.advanceDeducted ?? 0)}
+                        </span>
+                      </>
+                    )}
+                    <span className="text-muted-foreground">=</span>
+                    <span className="rounded bg-primary text-primary-foreground px-2.5 py-1 font-bold shadow-sm">
+                      Net: {formatINR(detail.netPayable ?? 0)}
+                    </span>
+                  </div>
+                </div>
+
                 {/* Lines breakdown */}
                 <div>
                   <p className="font-semibold text-muted-foreground">Work breakdown</p>
@@ -507,12 +561,20 @@ export default function SettlementsView({ navigate }: ViewProps) {
               </div>
 
               <DialogFooter className="flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <Button
-                  variant="outline" className="min-h-10 gap-1.5"
-                  onClick={() => { setDetailId(null); navigate("statement", { id: detail.id }); }}
-                >
-                  <FileText className="h-4 w-4" aria-hidden />View Statement
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline" className="min-h-10 gap-1.5"
+                    onClick={() => { setDetailId(null); navigate("statement", { id: detail.id }); }}
+                  >
+                    <FileText className="h-4 w-4" aria-hidden />View Statement
+                  </Button>
+                  <Button
+                    variant="outline" className="min-h-10 gap-1.5"
+                    onClick={() => { setDetailId(null); navigate("employees", { id: detail.employeeId }); }}
+                  >
+                    <User className="h-4 w-4 text-primary" aria-hidden />Employee Passbook
+                  </Button>
+                </div>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   {detail.status === "DRAFT" && (
                     <Button

@@ -25,7 +25,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useLang, t } from "@/lib/i18n";
-import { CalendarCheck, Pencil, Trash2, CalendarDays, ChevronDown, Download } from "lucide-react";
+import { CalendarCheck, Pencil, Trash2, CalendarDays, ChevronDown, Download, User, Building2 } from "lucide-react";
 import {
   DeploymentRec, DeployWizard, ListResp, MoneyInput, Option, PropertyRec, SelectInput, ShiftBadgeInline,
   SHIFT_OPTIONS, SHIFT_UNITS, errMessage, fmtDateTime, fmtDay, todayStr, useAsync, useMutation,
@@ -90,7 +90,7 @@ function monthBounds(offset = 0): { from: string; to: string } {
   return { from: f(first), to: f(last) };
 }
 
-export default function DeploymentsView({ params }: ViewProps) {
+export default function DeploymentsView({ params, navigate }: ViewProps) {
   const { lang } = useLang();
   const [date, setDate] = useState(params?.date ?? todayStr());
   const [fromTo, setFromTo] = useState<{ from?: string; to?: string }>({});
@@ -668,6 +668,38 @@ export default function DeploymentsView({ params }: ViewProps) {
                 </p>
               )}
               {detail.notes && <p className="text-xs text-muted-foreground">Notes: {detail.notes}</p>}
+
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-muted/40 p-2.5">
+                <span className="text-[11px] font-medium text-muted-foreground mr-1">360° Passbooks:</span>
+                {detail.employeeId && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1 text-xs"
+                    onClick={() => {
+                      setDetail(null);
+                      navigate("employees", { id: detail.employeeId });
+                    }}
+                  >
+                    <User className="h-3 w-3 text-primary" />
+                    {detail.employeeName}
+                  </Button>
+                )}
+                {detail.propertyId && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1 text-xs"
+                    onClick={() => {
+                      setDetail(null);
+                      navigate("properties", { id: detail.propertyId });
+                    }}
+                  >
+                    <Building2 className="h-3 w-3 text-primary" />
+                    {detail.propertyName}
+                  </Button>
+                )}
+              </div>
 
               <Separator />
 
