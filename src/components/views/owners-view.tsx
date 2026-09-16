@@ -16,7 +16,8 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
   CalendarRange, ClipboardCopy, Crown, EllipsisVertical, Info, KeyRound, Mail, MessageCircle, Minus, Pencil,
-  Plus, Send, ShieldCheck, TrendingDown, TrendingUp, UserPlus,
+  Plus, Send, ShieldCheck, TrendingDown, TrendingUp, UserPlus, Wallet, IndianRupee, ArrowDownLeft, ArrowUpRight,
+  FileText, CheckCircle, Clock, GitCommit,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -28,6 +29,17 @@ import {
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { StatCard } from "@/components/shared/stat-card";
+import {
+  FormulaInspectorDialog,
+  type FormulaInspectorData,
+} from "@/components/shared/formula-inspector-dialog";
+import {
+  TransactionLineageDialog,
+  type TransactionLineageData,
+} from "@/components/shared/transaction-lineage-dialog";
 import {
   Field, InitialAvatar, ListResp, errMessage, fmtDay, useAsync, useMutation,
 } from "./_shared";
@@ -253,10 +265,350 @@ function MonthlyEmailDialog({ target, onClose }: { target: OwnerRow; onClose: ()
 }
 
 // ---------------------------------------------------------------------------
+// Owner 360° Passbook & Partner Capital Ledger Dialog
+// ---------------------------------------------------------------------------
+
+interface OwnerPassbookResp {
+  owner: OwnerRow & { createdRecords?: number };
+  summary: {
+    contributions: number;
+    drawings: number;
+    outOfPocketSpend: number;
+    netBalance: number;
+    recordsCount: number;
+  };
+  passbook: Array<{
+    id: string;
+    date: string;
+    createdAt: string;
+    type: "CONTRIBUTION" | "DRAWING" | "OUT_OF_POCKET";
+    title: string;
+    subtitle: string;
+    inflow: number;
+    outflow: number;
+    balance: number;
+    notes?: string | null;
+  }>;
+  audits: Array<{
+    id: string;
+    action: string;
+    module: string;
+    recordLabel?: string | null;
+    createdAt: string;
+  }>;
+}
+
+function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: () => void }) {
+  const { data, loading, error, reload } = useAsync<OwnerPassbookResp>(
+    () => api.get<OwnerPassbookResp>(`/api/owners/${target.id}/passbook`),
+    [target.id]
+  );
+  const [inspectorData, setInspectorData] = useState<FormulaInspectorData | null>(null);
+  const [lineageData, setLineageData] = useState<TransactionLineageData | null>(null);
+
+  const openInspector = (metric: "contributions" | "drawings" | "outofpocket" | "net") => {
+    if (!data) return;
+    const s = data.summary;
+    switch (metric) {
+      case "contributions":
+        setInspectorData({
+          title: "Capital Contributions (Deposits In)",
+          subtitle: `${target.name} · Partner Equity`,
+          resultLabel: "Total Contributed",
+          resultValue: formatINR(s.contributions),
+          formulaEquation: "Total Capital = ∑(Owner Contributions Deposited)",
+          steps: [
+            { label: "Direct Capital Invested", amount: s.contributions, operation: "result", detail: "Personal funds put into company accounts" },
+          ],
+          notes: [
+            "Capital deposited by an owner into business accounts.",
+            "This is equity funding, not operational revenue, so it is segregated from P&L.",
+          ],
+        });
+        break;
+      case "drawings":
+        setInspectorData({
+          title: "Personal Drawings (Withdrawals Out)",
+          subtitle: `${target.name} · Capital Drawings`,
+          resultLabel: "Total Drawings",
+          resultValue: formatINR(s.drawings),
+          formulaEquation: "Total Drawings = ∑(Owner Withdrawals Taken)",
+          steps: [
+            { label: "Company Funds Withdrawn", amount: s.drawings, operation: "result", detail: "Personal drawings taken out" },
+          ],
+          notes: [
+            "Withdrawals reduce the partner's equity in the business.",
+            "Drawings do not count as operational business expenses.",
+          ],
+        });
+        break;
+      case "outofpocket":
+        setInspectorData({
+          title: "Out-of-Pocket Business Spend",
+          subtitle: `${target.name} · Reimbursable Company Spend`,
+          resultLabel: "Total Out-of-Pocket",
+          resultValue: formatINR(s.outOfPocketSpend),
+          formulaEquation: "Total Out-of-Pocket = ∑(Operating Expenses Paid by Partner)",
+          steps: [
+            { label: "Expenses Paid on Behalf of Business", amount: s.outOfPocketSpend, operation: "result", detail: "Personal UPI/Cash/Card spend" },
+          ],
+          notes: [
+            "Business operating costs (fuel, repairs, supplies) paid directly by the partner.",
+            "The business owes this amount back to the partner.",
+          ],
+        });
+        break;
+      case "net":
+        setInspectorData({
+          title: "Net Partner Position",
+          subtitle: `${target.name} · Capital & Current Balance`,
+          resultLabel: "Net Balance Position",
+          resultValue: formatINR(s.netBalance),
+          formulaEquation: "Net Position = (Capital Contributed + Out-of-Pocket Spend) − Personal Drawings",
+          steps: [
+            { label: "Capital Contributed", amount: s.contributions, operation: "add", detail: "Equity deposits" },
+            { label: "Out-of-Pocket Business Spend", amount: s.outOfPocketSpend, operation: "add", detail: "Reimbursable expenses" },
+            { label: "Personal Drawings Taken", amount: s.drawings, operation: "subtract", detail: "Withdrawals taken" },
+            { label: "Net Standing Balance", amount: s.netBalance, operation: "result", detail: s.netBalance >= 0 ? "Company owes Partner" : "Partner owes Company" },
+          ],
+          notes: [
+            "If positive: The company owes this net amount to the partner.",
+            "If negative: The partner has withdrawn more than contributed/spent, owing money back to company accounts.",
+          ],
+        });
+        break;
+    }
+  };
+
+  const openLineage = (item: OwnerPassbookResp["passbook"][number]) => {
+    setLineageData({
+      id: item.id,
+      title: item.title,
+      type: item.type === "CONTRIBUTION" ? "Owner Contribution" : item.type === "DRAWING" ? "Owner Drawing" : "Out-of-Pocket Expense",
+      amount: item.inflow > 0 ? item.inflow : item.outflow,
+      date: fmtDay(item.date),
+      createdAt: item.createdAt,
+      createdByName: target.name,
+      ruleExplanation: item.type === "CONTRIBUTION"
+        ? "Partner contributed personal funds into the business bank/cash account."
+        : item.type === "DRAWING"
+        ? "Partner withdrew company funds for personal use, reducing equity."
+        : "Partner paid a legitimate operational expense on behalf of Garuda from personal funds.",
+      impactedAccounts: item.type === "CONTRIBUTION" ? [
+        { account: "Company Bank / Cash", type: "debit", amount: item.inflow, description: "Funds deposited" },
+        { account: `Partner Capital (${target.name})`, type: "credit", amount: item.inflow, description: "Equity credit to partner" },
+      ] : item.type === "DRAWING" ? [
+        { account: `Partner Capital (${target.name})`, type: "debit", amount: item.outflow, description: "Equity reduced" },
+        { account: "Company Bank / Cash", type: "credit", amount: item.outflow, description: "Funds withdrawn" },
+      ] : [
+        { account: "Business Operational Expense", type: "debit", amount: item.inflow, description: "Operating cost incurred" },
+        { account: `Partner Reimbursable (${target.name})`, type: "credit", amount: item.inflow, description: "Credit owed to partner" },
+      ],
+      notes: item.notes,
+    });
+  };
+
+  const s = data?.summary;
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden max-h-[90vh]">
+        {/* Header */}
+        <DialogHeader className="p-5 pb-3 border-b bg-muted/20">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="text-[11px] font-semibold tracking-wide">
+                Owner 360° Passbook
+              </Badge>
+              <span className="text-xs text-muted-foreground">@{target.username}</span>
+            </div>
+            <Button variant="ghost" size="sm" className="h-8 text-xs gap-1" onClick={() => void reload()} disabled={loading}>
+              <Clock className="h-3.5 w-3.5" />
+              <span>Refresh</span>
+            </Button>
+          </div>
+          <DialogTitle className="text-lg font-bold mt-1 text-foreground flex items-center gap-2">
+            <Wallet className="h-5 w-5 text-primary shrink-0" />
+            <span>{target.name}&apos;s Capital & Current Account</span>
+          </DialogTitle>
+          <DialogDescription className="text-xs text-muted-foreground">
+            Complete transparent passbook of capital deposits, personal drawings, and out-of-pocket expenses.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="p-5 space-y-4 overflow-y-auto max-h-[75vh]">
+          {loading && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-20 rounded-xl" />)}
+              </div>
+              <Skeleton className="h-64 rounded-xl" />
+            </div>
+          )}
+
+          {error && (
+            <div className="p-4 text-center text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40 rounded-xl">
+              {error}
+            </div>
+          )}
+
+          {!loading && data && (
+            <>
+              {/* Interactive KPI Banner */}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="list" aria-label="Owner KPIs">
+                <StatCard
+                  label="Capital In"
+                  value={formatINR(s?.contributions ?? 0, { compact: true })}
+                  icon={ArrowDownLeft}
+                  tone="positive"
+                  hint="Click to inspect formula"
+                  onClick={() => openInspector("contributions")}
+                />
+                <StatCard
+                  label="Drawings Out"
+                  value={formatINR(s?.drawings ?? 0, { compact: true })}
+                  icon={ArrowUpRight}
+                  tone="warning"
+                  hint="Click to inspect formula"
+                  onClick={() => openInspector("drawings")}
+                />
+                <StatCard
+                  label="Out-of-Pocket Spend"
+                  value={formatINR(s?.outOfPocketSpend ?? 0, { compact: true })}
+                  icon={IndianRupee}
+                  hint="Click to inspect formula"
+                  onClick={() => openInspector("outofpocket")}
+                />
+                <StatCard
+                  label="Net Standing"
+                  value={formatINR(s?.netBalance ?? 0, { compact: true })}
+                  icon={Wallet}
+                  tone={(s?.netBalance ?? 0) >= 0 ? "positive" : "negative"}
+                  hint={(s?.netBalance ?? 0) >= 0 ? "Company owes you" : "You owe company"}
+                  onClick={() => openInspector("net")}
+                />
+              </div>
+
+              {/* Tabs */}
+              <Tabs defaultValue="passbook">
+                <TabsList className="w-full sm:w-auto">
+                  <TabsTrigger value="passbook" className="gap-1.5">
+                    <FileText className="h-3.5 w-3.5" />
+                    <span>Capital Passbook ({data.passbook.length})</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="audits" className="gap-1.5">
+                    <Clock className="h-3.5 w-3.5" />
+                    <span>Audit Log ({data.audits.length})</span>
+                  </TabsTrigger>
+                </TabsList>
+
+                {/* Tab 1: Passbook */}
+                <TabsContent value="passbook" className="mt-3 space-y-3">
+                  <div className="border rounded-xl divide-y overflow-hidden text-xs">
+                    {data.passbook.length === 0 ? (
+                      <div className="p-8 text-center text-muted-foreground">
+                        No capital transactions or personal expenses recorded for this owner yet.
+                      </div>
+                    ) : (
+                      data.passbook.map((item) => (
+                        <div
+                          key={item.id}
+                          className="p-3 flex items-center justify-between gap-3 hover:bg-muted/40 transition-colors cursor-pointer"
+                          onClick={() => openLineage(item)}
+                        >
+                          <div className="min-w-0 flex items-start gap-2.5">
+                            {item.inflow > 0 ? (
+                              <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 shrink-0 mt-0.5">
+                                <ArrowDownLeft className="h-3.5 w-3.5" />
+                              </div>
+                            ) : (
+                              <div className="p-1.5 rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 shrink-0 mt-0.5">
+                                <ArrowUpRight className="h-3.5 w-3.5" />
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <p className="font-semibold text-foreground truncate">{item.title}</p>
+                              <p className="text-[11px] text-muted-foreground truncate">{item.subtitle}</p>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">{fmtDay(item.date)}</p>
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            {item.inflow > 0 && (
+                              <p className="font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">+{formatINR(item.inflow)}</p>
+                            )}
+                            {item.outflow > 0 && (
+                              <p className="font-semibold text-amber-600 dark:text-amber-400 tabular-nums">−{formatINR(item.outflow)}</p>
+                            )}
+                            <p className="text-[11px] font-bold text-foreground tabular-nums mt-0.5">
+                              Bal: {formatINR(item.balance)}
+                            </p>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </TabsContent>
+
+                {/* Tab 2: Audit */}
+                <TabsContent value="audits" className="mt-3">
+                  <div className="border rounded-xl divide-y overflow-hidden text-xs">
+                    {data.audits.length === 0 ? (
+                      <div className="p-8 text-center text-muted-foreground">No recent actions logged.</div>
+                    ) : (
+                      data.audits.map((a) => (
+                        <div key={a.id} className="p-3 flex items-center justify-between gap-2 hover:bg-muted/30">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <Badge variant="outline" className="text-[10px] font-mono">
+                                {a.action}
+                              </Badge>
+                              <span className="font-semibold text-foreground truncate">{a.recordLabel || a.module}</span>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              Module: {a.module} · {fmtDay(a.createdAt)}
+                            </p>
+                          </div>
+                          <span className="text-[10px] text-muted-foreground shrink-0 font-mono">
+                            {String(a.createdAt).slice(11, 19)}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </>
+          )}
+        </div>
+
+        <DialogFooter className="p-3 border-t bg-muted/20">
+          <Button variant="outline" size="sm" onClick={onClose}>Close Passbook</Button>
+        </DialogFooter>
+      </DialogContent>
+
+      {/* Formula Inspector Modal */}
+      <FormulaInspectorDialog
+        open={Boolean(inspectorData)}
+        onOpenChange={(open) => { if (!open) setInspectorData(null); }}
+        data={inspectorData}
+      />
+
+      {/* Transaction Lineage Modal */}
+      <TransactionLineageDialog
+        open={Boolean(lineageData)}
+        onOpenChange={(open) => { if (!open) setLineageData(null); }}
+        data={lineageData}
+      />
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // My account card (change own password)
 // ---------------------------------------------------------------------------
 
-function MyAccountCard() {
+function MyAccountCard({ onOpenPassbook }: { onOpenPassbook?: () => void }) {
   const { owner: me } = useAuth();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
@@ -301,6 +653,17 @@ function MyAccountCard() {
                 </span>
               </div>
               <p className="truncate text-xs text-muted-foreground">@{me?.username ?? "—"}{me?.mobile ? ` · ${me.mobile}` : ""}</p>
+              {onOpenPassbook && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2.5 h-8 text-xs gap-1.5 font-medium border-primary/30 hover:bg-primary/5 hover:text-primary"
+                  onClick={onOpenPassbook}
+                >
+                  <Wallet className="h-3.5 w-3.5 text-primary" />
+                  <span>My 360° Capital Passbook</span>
+                </Button>
+              )}
             </div>
           </div>
 
@@ -346,7 +709,7 @@ function MyAccountCard() {
 // Owner card
 // ---------------------------------------------------------------------------
 
-function OwnerCard({ owner, isSelf, saving, onEdit, onReset, onToggleActive, onEmail }: {
+function OwnerCard({ owner, isSelf, saving, onEdit, onReset, onToggleActive, onEmail, onPassbook }: {
   owner: OwnerRow;
   isSelf: boolean;
   saving: boolean;
@@ -354,6 +717,7 @@ function OwnerCard({ owner, isSelf, saving, onEdit, onReset, onToggleActive, onE
   onReset: () => void;
   onToggleActive: (next: boolean) => void;
   onEmail: () => void;
+  onPassbook: () => void;
 }) {
   return (
     <Card className="min-w-0 transition-all hover:shadow-sm">
@@ -418,6 +782,15 @@ function OwnerCard({ owner, isSelf, saving, onEdit, onReset, onToggleActive, onE
             </DropdownMenu>
           </div>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-3 w-full h-8 text-xs gap-1.5 font-semibold border-primary/30 hover:bg-primary/5 hover:text-primary"
+          onClick={onPassbook}
+        >
+          <Wallet className="h-3.5 w-3.5 text-primary" />
+          <span>View 360° Capital Passbook</span>
+        </Button>
         {isSelf && (
           <p className="mt-2 text-[10px] text-muted-foreground">Your own account stays active — change your password above.</p>
         )}
@@ -618,6 +991,7 @@ export default function OwnersView(_props: ViewProps) {
   const [resetTarget, setResetTarget] = useState<OwnerRow | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<OwnerRow | null>(null);
   const [emailTarget, setEmailTarget] = useState<OwnerRow | null>(null);
+  const [passbookTarget, setPassbookTarget] = useState<OwnerRow | null>(null);
   const { mutate, saving } = useMutation();
 
   const owners = data?.items ?? [];
@@ -653,7 +1027,18 @@ export default function OwnersView(_props: ViewProps) {
         }
       />
 
-      <MyAccountCard />
+      <MyAccountCard
+        onOpenPassbook={() => {
+          const meRow = owners.find((o) => o.username === me?.username) ?? (me ? {
+            id: me.id,
+            name: me.name,
+            username: me.username,
+            mobile: me.mobile,
+            isActive: true,
+          } : null);
+          if (meRow) setPassbookTarget(meRow);
+        }}
+      />
 
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50/60 p-4 text-center dark:border-red-900 dark:bg-red-950/30">
@@ -691,6 +1076,7 @@ export default function OwnersView(_props: ViewProps) {
               onReset={() => setResetTarget(o)}
               onToggleActive={(next) => onToggleActive(o, next)}
               onEmail={() => setEmailTarget(o)}
+              onPassbook={() => setPassbookTarget(o)}
             />
           ))}
         </div>
@@ -741,6 +1127,10 @@ export default function OwnersView(_props: ViewProps) {
 
       {emailTarget && (
         <MonthlyEmailDialog target={emailTarget} onClose={() => setEmailTarget(null)} />
+      )}
+
+      {passbookTarget && (
+        <OwnerPassbookDialog target={passbookTarget} onClose={() => setPassbookTarget(null)} />
       )}
     </div>
   );

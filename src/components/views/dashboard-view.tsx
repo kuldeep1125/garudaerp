@@ -21,7 +21,7 @@ import {
   Users, Truck, Wallet, IndianRupee, Landmark, CalendarCheck, Receipt, HandCoins, ReceiptText,
   Route, AlertTriangle, AlertCircle, Info, ChevronRight, Building2, RefreshCw, Activity, PieChart as PieChartIcon, History,
   CalendarRange, TrendingUp, TrendingDown, Minus, Sparkles, CalendarDays, Printer, HardHat, Home,
-  Search, X, UserRound, ArrowRight, Calculator,
+  Search, X, UserRound, ArrowRight, Calculator, ShieldCheck, Layers, HelpCircle,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import { ErrorState, useAsync, AreaTrend, CHART_COLORS, useDebounced } from "./_shared";
@@ -29,6 +29,7 @@ import {
   FormulaInspectorDialog,
   type FormulaInspectorData,
 } from "@/components/shared/formula-inspector-dialog";
+import { ReconciliationCenterDialog } from "@/components/shared/reconciliation-center-dialog";
 
 interface AttentionItem {
   key: string;
@@ -218,6 +219,7 @@ export default function DashboardView({ navigate }: ViewProps) {
   } | null>(null);
   const [searching, setSearching] = useState(false);
   const [inspectorData, setInspectorData] = useState<FormulaInspectorData | null>(null);
+  const [reconciliationOpen, setReconciliationOpen] = useState(false);
 
   useEffect(() => {
     if (!debouncedSearch.trim() || debouncedSearch.trim().length < 2) {
@@ -418,6 +420,18 @@ export default function DashboardView({ navigate }: ViewProps) {
         subtitle={prettyDate()}
         actions={
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5 border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300 font-medium"
+              onClick={() => setReconciliationOpen(true)}
+            >
+              <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              <span className="hidden sm:inline">Reconciliation Hub</span>
+              <Badge variant="secondary" className="h-5 px-1.5 text-[10px] bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-semibold">
+                0 Drift
+              </Badge>
+            </Button>
             <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={refreshAll} aria-label="Refresh dashboard">
               <RefreshCw className={cn("h-3.5 w-3.5", busy && "animate-spin")} aria-hidden />
               <span className="hidden sm:inline">{tr(lang, "common.refresh")}</span>
@@ -691,6 +705,209 @@ export default function DashboardView({ navigate }: ViewProps) {
               hint="Click to inspect formula"
             />
           </div>
+
+          {/* Pillar 3: Visual Interactive Money Flow Pipeline */}
+          <Card className="border border-border/80 bg-gradient-to-br from-card via-card to-muted/20 shadow-sm overflow-hidden">
+            <CardHeader className="pb-3 border-b border-border/50 bg-muted/20">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <div className="h-7 w-7 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
+                      <Layers className="h-4 w-4" />
+                    </div>
+                    <CardTitle className="text-sm sm:text-base font-semibold">
+                      Garuda Interactive Money Flow Pipeline
+                    </CardTitle>
+                    <Badge variant="outline" className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 border-emerald-500/30 bg-emerald-500/10">
+                      Live Flow
+                    </Badge>
+                  </div>
+                  <CardDescription className="text-xs">
+                    Visual journey from invoiced revenue to bank collections, operating expenses, and net surplus. Click any card to inspect the exact arithmetic.
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => setReconciliationOpen(true)}
+                  >
+                    <HelpCircle className="h-3.5 w-3.5 text-primary" />
+                    <span>How calculations work</span>
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="p-4 sm:p-5">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 relative">
+                {/* Step 1: Gross Invoiced */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openInspector("billing")}
+                  onKeyDown={(e) => { if (e.key === "Enter") openInspector("billing"); }}
+                  className="p-3.5 rounded-xl border border-blue-500/30 bg-blue-500/5 hover:bg-blue-500/10 transition-all cursor-pointer group flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-1 mb-1.5">
+                      <span className="text-[11px] font-bold tracking-wider uppercase text-blue-700 dark:text-blue-300">
+                        1. Invoiced Revenue
+                      </span>
+                      <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 border-blue-400/30 text-blue-600 dark:text-blue-400">
+                        Accrual
+                      </Badge>
+                    </div>
+                    <p className="text-xl font-extrabold tracking-tight text-foreground tabular-nums">
+                      {formatINR((m?.expectedBilling ?? 0) + (t?.revenue ?? 0))}
+                    </p>
+                    <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
+                      <div className="flex justify-between">
+                        <span>Manpower Billing:</span>
+                        <span className="font-semibold text-foreground">{formatINR(m?.expectedBilling ?? 0)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Transport Rentals:</span>
+                        <span className="font-semibold text-foreground">{formatINR(t?.revenue ?? 0)}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 pt-2 border-t border-blue-500/20 flex items-center justify-between text-[11px] text-blue-600 dark:text-blue-400 font-medium group-hover:underline">
+                    <span>Inspect rate math</span>
+                    <ArrowRight className="h-3 w-3" />
+                  </div>
+                </div>
+
+                {/* Step 2: Realization & Receivables */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openInspector("collections")}
+                  onKeyDown={(e) => { if (e.key === "Enter") openInspector("collections"); }}
+                  className="p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10 transition-all cursor-pointer group flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-1 mb-1.5">
+                      <span className="text-[11px] font-bold tracking-wider uppercase text-emerald-700 dark:text-emerald-300">
+                        2. Cash Realized
+                      </span>
+                      <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 border-emerald-400/30 text-emerald-600 dark:text-emerald-400">
+                        Bank + Cash
+                      </Badge>
+                    </div>
+                    <p className="text-xl font-extrabold tracking-tight text-emerald-700 dark:text-emerald-400 tabular-nums">
+                      {formatINR((m?.received ?? 0) + (t?.received ?? 0))}
+                    </p>
+                    <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
+                      <div className="flex justify-between">
+                        <span>Collected Inflow:</span>
+                        <span className="font-semibold text-emerald-600 dark:text-emerald-400">{formatINR(m?.received ?? 0)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Pending Collection:</span>
+                        <span className="font-semibold text-amber-600 dark:text-amber-400">{formatINR(c?.totalOutstanding ?? 0)}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 pt-2 border-t border-emerald-500/20 flex items-center justify-between text-[11px] text-emerald-700 dark:text-emerald-400 font-medium group-hover:underline">
+                    <span>Inspect payment dates</span>
+                    <ArrowRight className="h-3 w-3" />
+                  </div>
+                </div>
+
+                {/* Step 3: Direct Operating Costs */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openInspector("payout")}
+                  onKeyDown={(e) => { if (e.key === "Enter") openInspector("payout"); }}
+                  className="p-3.5 rounded-xl border border-rose-500/30 bg-rose-500/5 hover:bg-rose-500/10 transition-all cursor-pointer group flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-1 mb-1.5">
+                      <span className="text-[11px] font-bold tracking-wider uppercase text-rose-700 dark:text-rose-300">
+                        3. Operations & Labor
+                      </span>
+                      <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 border-rose-400/30 text-rose-600 dark:text-rose-400">
+                        Outflows
+                      </Badge>
+                    </div>
+                    <p className="text-xl font-extrabold tracking-tight text-foreground tabular-nums">
+                      {formatINR((m?.payout ?? 0) + (m?.expenses ?? 0) + (t?.expenses ?? 0))}
+                    </p>
+                    <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
+                      <div className="flex justify-between">
+                        <span>Employee Net Payout:</span>
+                        <span className="font-semibold text-foreground">{formatINR(m?.payout ?? 0)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Fleet & Biz OpEx:</span>
+                        <span className="font-semibold text-foreground">{formatINR((m?.expenses ?? 0) + (t?.expenses ?? 0))}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 pt-2 border-t border-rose-500/20 flex items-center justify-between text-[11px] text-rose-600 dark:text-rose-400 font-medium group-hover:underline">
+                    <span>Inspect wage breakdowns</span>
+                    <ArrowRight className="h-3 w-3" />
+                  </div>
+                </div>
+
+                {/* Step 4: Net Surplus */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openInspector("net")}
+                  onKeyDown={(e) => { if (e.key === "Enter") openInspector("net"); }}
+                  className={cn(
+                    "p-3.5 rounded-xl border transition-all cursor-pointer group flex flex-col justify-between",
+                    net >= 0
+                      ? "border-primary/40 bg-primary/5 hover:bg-primary/10"
+                      : "border-red-500/40 bg-red-500/5 hover:bg-red-500/10"
+                  )}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-1 mb-1.5">
+                      <span className={cn(
+                        "text-[11px] font-bold tracking-wider uppercase",
+                        net >= 0 ? "text-primary" : "text-red-700 dark:text-red-400"
+                      )}>
+                        4. Net Operating Surplus
+                      </span>
+                      <Badge variant="outline" className={cn(
+                        "text-[9px] px-1 py-0 h-4",
+                        net >= 0 ? "border-primary/30 text-primary" : "border-red-400/30 text-red-600"
+                      )}>
+                        {net >= 0 ? "Retained Surplus" : "Deficit"}
+                      </Badge>
+                    </div>
+                    <p className={cn(
+                      "text-xl font-extrabold tracking-tight tabular-nums",
+                      net >= 0 ? "text-primary" : "text-red-600 dark:text-red-400"
+                    )}>
+                      {formatINR(net)}
+                    </p>
+                    <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
+                      <div className="flex justify-between">
+                        <span>Manpower Margin:</span>
+                        <span className="font-semibold text-foreground">{formatINR(m?.grossMargin ?? 0)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Transport Net:</span>
+                        <span className="font-semibold text-foreground">{formatINR(data?.combined.transportNet ?? 0)}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className={cn(
+                    "mt-3 pt-2 border-t flex items-center justify-between text-[11px] font-medium group-hover:underline",
+                    net >= 0 ? "border-primary/20 text-primary" : "border-red-500/20 text-red-600 dark:text-red-400"
+                  )}>
+                    <span>Inspect complete P&L</span>
+                    <ArrowRight className="h-3 w-3" />
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           {/* First-run setup checklist — self-hides once the business is set up */}
           <OnboardingChecklist navigate={navigate} />
@@ -1169,6 +1386,13 @@ export default function DashboardView({ navigate }: ViewProps) {
           if (!open) setInspectorData(null);
         }}
         data={inspectorData}
+      />
+
+      {/* Universal Zero-Mismatch Reconciliation Center Dialog */}
+      <ReconciliationCenterDialog
+        open={reconciliationOpen}
+        onOpenChange={setReconciliationOpen}
+        onNavigate={navigate}
       />
     </div>
   );

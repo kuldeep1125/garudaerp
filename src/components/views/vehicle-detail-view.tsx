@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { api, qs } from "@/lib/api-client";
 import { formatINR, parseAmount } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
@@ -26,8 +26,16 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   CarFront, Plus, Route, Receipt, CalendarClock, Wrench, IndianRupee, BadgeCheck, ShieldAlert,
-  Pencil, RefreshCw,
+  Pencil, RefreshCw, ArrowDownLeft, ArrowUpRight, FileText, CheckCircle, TrendingUp, TrendingDown,
 } from "lucide-react";
+import {
+  FormulaInspectorDialog,
+  type FormulaInspectorData,
+} from "@/components/shared/formula-inspector-dialog";
+import {
+  TransactionLineageDialog,
+  type TransactionLineageData,
+} from "@/components/shared/transaction-lineage-dialog";
 import {
   type VehicleRec, type TripRec, type ExpenseRec, type Option, SelectInput, Field, ErrorState, MoneyInput,
   useAsync, useMutation, fmtDay, todayStr,
@@ -431,6 +439,266 @@ export default function VehicleDetailView({ params, navigate }: ViewProps) {
     if (res.ok) void reload();
   };
 
+  const [inspectorData, setInspectorData] = useState<FormulaInspectorData | null>(null);
+  const [lineageData, setLineageData] = useState<TransactionLineageData | null>(null);
+
+  interface VehicleLedgerItem {
+    id: string;
+    date: string;
+    type: "TRIP" | "EXPENSE" | "EMI" | "MAINTENANCE";
+    title: string;
+    subtitle: string;
+    inflow: number;  // Revenue (+)
+    outflow: number; // Expense/EMI (−)
+    balance: number; // Cumulative Contribution Margin
+    raw: TripRec | ExpenseRec | EmiRec | MaintenanceRec;
+  }
+
+  const statementLedger = useMemo<VehicleLedgerItem[]>(() => {
+    const items: Array<{
+      id: string;
+      date: string;
+      createdAt: string;
+      type: "TRIP" | "EXPENSE" | "EMI" | "MAINTENANCE";
+      title: string;
+      subtitle: string;
+      inflow: number;
+      outflow: number;
+      raw: TripRec | ExpenseRec | EmiRec | MaintenanceRec;
+    }> = [];
+
+    // Trips
+    (trips ?? []).forEach((t) => {
+      const amt = tripTotal(t);
+      items.push({
+        id: `trip-${t.id}`,
+        date: String(t.startAt).slice(0, 10),
+        createdAt: String(t.startAt),
+        type: "TRIP",
+        title: `Trip: ${t.clientName || "Rental Booking"}`,
+        subtitle: `${t.pickup || "Origin"} → ${t.destination || "Destination"} · ${t.status}`,
+        inflow: amt,
+        outflow: 0,
+        raw: t,
+      });
+    });
+
+    // Expenses
+    (expenses ?? []).forEach((e) => {
+      items.push({
+        id: `exp-${e.id}`,
+        date: String(e.date).slice(0, 10),
+        createdAt: (e as unknown as { createdAt?: string }).createdAt || String(e.date),
+        type: "EXPENSE",
+        title: `Expense: ${e.categoryName || "Fleet OpEx"}`,
+        subtitle: e.description || "Operational vehicle cost",
+        inflow: 0,
+        outflow: e.amount,
+        raw: e,
+      });
+    });
+
+    // Paid EMIs
+    (emis ?? []).filter((e) => e.status === "PAID").forEach((e) => {
+      items.push({
+        id: `emi-${e.id}`,
+        date: String(e.paidDate || e.dueDate).slice(0, 10),
+        createdAt: String(e.paidDate || e.dueDate),
+        type: "EMI",
+        title: `Loan EMI: Month ${e.month}`,
+        subtitle: `Installment paid ${e.reference ? `· Ref: ${e.reference}` : ""}`,
+        inflow: 0,
+        outflow: e.amount,
+        raw: e,
+      });
+    });
+
+    // Sort chronologically ascending
+    items.sort((a, b) => a.date.localeCompare(b.date));
+
+    let runningMargin = 0;
+    const computed = items.map((it) => {
+      runningMargin += it.inflow - it.outflow;
+      return {
+        ...it,
+        balance: runningMargin,
+      };
+    });
+
+    return computed.reverse();
+  }, [trips, expenses, emis]);
+
+  const openInspector = (metric: "monthRevenue" | "monthExpense" | "monthEmi" | "monthNet" | "allTimeNet") => {
+    const st = v.stats ?? { monthRevenue: 0, monthExpense: 0, monthEmi: 0, monthNet: 0, revenue: 0, expense: 0, emi: 0, net: 0 };
+    switch (metric) {
+      case "monthRevenue":
+        setInspectorData({
+          title: "Month Trip Revenue Calculation",
+          subtitle: `${v.name} (${v.registrationNumber}) · Month Trips`,
+          resultLabel: "Month Revenue",
+          resultValue: formatINR(st.monthRevenue),
+          formulaEquation: "Month Revenue = ∑(Agreed Trip Rates + Extra Charges this month)",
+          steps: [
+            { label: "Trip Bookings Invoiced", amount: st.monthRevenue, operation: "result", detail: "Total billable transport rentals this month" },
+          ],
+          notes: [
+            "Includes all completed and ongoing vehicle trips started in the current calendar month.",
+          ],
+        });
+        break;
+      case "monthExpense":
+        setInspectorData({
+          title: "Month Operational Expenses",
+          subtitle: `${v.name} (${v.registrationNumber}) · Fleet OpEx`,
+          resultLabel: "Month Expense",
+          resultValue: formatINR(st.monthExpense),
+          formulaEquation: "Month Expense = ∑(Fuel + Tolls + Maintenance recorded this month)",
+          steps: [
+            { label: "Direct Operating Costs", amount: st.monthExpense, operation: "result", detail: "Fuel, repairs, consumables" },
+          ],
+          notes: [
+            "Operational running costs directly tagged to this vehicle.",
+          ],
+        });
+        break;
+      case "monthEmi":
+        setInspectorData({
+          title: "Month Loan EMI Cost",
+          subtitle: `${v.name} (${v.registrationNumber}) · Vehicle Loan`,
+          resultLabel: "Month EMI",
+          resultValue: formatINR(st.monthEmi),
+          formulaEquation: "Month EMI = Paid Loan Installments for Current Month",
+          steps: [
+            { label: "Vehicle Loan Payment", amount: st.monthEmi, operation: "result", detail: "Bank financing installment" },
+          ],
+          notes: [
+            "Fixed financing repayment configured for this vehicle's loan.",
+          ],
+        });
+        break;
+      case "monthNet":
+        setInspectorData({
+          title: "Month Net Contribution Margin",
+          subtitle: `${v.name} (${v.registrationNumber}) · Current Month Profitability`,
+          resultLabel: "Month Net Margin",
+          resultValue: formatINR(st.monthNet),
+          formulaEquation: "Month Net = Month Revenue − Month Expenses − Month EMI",
+          steps: [
+            { label: "Month Trip Revenue", amount: st.monthRevenue, operation: "add", detail: "Transport bookings" },
+            { label: "Operating Expenses (Fuel/Repairs)", amount: st.monthExpense, operation: "subtract", detail: "Direct running costs" },
+            { label: "Loan EMI Installment", amount: st.monthEmi, operation: "subtract", detail: "Bank financing" },
+            { label: "Net Month Margin", amount: st.monthNet, operation: "result", detail: st.monthNet >= 0 ? "Net Profitable" : "Net Operating Deficit" },
+          ],
+          notes: [
+            "Commercial contribution margin generated by this vehicle for the current month.",
+          ],
+        });
+        break;
+      case "allTimeNet":
+        setInspectorData({
+          title: "All-Time Fleet Net Profit Margin",
+          subtitle: `${v.name} (${v.registrationNumber}) · Lifetime Profitability`,
+          resultLabel: "All-Time Net Profit",
+          resultValue: formatINR(st.net),
+          formulaEquation: "All-Time Net = Total Revenue − Total Expenses − Total EMIs Paid",
+          steps: [
+            { label: "Lifetime Invoiced Revenue", amount: st.revenue, operation: "add", detail: "All trips since onboarding" },
+            { label: "Lifetime Operating Expenses", amount: st.expense, operation: "subtract", detail: "All fuel, repairs, and service" },
+            { label: "Lifetime EMIs Paid", amount: (st as unknown as { emi?: number }).emi ?? 0, operation: "subtract", detail: "Total loan installments cleared" },
+            { label: "Lifetime Net Profit", amount: st.net, operation: "result", detail: st.net >= 0 ? "Lifetime Profit" : "Lifetime Net Cost" },
+          ],
+          notes: [
+            "This metric determines the true Return on Investment (ROI) for this vehicle asset.",
+          ],
+        });
+        break;
+    }
+  };
+
+  const openLineage = (item: VehicleLedgerItem) => {
+    setLineageData({
+      id: item.id,
+      title: item.title,
+      type: item.type === "TRIP" ? "Trip Booking" : item.type === "EXPENSE" ? "Fleet OpEx" : "Loan EMI",
+      amount: item.inflow > 0 ? item.inflow : item.outflow,
+      date: fmtDay(item.date),
+      ruleExplanation: item.type === "TRIP"
+        ? "Agreed rental rate and extra charges invoiced to transport client."
+        : item.type === "EXPENSE"
+        ? "Fleet operating expense logged against vehicle registration number."
+        : "Monthly loan installment cleared with financing bank.",
+      impactedAccounts: item.type === "TRIP" ? [
+        { account: "Client Accounts Receivable", type: "debit", amount: item.inflow, description: "Billable trip booking" },
+        { account: "Fleet Transport Revenue", type: "credit", amount: item.inflow, description: "Operating revenue recognized" },
+      ] : [
+        { account: item.type === "EMI" ? "Vehicle Loan Liability" : "Vehicle Operating Expense", type: "debit", amount: item.outflow, description: "Cost recognized" },
+        { account: "Company Bank / Cash", type: "credit", amount: item.outflow, description: "Payment disbursed" },
+      ],
+    });
+  };
+
+  const ledgerColumns: Column<VehicleLedgerItem>[] = [
+    {
+      key: "date",
+      label: "Date",
+      value: (r) => fmtDay(r.date),
+      hideOnMobile: true,
+    },
+    {
+      key: "type",
+      label: "Transaction",
+      primary: true,
+      render: (r) => (
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            {r.type === "TRIP" ? (
+              <ArrowUpRight className="h-3.5 w-3.5 text-primary shrink-0" aria-hidden />
+            ) : (
+              <ArrowDownLeft className="h-3.5 w-3.5 text-amber-600 shrink-0" aria-hidden />
+            )}
+            <p className="truncate font-semibold text-xs sm:text-sm">{r.title}</p>
+          </div>
+          <p className="text-[11px] text-muted-foreground truncate">{r.subtitle}</p>
+          <p className="text-[10px] text-muted-foreground sm:hidden">{fmtDay(r.date)}</p>
+        </div>
+      ),
+      value: (r) => r.title,
+    },
+    {
+      key: "inflow",
+      label: "Revenue (+)",
+      className: "text-right font-medium",
+      render: (r) => r.inflow > 0 ? (
+        <span className="tabular-nums font-semibold text-foreground">+{formatINR(r.inflow)}</span>
+      ) : (
+        <span className="text-muted-foreground/50">—</span>
+      ),
+      value: (r) => formatINR(r.inflow),
+    },
+    {
+      key: "outflow",
+      label: "Expense/EMI (−)",
+      className: "text-right font-medium",
+      render: (r) => r.outflow > 0 ? (
+        <span className="tabular-nums font-semibold text-amber-600 dark:text-amber-400">−{formatINR(r.outflow)}</span>
+      ) : (
+        <span className="text-muted-foreground/50">—</span>
+      ),
+      value: (r) => formatINR(r.outflow),
+    },
+    {
+      key: "balance",
+      label: "Net Margin",
+      className: "text-right font-bold",
+      render: (r) => (
+        <span className={`tabular-nums ${r.balance >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+          {formatINR(r.balance)}
+        </span>
+      ),
+      value: (r) => formatINR(r.balance),
+    },
+  ];
+
   const tripColumns: Column<TripRec>[] = [
     {
       key: "period", label: "Period", primary: true,
@@ -506,13 +774,47 @@ export default function VehicleDetailView({ params, navigate }: ViewProps) {
         </CardContent>
       </Card>
 
-      {/* Stats */}
+      {/* Stats (with Click-to-Inspect Formula Math) */}
       <StatGrid cols={5}>
-        <StatCard label="Month revenue" value={formatINR(v.stats?.monthRevenue ?? 0, { compact: true })} icon={IndianRupee} tone="positive" />
-        <StatCard label="Month expense" value={formatINR(v.stats?.monthExpense ?? 0, { compact: true })} icon={Receipt} tone="warning" />
-        <StatCard label="Month EMI" value={formatINR(v.stats?.monthEmi ?? 0, { compact: true })} icon={CalendarClock} />
-        <StatCard label="Month net" value={formatINR(v.stats?.monthNet ?? 0, { compact: true })} icon={CarFront} tone={(v.stats?.monthNet ?? 0) >= 0 ? "positive" : "negative"} />
-        <StatCard label="All-time net" value={formatINR(v.stats?.net ?? 0, { compact: true })} icon={BadgeCheck} tone={(v.stats?.net ?? 0) >= 0 ? "positive" : "negative"} hint="Revenue − expenses − EMI" />
+        <StatCard
+          label="Month revenue"
+          value={formatINR(v.stats?.monthRevenue ?? 0, { compact: true })}
+          icon={IndianRupee}
+          tone="positive"
+          hint="Click to inspect formula"
+          onClick={() => openInspector("monthRevenue")}
+        />
+        <StatCard
+          label="Month expense"
+          value={formatINR(v.stats?.monthExpense ?? 0, { compact: true })}
+          icon={Receipt}
+          tone="warning"
+          hint="Click to inspect formula"
+          onClick={() => openInspector("monthExpense")}
+        />
+        <StatCard
+          label="Month EMI"
+          value={formatINR(v.stats?.monthEmi ?? 0, { compact: true })}
+          icon={CalendarClock}
+          hint="Click to inspect formula"
+          onClick={() => openInspector("monthEmi")}
+        />
+        <StatCard
+          label="Month net"
+          value={formatINR(v.stats?.monthNet ?? 0, { compact: true })}
+          icon={CarFront}
+          tone={(v.stats?.monthNet ?? 0) >= 0 ? "positive" : "negative"}
+          hint="Click to inspect formula"
+          onClick={() => openInspector("monthNet")}
+        />
+        <StatCard
+          label="All-time net"
+          value={formatINR(v.stats?.net ?? 0, { compact: true })}
+          icon={BadgeCheck}
+          tone={(v.stats?.net ?? 0) >= 0 ? "positive" : "negative"}
+          hint="Click to inspect formula"
+          onClick={() => openInspector("allTimeNet")}
+        />
       </StatGrid>
 
       {/* Info grid */}
@@ -542,13 +844,45 @@ export default function VehicleDetailView({ params, navigate }: ViewProps) {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="trips">
-        <TabsList className="grid w-full grid-cols-4 sm:w-auto sm:inline-flex">
+      <Tabs defaultValue="statement">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-5 sm:w-auto sm:inline-flex">
+          <TabsTrigger value="statement" className="gap-1.5 font-medium">
+            <FileText className="h-3.5 w-3.5 text-primary" />
+            <span>Passbook Ledger</span>
+          </TabsTrigger>
           <TabsTrigger value="trips">Trips ({trips.length})</TabsTrigger>
           <TabsTrigger value="expenses">Expenses ({expenses.length})</TabsTrigger>
           <TabsTrigger value="emi">EMI ({emis.length})</TabsTrigger>
           <TabsTrigger value="maintenance">Maintenance ({maintenance.length})</TabsTrigger>
         </TabsList>
+
+        {/* Tab 1: Live Vehicle Passbook Statement */}
+        <TabsContent value="statement" className="mt-3">
+          <Card>
+            <CardContent className="p-3 sm:p-4">
+              <div className="mb-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold flex items-center gap-1.5">
+                    <span>Vehicle 360° Passbook Statement</span>
+                    <span className="text-xs font-normal text-muted-foreground">(Trip Revenues vs Fleet Costs with Running Margin)</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Click any transaction row to inspect its creation lineage and accounting impact.
+                  </p>
+                </div>
+              </div>
+              <DataTable
+                columns={ledgerColumns}
+                rows={statementLedger}
+                rowKey={(r) => r.id}
+                onRowClick={(r) => openLineage(r)}
+                emptyIcon={FileText}
+                emptyTitle="No transactions recorded"
+                emptyDescription="Trips and fleet expenses for this vehicle will build the passbook statement."
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         {/* Trips */}
         <TabsContent value="trips" className="mt-3">
@@ -708,6 +1042,20 @@ export default function VehicleDetailView({ params, navigate }: ViewProps) {
       <AddMaintenanceDialog open={maintenanceOpen} onOpenChange={setMaintenanceOpen} vehicleId={v.id} onDone={() => void reload()} />
       <EditMaintenanceDialog open={Boolean(editMaintenance)} onOpenChange={(o) => !o && setEditMaintenance(null)} record={editMaintenance} onDone={() => void reload()} />
       <VehicleFormDialog open={editOpen} onOpenChange={setEditOpen} vehicle={v} onDone={() => void reload()} />
+
+      {/* Formula Inspector Modal */}
+      <FormulaInspectorDialog
+        open={Boolean(inspectorData)}
+        onOpenChange={(open) => { if (!open) setInspectorData(null); }}
+        data={inspectorData}
+      />
+
+      {/* Transaction Lineage Modal */}
+      <TransactionLineageDialog
+        open={Boolean(lineageData)}
+        onOpenChange={(open) => { if (!open) setLineageData(null); }}
+        data={lineageData}
+      />
     </div>
   );
 }
