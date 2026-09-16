@@ -43,7 +43,7 @@ interface AttentionItem {
 interface SummaryResp {
   manpower: {
     employeesDeployed: number; propertiesServed: number; expectedBilling: number; payout: number;
-    shiftPayout?: number; salary?: number; overtime?: number; rentIncome?: number; contractorCut?: number;
+    grossPayout?: number; shiftPayout?: number; salary?: number; overtime?: number; rentIncome?: number; contractorCut?: number;
     grossMargin: number; received: number; pending: number; advancesGiven: number; expenses: number;
     dayShifts: number; nightShifts: number; deployments: number;
   };
@@ -386,8 +386,15 @@ export default function DashboardView({ navigate }: ViewProps) {
           steps: [
             { label: "Manpower Billing (Revenue)", amount: manpowerRev, operation: "add", detail: "Services billed to properties" },
             { label: "Transport Revenue", amount: transportRev, operation: "add", detail: "Fleet rentals invoiced" },
-            ...(rentDeducted > 0 ? [{ label: "Accommodation Rent Recovered", amount: rentDeducted, operation: "add" as const, detail: "Deducted from staff wages" }] : []),
-            { label: "Employee Labor Wages", amount: laborCost, operation: "subtract", detail: "Direct staff compensation" },
+            ...(rentDeducted > 0
+              ? [
+                  { label: "Gross Staff Compensation", amount: m.grossPayout ?? (laborCost + rentDeducted), operation: "subtract" as const, detail: "Total recognized staff wages & salaries" },
+                  { label: "Accommodation Rent Recovered", amount: rentDeducted, operation: "add" as const, detail: "Rent deducted from employee salaries" },
+                ]
+              : [
+                  { label: "Employee Labor Wages", amount: laborCost, operation: "subtract" as const, detail: "Direct staff compensation" },
+                ]
+            ),
             { label: "Business Operating Expenses", amount: totalExpenses, operation: "subtract", detail: "Fuel, maintenance, office, overhead" },
             { label: "Net Operating Result", amount: net, operation: "result", detail: net >= 0 ? "Operating Profit" : "Operating Loss" },
           ],
@@ -1111,10 +1118,15 @@ export default function DashboardView({ navigate }: ViewProps) {
               </CardHeader>
               <CardContent className="space-y-0.5">
                 <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Expected billing</span><span className="font-semibold tabular-nums">{formatINR(m?.expectedBilling ?? 0)}</span></div>
-                {(m?.rentIncome ?? 0) > 0 && (
-                  <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Employee rent (income)</span><span className="font-semibold tabular-nums text-teal-600 dark:text-teal-400">+{formatINR(m?.rentIncome ?? 0)}</span></div>
+                {(m?.grossPayout ?? 0) > 0 && (m?.rentIncome ?? 0) > 0 ? (
+                  <>
+                    <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Gross staff labor</span><span className="font-semibold tabular-nums">{formatINR(m?.grossPayout ?? 0)}</span></div>
+                    <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Rent recovered from staff</span><span className="font-semibold tabular-nums text-teal-600 dark:text-teal-400">+{formatINR(m?.rentIncome ?? 0)}</span></div>
+                    <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Net employee payout</span><span className="font-semibold tabular-nums">{formatINR(m?.payout ?? 0)}</span></div>
+                  </>
+                ) : (
+                  <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Employee cost</span><span className="font-semibold tabular-nums">{formatINR(m?.payout ?? 0)}</span></div>
                 )}
-                <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Employee cost</span><span className="font-semibold tabular-nums">{formatINR(m?.payout ?? 0)}</span></div>
                 {(m?.salary ?? 0) > 0 && (
                   <p className="pb-0.5 text-[10px] tabular-nums text-muted-foreground">
                     incl. salary {formatINR(m?.salary ?? 0)}{(m?.overtime ?? 0) > 0 ? ` + overtime ${formatINR(m?.overtime ?? 0)}` : ""}{(m?.contractorCut ?? 0) > 0 ? ` · contractor cut ${formatINR(m?.contractorCut ?? 0)}` : ""}
@@ -1122,7 +1134,7 @@ export default function DashboardView({ navigate }: ViewProps) {
                 )}
                 <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Gross margin</span><span className={cn("font-semibold tabular-nums", (m?.grossMargin ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{formatINR(m?.grossMargin ?? 0)}</span></div>
                 <div className="flex justify-between py-1 text-sm"><span className="text-muted-foreground">Other expenses</span><span className="font-semibold tabular-nums">{formatINR(m?.expenses ?? 0)}</span></div>
-                <div className="flex justify-between border-t pt-1.5 text-sm"><span className="text-muted-foreground">Net result</span><span className="font-bold tabular-nums">{formatINR((m?.grossMargin ?? 0) + (m?.rentIncome ?? 0) - (m?.expenses ?? 0))}</span></div>
+                <div className="flex justify-between border-t pt-1.5 text-sm"><span className="text-muted-foreground">Net result</span><span className={cn("font-bold tabular-nums", ((m?.grossMargin ?? 0) - (m?.expenses ?? 0)) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{formatINR((m?.grossMargin ?? 0) - (m?.expenses ?? 0))}</span></div>
                 <Button variant="outline" size="sm" className="mt-3 h-9 w-full gap-1 sm:w-auto" onClick={() => navigate("manpower")}>
                   View details <ChevronRight className="h-3.5 w-3.5" aria-hidden />
                 </Button>
