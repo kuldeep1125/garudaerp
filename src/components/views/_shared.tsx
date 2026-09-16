@@ -133,7 +133,9 @@ export interface AdvanceRec {
   amount: number;
   reason?: string | null;
   method?: string | null;
+  reference?: string | null;
   givenByName?: string | null;
+  settlementId?: string | null;
 }
 
 export interface SettlementLineRec {

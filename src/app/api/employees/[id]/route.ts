@@ -8,7 +8,7 @@ export const GET = handleRoute(async ({ params }) => {
   const { id } = params;
   const employee = await db.employee.findUnique({ where: { id } });
   if (!employee) throw new HttpError(404, "Employee not found");
-  const [deployments, advances, adjustments, settlements, balances] = await Promise.all([
+  const [deployments, advances, adjustments, settlements, balances, payHistory] = await Promise.all([
     db.deployment.findMany({
       where: { employeeId: id },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
@@ -24,6 +24,10 @@ export const GET = handleRoute(async ({ params }) => {
       include: { lines: { orderBy: { date: "asc" } } },
     }),
     advanceBalanceMap([id]),
+    db.employeePayHistory.findMany({
+      where: { employeeId: id },
+      orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],
+    }),
   ]);
   return {
     employee: { ...employee, advanceBalance: balances.get(id)?.balance ?? 0 },
@@ -31,6 +35,7 @@ export const GET = handleRoute(async ({ params }) => {
     advances,
     adjustments,
     settlements,
+    payHistory,
   };
 });
 

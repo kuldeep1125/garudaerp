@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { DataTable, type Column } from "@/components/shared/data-table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -17,10 +17,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { StatCard } from "@/components/shared/stat-card";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   Phone, MessageCircle, HandCoins, Pencil, CalendarDays, Wallet, ReceiptText, Activity,
+  Home, BookOpen, Clock, ShieldCheck, ArrowUpRight, ArrowDownLeft, CheckCircle2, CalendarCheck,
 } from "lucide-react";
 import {
   EmployeePayBadges, AdvanceRec, AreaTrend, CHART_COLORS, DeploymentRec, EmployeeRec, Field, GiveAdvanceDialog,
@@ -28,10 +30,17 @@ import {
   todayStr, useMutation,
 } from "./_shared";
 import { EmployeeFormDialog } from "@/components/shared/employee-form-dialog";
+import { FormulaInspectorDialog, type FormulaInspectorData } from "@/components/shared/formula-inspector-dialog";
 
 interface AdjustmentRec {
   id: string; employeeId?: string; employeeName?: string; date: string;
   type: string; amount: number; reason?: string | null; createdByName?: string;
+}
+interface PayHistoryRec {
+  id: string; effectiveFrom: string; employmentType: string; monthlySalary: number;
+  standardRate: number; overtimeRate: number; onBusinessRent: boolean; rentAmount: number;
+  rentMode: string; hasContractor: boolean; contractorName?: string | null; contractorRateCut: number;
+  changedByName?: string | null; reason?: string | null; createdAt: string;
 }
 interface EmpDetail {
   employee: EmployeeRec;
@@ -39,6 +48,7 @@ interface EmpDetail {
   advances: AdvanceRec[];
   adjustments: AdjustmentRec[] | { items: AdjustmentRec[] };
   settlements: SettlementRec[];
+  payHistory?: PayHistoryRec[];
 }
 
 const ADJ_TYPES: Option[] = [
@@ -221,6 +231,243 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
     return { list, worked, totalShifts, billed, dayShifts, nightShifts, weekday, topProps };
   }, [data?.deployments]);
 
+  // [ADDED] Financial metrics for this employee
+  const totalShifts = useMemo(() => {
+    return (data?.deployments ?? []).reduce((s, d) => s + (SHIFT_UNITS[String(d.shift).toUpperCase()] ?? 1), 0);
+  }, [data?.deployments]);
+
+  const totalDeploymentEarnings = useMemo(() => {
+    return (data?.deployments ?? []).reduce((s, d) => s + (d.payoutAmount ?? 0) + (d.adjustmentAmount ?? 0), 0);
+  }, [data?.deployments]);
+
+  const grossEarned = useMemo(() => {
+    if (emp?.employmentType === "SALARIED") {
+      return (emp.monthlySalary ?? 0) + totalDeploymentEarnings;
+    }
+    return totalDeploymentEarnings;
+  }, [emp, totalDeploymentEarnings]);
+
+  const rentConfig = emp?.onBusinessRent ? (emp.rentAmount ?? 0) : 0;
+  const advanceDue = emp?.advanceBalance ?? 0;
+  const netEstimate = Math.max(0, grossEarned - rentConfig - advanceDue);
+
+  // [ADDED] Formula Inspector State
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorData, setInspectorData] = useState<FormulaInspectorData | null>(null);
+
+  // [ADDED] Chronological Unified Passbook Ledger
+  const passbook = useMemo(() => {
+    const rawEvents: Array<{
+      id: string;
+      date: string;
+      type: "EARNING" | "ADVANCE_GIVEN" | "RENT" | "ADJUSTMENT" | "SETTLEMENT";
+      typeLabel: string;
+      badgeTone: "emerald" | "amber" | "red" | "gray";
+      description: string;
+      credit?: number;
+      debit?: number;
+    }> = [];
+
+    // 1. Deployments
+    for (const d of data?.deployments ?? []) {
+      const amt = (d.payoutAmount ?? 0) + (d.adjustmentAmount ?? 0);
+      rawEvents.push({
+        id: `dep-${d.id}`,
+        date: String(d.date).slice(0, 10),
+        type: "EARNING",
+        typeLabel: "Shift Earning",
+        badgeTone: "emerald",
+        description: `${d.propertyName} · Shift ${d.shift} (${formatINR(d.payoutRate)}/shift)`,
+        credit: amt,
+      });
+    }
+
+    // 2. Advances Given
+    for (const a of data?.advances ?? []) {
+      rawEvents.push({
+        id: `adv-${a.id}`,
+        date: String(a.date).slice(0, 10),
+        type: "ADVANCE_GIVEN",
+        typeLabel: "Advance Given",
+        badgeTone: "amber",
+        description: a.reason || "Cash/UPI loan disbursed",
+        debit: a.amount,
+      });
+    }
+
+    // 3. Adjustments
+    const adjs = Array.isArray(data?.adjustments)
+      ? (data?.adjustments as AdjustmentRec[])
+      : ((data?.adjustments as { items?: AdjustmentRec[] })?.items ?? []);
+    for (const adj of adjs) {
+      const isCredit = adj.amount >= 0;
+      rawEvents.push({
+        id: `adj-${adj.id}`,
+        date: String(adj.date).slice(0, 10),
+        type: "ADJUSTMENT",
+        typeLabel: `Adjustment (${adj.type})`,
+        badgeTone: isCredit ? "emerald" : "red",
+        description: adj.reason || `Direct payroll ${adj.type.toLowerCase()}`,
+        credit: isCredit ? adj.amount : undefined,
+        debit: !isCredit ? Math.abs(adj.amount) : undefined,
+      });
+    }
+
+    // 4. Settlements
+    for (const s of data?.settlements ?? []) {
+      const dateStr = s.month ? `${s.month}-28` : todayStr();
+      rawEvents.push({
+        id: `set-${s.id}`,
+        date: dateStr,
+        type: "SETTLEMENT",
+        typeLabel: "Settlement Payout",
+        badgeTone: "gray",
+        description: `Month ${s.month} Settlement (Rent: ${formatINR(s.rentDeducted ?? 0)}, Advance Recovered: ${formatINR(s.advanceDeducted ?? 0)})`,
+        debit: s.netPayable,
+      });
+    }
+
+    // Sort chronologically ascending to compute running balance
+    rawEvents.sort((a, b) => a.date.localeCompare(b.date));
+
+    let running = 0;
+    const withBalance = rawEvents.map((ev) => {
+      running += (ev.credit ?? 0) - (ev.debit ?? 0);
+      return { ...ev, balance: running };
+    });
+
+    // Return descending for display
+    return withBalance.reverse();
+  }, [data?.deployments, data?.advances, data?.adjustments, data?.settlements]);
+
+  const openInspector = (type: string) => {
+    if (!emp) return;
+    if (type === "shifts") {
+      setInspectorData({
+        title: "Total Shifts Calculation",
+        subtitle: `${emp.fullName} (${emp.code})`,
+        formulaEquation: `Total Shifts = Day Shifts (${activity.dayShifts}) + Night Shifts (${activity.nightShifts})`,
+        resultLabel: "Total Shifts",
+        resultValue: `${totalShifts} shifts`,
+        steps: [
+          { label: "Day Shifts Worked", amount: activity.dayShifts, operation: "add", detail: "1 shift unit each" },
+          { label: "Night Shifts Worked", amount: activity.nightShifts, operation: "add", detail: "1 shift unit each" },
+          { label: "Total Shift Units", amount: totalShifts, operation: "result" },
+        ],
+        sourceRows: (data?.deployments ?? []).slice(0, 15).map((d) => ({
+          id: d.id,
+          title: d.propertyName,
+          subtitle: `${fmtDay(d.date)} · Shift ${d.shift}`,
+          amount: formatINR(d.payoutRate),
+          badge: d.shift,
+          badgeTone: d.shift === "NIGHT" ? "gray" : "amber",
+        })),
+        sourceRowsTitle: "Recent Shifts Worked",
+        notes: [
+          "Deployments represent actual work recorded on property sites.",
+          "Rate is snapshotted at creation time, preserving zero-mismatch historical accuracy.",
+        ],
+      });
+    } else if (type === "earnings") {
+      const isSal = emp.employmentType === "SALARIED";
+      setInspectorData({
+        title: "Gross Earnings Calculation",
+        subtitle: `${emp.fullName} (${emp.code})`,
+        formulaEquation: isSal
+          ? `Gross Wages = Monthly Salary (₹${emp.monthlySalary}) + Extra Shift Accruals`
+          : `Gross Wages = ∑(Shifts Worked × Shift Payout Rate) + Adjustments`,
+        resultLabel: "Gross Earnings",
+        resultValue: formatINR(grossEarned),
+        steps: isSal ? [
+          { label: "Base Monthly Salary", amount: emp.monthlySalary ?? 0, operation: "add", detail: "Fixed monthly compensation" },
+          { label: "Additional Shift Overtime", amount: totalDeploymentEarnings, operation: "add", detail: "Extra shifts worked" },
+          { label: "Total Gross Accrual", amount: grossEarned, operation: "result" },
+        ] : [
+          { label: "Deployment Shift Earnings", amount: totalDeploymentEarnings, operation: "add", detail: `${totalShifts} shifts deployed` },
+          { label: "Total Gross Wages", amount: grossEarned, operation: "result" },
+        ],
+        sourceRows: (data?.deployments ?? []).slice(0, 15).map((d) => ({
+          id: d.id,
+          title: d.propertyName,
+          subtitle: `${fmtDay(d.date)} · Shift ${d.shift}`,
+          amount: (d.payoutAmount ?? 0) + (d.adjustmentAmount ?? 0),
+          badge: formatINR(d.payoutRate),
+        })),
+        sourceRowsTitle: "Shift Payout Breakdown",
+        notes: [
+          "Gross earnings represent the full amount earned by the employee before any deductions.",
+          "Accommodation rent and cash advances are deducted in the next steps.",
+        ],
+      });
+    } else if (type === "rent") {
+      setInspectorData({
+        title: "Accommodation Rent Deduction",
+        subtitle: `${emp.fullName} (${emp.code})`,
+        formulaEquation: emp.onBusinessRent
+          ? `Net Base = Gross Wages − Accommodation Rent (${formatINR(emp.rentAmount ?? 0)}/${(emp.rentMode ?? "MONTH").toLowerCase()})`
+          : "Accommodation Rent = ₹0 (Employee provides own accommodation)",
+        resultLabel: "Rent Deducted",
+        resultValue: formatINR(rentConfig),
+        steps: [
+          { label: "Configured Rent Rate", amount: emp.rentAmount ?? 0, operation: "subtract", detail: `Cycle: per ${emp.rentMode ?? "MONTH"}` },
+          { label: "Total Deducted", amount: rentConfig, operation: "result" },
+        ],
+        notes: [
+          "Accommodation rent is automatically deducted from gross earnings/salary during monthly settlement.",
+          "If rent exceeds earnings in a cycle, net payout is ₹0 and remaining rent carries over.",
+        ],
+      });
+    } else if (type === "advances") {
+      const advs = data?.advances ?? [];
+      const totalAdv = advs.reduce((s, a) => s + (a.amount ?? 0), 0);
+      const recovered = totalAdv - advanceDue;
+      setInspectorData({
+        title: "Advance Loan Recovery Calculation",
+        subtitle: `${emp.fullName} (${emp.code})`,
+        formulaEquation: `Advance Due = Total Advances Given (${formatINR(totalAdv)}) − Recovered in Settlements (${formatINR(recovered)})`,
+        resultLabel: "Active Loan Balance",
+        resultValue: formatINR(advanceDue),
+        steps: [
+          { label: "Total Advances Disbursed", amount: totalAdv, operation: "add", detail: "Cash/UPI given to employee" },
+          { label: "Recovered via Settlements", amount: recovered, operation: "subtract", detail: "Deducted from past payouts" },
+          { label: "Current Balance Pending", amount: advanceDue, operation: "result" },
+        ],
+        sourceRows: advs.map((a) => ({
+          id: a.id,
+          title: a.reason || "Cash Advance",
+          subtitle: fmtDay(a.date),
+          amount: a.amount,
+          badge: a.settlementId ? "Deducted" : "Pending",
+          badgeTone: a.settlementId ? "gray" : "red",
+        })),
+        sourceRowsTitle: "Advance Loan History",
+        notes: [
+          "Advances reduce the cash payable to the employee on settlement day.",
+          "The outstanding balance carries forward automatically until fully repaid.",
+        ],
+      });
+    } else if (type === "net") {
+      setInspectorData({
+        title: "Net Payable Formula",
+        subtitle: `${emp.fullName} (${emp.code})`,
+        formulaEquation: `Net Payable = Gross Accrued (${formatINR(grossEarned)}) − Rent (${formatINR(rentConfig)}) − Advance Balance (${formatINR(advanceDue)})`,
+        resultLabel: "Estimated Net Due",
+        resultValue: formatINR(netEstimate),
+        steps: [
+          { label: "Gross Accrued Wages", amount: grossEarned, operation: "add" },
+          { label: "Accommodation Rent Deduction", amount: rentConfig, operation: "subtract" },
+          { label: "Advance Loan Recovery", amount: advanceDue, operation: "subtract" },
+          { label: "Net Payable / Disbursable", amount: netEstimate, operation: "result" },
+        ],
+        notes: [
+          "This is the actual final cheque/cash/UPI amount payable to the employee.",
+          "When you generate settlements, this exact line-by-line deduction statement is created.",
+        ],
+      });
+    }
+    setInspectorOpen(true);
+  };
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -250,25 +497,28 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
         subtitle={`${emp.code}${emp.designation ? ` · ${emp.designation}` : ""}`}
         onBack={back}
         actions={
-          <>
+          <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" className="h-9 gap-1.5" onClick={() => setAdvanceOpen(true)}>
               <HandCoins className="h-4 w-4" aria-hidden />Give Advance
             </Button>
-            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={openEdit}>
-              <Pencil className="h-3.5 w-3.5" aria-hidden /><span className="hidden sm:inline">Edit</span>
+            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => setAdjustOpen(true)}>
+              <Wallet className="h-4 w-4" aria-hidden />Adjustment
             </Button>
-          </>
+            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={openEdit}>
+              <Pencil className="h-3.5 w-3.5" aria-hidden /><span className="hidden sm:inline">Edit Terms</span>
+            </Button>
+          </div>
         }
       />
 
-      {/* Header card */}
+      {/* Header Profile Card */}
       <Card>
         <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center gap-3">
             <InitialAvatar name={emp.fullName} className="h-14 w-14 text-lg" />
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <p className="truncate font-bold">{emp.fullName}</p>
+                <p className="truncate font-bold text-lg">{emp.fullName}</p>
                 <StatusBadge status={emp.status} />
               </div>
               <p className="mt-0.5 text-xs text-muted-foreground">
@@ -276,21 +526,26 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
               </p>
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 {emp.employmentType === "SALARIED" ? (
-                  <Badge variant="outline" className="tabular-nums">{formatINR(emp.monthlySalary ?? 0)}/month · salaried</Badge>
+                  <Badge variant="outline" className="tabular-nums font-semibold bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                    {formatINR(emp.monthlySalary ?? 0)}/month · Salaried
+                  </Badge>
                 ) : (
-                  <Badge variant="outline" className="tabular-nums">{formatINR(emp.standardRate ?? 0)}/shift</Badge>
+                  <Badge variant="outline" className="tabular-nums font-semibold bg-blue-50 text-blue-800 dark:bg-blue-950 dark:text-blue-300">
+                    {formatINR(emp.standardRate ?? 0)}/shift · Per-Shift
+                  </Badge>
                 )}
-                {(emp.overtimeRate ?? 0) > 0 && (
-                  <Badge variant="outline" className="tabular-nums">OT {formatINR(emp.overtimeRate ?? 0)} after {emp.overtimeThreshold ?? 30}/mo</Badge>
+                {emp.onBusinessRent && (
+                  <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+                    Rent −{formatINR(emp.rentAmount ?? 0)}/{emp.rentMode?.toLowerCase() === "day" ? "day" : "mo"}
+                  </Badge>
                 )}
-                <EmployeePayBadges r={emp} />
                 {(emp.advanceBalance ?? 0) > 0 ? (
                   <Badge variant="outline" className="border-red-200 bg-red-50 tabular-nums text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
-                    Advance due {formatINR(emp.advanceBalance ?? 0)}
+                    Advance loan {formatINR(emp.advanceBalance ?? 0)}
                   </Badge>
                 ) : (
                   <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
-                    No advance due
+                    Advance clear
                   </Badge>
                 )}
               </div>
@@ -313,19 +568,148 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="work">
+      {/* [ADDED] Interactive KPI Banner (Transparent Math with Click-to-Inspect Formula) */}
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5" role="list" aria-label="Employee KPI Summary">
+        <StatCard
+          label="Shifts Worked"
+          value={`${totalShifts} shifts`}
+          icon={CalendarCheck}
+          hint="Click to inspect formula"
+          onClick={() => openInspector("shifts")}
+        />
+        <StatCard
+          label="Gross Accrued"
+          value={formatINR(grossEarned, { compact: true })}
+          icon={Wallet}
+          tone="positive"
+          hint="Wages earned"
+          onClick={() => openInspector("earnings")}
+        />
+        <StatCard
+          label="Rent Deducted"
+          value={emp.onBusinessRent ? `−${formatINR(emp.rentAmount, { compact: true })}` : "₹0"}
+          icon={Home}
+          tone="warning"
+          hint={emp.onBusinessRent ? `Per ${emp.rentMode?.toLowerCase()}` : "No rent"}
+          onClick={() => openInspector("rent")}
+        />
+        <StatCard
+          label="Advance Loan"
+          value={formatINR(advanceDue, { compact: true })}
+          icon={HandCoins}
+          tone={advanceDue > 0 ? "negative" : "positive"}
+          hint={advanceDue > 0 ? "Pending recovery" : "Fully clear"}
+          onClick={() => openInspector("advances")}
+        />
+        <StatCard
+          label="Estimated Net Due"
+          value={formatINR(netEstimate, { compact: true })}
+          icon={ReceiptText}
+          tone="info"
+          hint="Gross − Rent − Advance"
+          onClick={() => openInspector("net")}
+        />
+      </div>
+
+      {/* [ADDED] Centralized 360° Tabs */}
+      <Tabs defaultValue="passbook">
         <div className="overflow-x-auto no-scrollbar">
           <TabsList className="w-max min-w-full sm:min-w-0">
-            <TabsTrigger value="work">Work History</TabsTrigger>
-            <TabsTrigger value="advances">Advances</TabsTrigger>
-            <TabsTrigger value="adjustments">Adjustments</TabsTrigger>
-            <TabsTrigger value="settlements">Settlements</TabsTrigger>
-            <TabsTrigger value="profile">Profile</TabsTrigger>
+            <TabsTrigger value="passbook" className="gap-1.5">
+              <BookOpen className="h-3.5 w-3.5" />Passbook Ledger
+            </TabsTrigger>
+            <TabsTrigger value="work" className="gap-1.5">
+              <Clock className="h-3.5 w-3.5" />Work History
+            </TabsTrigger>
+            <TabsTrigger value="advances" className="gap-1.5">
+              <HandCoins className="h-3.5 w-3.5" />Advances & Adjustments
+            </TabsTrigger>
+            <TabsTrigger value="settlements" className="gap-1.5">
+              <ReceiptText className="h-3.5 w-3.5" />Settlements
+            </TabsTrigger>
+            <TabsTrigger value="terms" className="gap-1.5">
+              <ShieldCheck className="h-3.5 w-3.5" />Terms & History
+            </TabsTrigger>
+            <TabsTrigger value="profile">Full Profile</TabsTrigger>
           </TabsList>
         </div>
 
+        {/* TAB 1: PASSBOOK LEDGER (Unified Financial Statement) */}
+        <TabsContent value="passbook" className="mt-3 space-y-3">
+          <Card>
+            <CardContent className="p-4 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b pb-3">
+                <div>
+                  <h3 className="font-semibold text-sm">Unified Financial Passbook</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Chronological audit ledger of all earnings, rent deductions, loans, and settlement payouts.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 text-xs font-medium">
+                  <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500" /> Credit (+) Earnings
+                  </span>
+                  <span className="flex items-center gap-1 text-rose-600 dark:text-rose-400">
+                    <span className="h-2 w-2 rounded-full bg-rose-500" /> Debit (−) Payouts/Loans
+                  </span>
+                </div>
+              </div>
+
+              <DataTable
+                columns={[
+                  { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
+                  {
+                    key: "typeLabel", label: "Transaction", primary: true,
+                    render: (r) => (
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={cn(
+                              "text-[10px] px-1.5 py-0.5 rounded font-semibold",
+                              r.badgeTone === "emerald" && "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+                              r.badgeTone === "amber" && "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+                              r.badgeTone === "red" && "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
+                              r.badgeTone === "gray" && "bg-muted text-muted-foreground"
+                            )}
+                          >
+                            {r.typeLabel}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground sm:hidden">{fmtDay(r.date)}</span>
+                        </div>
+                        <p className="text-xs font-medium text-foreground mt-0.5 truncate">{r.description}</p>
+                      </div>
+                    ),
+                    value: (r) => r.typeLabel,
+                  },
+                  {
+                    key: "credit", label: "Credit (+)", className: "text-right",
+                    render: (r) => r.credit ? <span className="font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">+{formatINR(r.credit)}</span> : <span className="text-muted-foreground">—</span>,
+                    value: (r) => r.credit ? formatINR(r.credit) : "0",
+                  },
+                  {
+                    key: "debit", label: "Debit (−)", className: "text-right",
+                    render: (r) => r.debit ? <span className="font-semibold text-rose-600 dark:text-rose-400 tabular-nums">−{formatINR(r.debit)}</span> : <span className="text-muted-foreground">—</span>,
+                    value: (r) => r.debit ? formatINR(r.debit) : "0",
+                  },
+                  {
+                    key: "balance", label: "Balance", className: "text-right",
+                    render: (r) => <span className="font-bold tabular-nums">{formatINR(r.balance)}</span>,
+                    value: (r) => formatINR(r.balance),
+                  },
+                ]}
+                rows={passbook}
+                rowKey={(r) => r.id}
+                emptyIcon={BookOpen}
+                emptyTitle="No Passbook Activity"
+                emptyDescription="Work shifts, advances, and settlements will automatically appear in this ledger."
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* TAB 2: WORK HISTORY */}
         <TabsContent value="work" className="mt-3 space-y-3">
-          {/* Pay model strip — salary / overtime / rent / contractor in one glance */}
+          {/* Pay model strip */}
           {(emp.employmentType === "SALARIED" || emp.onBusinessRent || (emp.hasContractor && emp.contractorName)) && (
             <Card>
               <CardContent className="grid gap-2 p-4 text-xs sm:grid-cols-2 lg:grid-cols-4">
@@ -343,7 +727,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
                 {emp.onBusinessRent && (
                   <div className="rounded-lg bg-muted/50 p-2.5">
                     <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Business accommodation rent</p>
-                    <p className="mt-0.5 font-semibold tabular-nums">{formatINR(emp.rentAmount ?? 0)}/{(emp.rentMode ?? "MONTH").toLowerCase() === "DAY" ? "day" : "month"}</p>
+                    <p className="mt-0.5 font-semibold tabular-nums">{formatINR(emp.rentAmount ?? 0)}/{(emp.rentMode ?? "MONTH").toLowerCase() === "day" ? "day" : "month"}</p>
                     <p className="text-[11px] text-muted-foreground">
                       {emp.employmentType === "SALARIED"
                         ? `Auto-deducted from monthly salary on settlement (Net base: ${formatINR(Math.max(0, (emp.monthlySalary ?? 0) - (emp.rentAmount ?? 0)))}).`
@@ -361,12 +745,13 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
               </CardContent>
             </Card>
           )}
-          {/* Last-30-days activity: presence strip + billing trend */}
+
+          {/* Last-30-days presence strip */}
           <Card>
             <CardContent className="p-4">
               <p className="flex items-center gap-2 text-sm font-semibold">
                 <Activity className="h-4 w-4 text-primary" aria-hidden />
-                Last 30 days
+                Attendance Presence (Last 30 Days)
               </p>
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
                 <span><span className="font-bold tabular-nums text-foreground">{activity.worked}</span>/30 days worked</span>
@@ -392,109 +777,6 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
                 <span className="flex items-center gap-1">Less <span className="h-2 w-3 rounded-[2px] bg-muted" aria-hidden /><span className="h-2 w-3 rounded-[2px] bg-emerald-300 dark:bg-emerald-700" aria-hidden /><span className="h-2 w-3 rounded-[2px] bg-emerald-600 dark:bg-emerald-500" aria-hidden /> More</span>
                 <span>Today</span>
               </div>
-              {activity.totalShifts > 0 && (
-                <div className="mt-4">
-                  <p className="mb-1 text-[11px] font-medium text-muted-foreground">Daily billing</p>
-                  <AreaTrend
-                    data={activity.list as unknown as Record<string, unknown>[]}
-                    xKey="date"
-                    height={140}
-                    series={[{ key: "billing", label: "Billing", color: CHART_COLORS.emerald }]}
-                  />
-                </div>
-              )}
-
-              {/* Utilization analytics: shift mix · weekday load · top properties */}
-              {activity.totalShifts > 0 && (
-                <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                  {/* Shift mix — day vs night stacked bar */}
-                  <div className="rounded-xl border bg-muted/30 p-3 transition-colors hover:bg-muted/50">
-                    <p className="text-[11px] font-medium text-muted-foreground">Shift mix · 30 days</p>
-                    <div
-                      className="mt-2.5 flex h-2.5 w-full overflow-hidden rounded-full"
-                      role="img"
-                      aria-label={`${activity.dayShifts} day shifts, ${activity.nightShifts} night shifts`}
-                    >
-                      <span
-                        className="h-full bg-amber-400 transition-all dark:bg-amber-500"
-                        style={{ width: `${Math.round((activity.dayShifts / activity.totalShifts) * 100)}%` }}
-                        title={`Day · ${activity.dayShifts} shifts`}
-                      />
-                      <span
-                        className="h-full bg-slate-500 transition-all dark:bg-slate-400"
-                        style={{ width: `${Math.round((activity.nightShifts / activity.totalShifts) * 100)}%` }}
-                        title={`Night · ${activity.nightShifts} shifts`}
-                      />
-                    </div>
-                    <div className="mt-2.5 space-y-1 text-[11px]">
-                      <p className="flex items-center justify-between gap-2">
-                        <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                          <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400 dark:bg-amber-500" aria-hidden />Day
-                        </span>
-                        <span className="shrink-0 font-bold tabular-nums">
-                          {activity.dayShifts} <span className="font-normal text-muted-foreground">({Math.round((activity.dayShifts / activity.totalShifts) * 100)}%)</span>
-                        </span>
-                      </p>
-                      <p className="flex items-center justify-between gap-2">
-                        <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                          <span className="h-2 w-2 shrink-0 rounded-full bg-slate-500 dark:bg-slate-400" aria-hidden />Night
-                        </span>
-                        <span className="shrink-0 font-bold tabular-nums">
-                          {activity.nightShifts} <span className="font-normal text-muted-foreground">({Math.round((activity.nightShifts / activity.totalShifts) * 100)}%)</span>
-                        </span>
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Busiest weekdays — mini bar chart Mon..Sun */}
-                  <div className="rounded-xl border bg-muted/30 p-3 transition-colors hover:bg-muted/50">
-                    <p className="text-[11px] font-medium text-muted-foreground">Busiest weekdays</p>
-                    {(() => {
-                      const order = [1, 2, 3, 4, 5, 6, 0]; // Mon..Sun
-                      const labels = ["M", "T", "W", "T", "F", "S", "S"];
-                      const max = Math.max(...order.map((i) => activity.weekday[i]), 1);
-                      return (
-                        <div className="mt-2.5 flex h-14 items-end justify-between gap-1.5">
-                          {order.map((i, idx) => (
-                            <div key={i} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1">
-                              <div
-                                className={cn(
-                                  "w-full rounded-t-[3px] transition-all hover:opacity-80",
-                                  activity.weekday[i] > 0 ? "bg-emerald-500/80 dark:bg-emerald-500" : "bg-muted"
-                                )}
-                                style={{ height: `${Math.max((activity.weekday[i] / max) * 100, activity.weekday[i] > 0 ? 8 : 4)}%` }}
-                                title={`${activity.weekday[i]} shift${activity.weekday[i] === 1 ? "" : "s"}`}
-                              />
-                              <span className="text-[9px] text-muted-foreground">{labels[idx]}</span>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })()}
-                  </div>
-
-                  {/* Top properties — where this employee works most */}
-                  <div className="rounded-xl border bg-muted/30 p-3 transition-colors hover:bg-muted/50">
-                    <p className="text-[11px] font-medium text-muted-foreground">Top properties</p>
-                    <div className="mt-2.5 space-y-2">
-                      {activity.topProps.map(([name, count]) => (
-                        <div key={name} className="min-w-0">
-                          <p className="flex items-center justify-between gap-2 text-[11px]">
-                            <span className="min-w-0 truncate" title={name}>{name}</span>
-                            <span className="shrink-0 font-bold tabular-nums">{count}</span>
-                          </p>
-                          <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-muted">
-                            <div
-                              className="h-full rounded-full bg-teal-500/80 transition-all dark:bg-teal-400"
-                              style={{ width: `${Math.round((count / (activity.topProps[0]?.[1] ?? 1)) * 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
             </CardContent>
           </Card>
 
@@ -502,76 +784,132 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
             columns={workColumns}
             rows={data?.deployments ?? []}
             rowKey={(r) => r.id}
-            onRowClick={(r) => navigate("deployments", { date: r.date })}
             emptyIcon={CalendarDays}
             emptyTitle="No deployments yet"
-            emptyDescription="Deploy this employee to a property to build history."
+            emptyDescription="Deploy this employee to a restaurant property to see records here."
           />
         </TabsContent>
 
-        <TabsContent value="advances" className="mt-3 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Total taken: <span className="font-bold tabular-nums text-foreground">{formatINR(advTotal)}</span></p>
-            <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => setAdvanceOpen(true)}>
-              <HandCoins className="h-3.5 w-3.5" />Give
-            </Button>
+        {/* TAB 3: ADVANCES & ADJUSTMENTS */}
+        <TabsContent value="advances" className="mt-3 space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Card>
+              <CardContent className="p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-muted-foreground font-medium uppercase">Active Advance Balance</p>
+                  <p className="text-xl font-bold tabular-nums text-foreground mt-1">
+                    {formatINR(emp.advanceBalance ?? 0)}
+                  </p>
+                </div>
+                <Button size="sm" onClick={() => setAdvanceOpen(true)}>Give Advance</Button>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-muted-foreground font-medium uppercase">Total Advances Given</p>
+                  <p className="text-xl font-bold tabular-nums text-foreground mt-1">
+                    {formatINR(advTotal)}
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => setAdjustOpen(true)}>Add Adjustment</Button>
+              </CardContent>
+            </Card>
           </div>
-          <DataTable
-            columns={[
-              { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
-              { key: "amount", label: "Amount", primary: true, render: (r) => <span className="font-semibold tabular-nums">{formatINR(r.amount)}</span>, value: (r) => formatINR(r.amount) },
-              { key: "reason", label: "Reason", value: (r) => r.reason ?? "—" },
-              { key: "method", label: "Method", value: (r) => r.method ?? "—", hideOnMobile: true },
-              { key: "givenBy", label: "Given by", value: (r) => r.givenByName ?? "—", hideOnMobile: true },
-            ] as Column<AdvanceRec>[]}
-            rows={advances}
-            rowKey={(r) => r.id}
-            emptyIcon={Wallet}
-            emptyTitle="No advances given"
-            emptyDescription="Advances given to this employee will appear here."
-          />
+
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className="text-sm">Cash Advances History</CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 pt-0">
+              <DataTable
+                columns={[
+                  { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
+                  {
+                    key: "reason", label: "Details", primary: true,
+                    render: (r) => (
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{r.reason || "Direct cash loan"}</p>
+                        <p className="text-[11px] text-muted-foreground">{fmtDay(r.date)} · Ref: {r.reference || "None"}</p>
+                      </div>
+                    ),
+                    value: (r) => r.reason || "Advance",
+                  },
+                  {
+                    key: "amount", label: "Amount", className: "text-right",
+                    render: (r) => <span className="font-semibold text-rose-600 dark:text-rose-400 tabular-nums">−{formatINR(r.amount)}</span>,
+                    value: (r) => formatINR(r.amount),
+                  },
+                  {
+                    key: "status", label: "Status",
+                    render: (r) => r.settlementId ? (
+                      <Badge variant="outline" className="bg-muted text-muted-foreground text-[10px]">Deducted in settlement</Badge>
+                    ) : (
+                      <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300 text-[10px]">Pending recovery</Badge>
+                    ),
+                    value: (r) => r.settlementId ? "Deducted" : "Pending",
+                  },
+                ]}
+                rows={advances}
+                rowKey={(r) => r.id}
+                emptyIcon={HandCoins}
+                emptyTitle="No advances recorded"
+                emptyDescription="Advances given will appear here and be auto-deducted during settlement."
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className="text-sm">Payroll Adjustments (Bonuses & Deductions)</CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 pt-0">
+              <DataTable
+                columns={[
+                  { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
+                  {
+                    key: "type", label: "Type", primary: true,
+                    render: (r) => (
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{r.type}{r.reason ? ` · ${r.reason}` : ""}</p>
+                        <p className="text-[11px] text-muted-foreground">{fmtDay(r.date)}</p>
+                      </div>
+                    ),
+                    value: (r) => r.type,
+                  },
+                  {
+                    key: "amount", label: "Amount", className: "text-right",
+                    render: (r) => (
+                      <span className={cn("font-semibold tabular-nums", r.amount >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400")}>
+                        {r.amount >= 0 ? "+" : ""}{formatINR(r.amount)}
+                      </span>
+                    ),
+                    value: (r) => formatINR(r.amount),
+                  },
+                  { key: "by", label: "Recorded By", value: (r) => r.createdByName ?? "—", hideOnMobile: true },
+                ]}
+                rows={adjustments}
+                rowKey={(r) => r.id}
+                emptyIcon={ReceiptText}
+                emptyTitle="No adjustments"
+                emptyDescription="Bonuses, overtime and penalties appear here."
+              />
+            </CardContent>
+          </Card>
         </TabsContent>
 
-        <TabsContent value="adjustments" className="mt-3 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Bonuses add, deductions subtract at settlement</p>
-            <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => setAdjustOpen(true)}>
-              <ReceiptText className="h-3.5 w-3.5" />Add
-            </Button>
-          </div>
-          <DataTable
-            columns={[
-              { key: "date", label: "Date", value: (r) => fmtDay(r.date), hideOnMobile: true },
-              {
-                key: "type", label: "Type", primary: true,
-                render: (r) => <div className="min-w-0"><p className="truncate font-medium">{r.type}{r.reason ? ` · ${r.reason}` : ""}</p><p className="text-[11px] text-muted-foreground">{fmtDay(r.date)}</p></div>,
-                value: (r) => r.type,
-              },
-              {
-                key: "amount", label: "Amount", className: "text-right",
-                render: (r) => <span className={cn("font-semibold tabular-nums", r.amount >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{formatINR(r.amount)}</span>,
-                value: (r) => formatINR(r.amount),
-              },
-              { key: "by", label: "By", value: (r) => r.createdByName ?? "—", hideOnMobile: true },
-            ] as Column<AdjustmentRec>[]}
-            rows={adjustments}
-            rowKey={(r) => r.id}
-            emptyIcon={ReceiptText}
-            emptyTitle="No adjustments"
-            emptyDescription="Bonuses, overtime and penalties appear here."
-          />
-        </TabsContent>
-
+        {/* TAB 4: SETTLEMENTS */}
         <TabsContent value="settlements" className="mt-3">
           <DataTable
             columns={[
               { key: "month", label: "Month", primary: true, render: (r) => <span className="font-medium tabular-nums">{r.month}</span>, value: (r) => r.month },
               { key: "days", label: "Days", className: "text-right", value: (r) => String(r.totalDays ?? 0), hideOnMobile: true },
               { key: "gross", label: "Gross", className: "text-right", value: (r) => formatINR(r.grossEarnings ?? 0), hideOnMobile: true },
-              { key: "advance", label: "Adv. deducted", className: "text-right", value: (r) => formatINR(r.advanceDeducted ?? 0), hideOnMobile: true },
-              { key: "net", label: "Net payable", className: "text-right", render: (r) => <span className="font-bold tabular-nums">{formatINR(r.netPayable ?? 0)}</span>, value: (r) => formatINR(r.netPayable ?? 0) },
+              { key: "rent", label: "Rent Deducted", className: "text-right", render: (r) => <span className="text-amber-700 dark:text-amber-400 font-medium tabular-nums">−{formatINR(r.rentDeducted ?? 0)}</span>, value: (r) => formatINR(r.rentDeducted ?? 0), hideOnMobile: true },
+              { key: "advance", label: "Adv. Deducted", className: "text-right", render: (r) => <span className="text-rose-700 dark:text-rose-400 font-medium tabular-nums">−{formatINR(r.advanceDeducted ?? 0)}</span>, value: (r) => formatINR(r.advanceDeducted ?? 0), hideOnMobile: true },
+              { key: "net", label: "Net Payable", className: "text-right", render: (r) => <span className="font-bold tabular-nums text-foreground">{formatINR(r.netPayable ?? 0)}</span>, value: (r) => formatINR(r.netPayable ?? 0) },
               { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
-            ] as Column<SettlementRec>[]}
+            ]}
             rows={data?.settlements ?? []}
             rowKey={(r) => r.id}
             onRowClick={(r) => navigate("settlements", { month: r.month })}
@@ -581,6 +919,74 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
           />
         </TabsContent>
 
+        {/* TAB 5: TERMS & PAY HISTORY LOG */}
+        <TabsContent value="terms" className="mt-3 space-y-4">
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className="text-sm">Active Compensation Terms</CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 pt-0 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border p-3 bg-muted/20">
+                <p className="text-xs text-muted-foreground uppercase font-medium">Employment Model</p>
+                <p className="text-base font-bold mt-1">{emp.employmentType === "SALARIED" ? "Salaried Employee" : "Per-Shift Worker"}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {emp.employmentType === "SALARIED" ? `Fixed ${formatINR(emp.monthlySalary ?? 0)} / month` : `${formatINR(emp.standardRate ?? 0)} / shift`}
+                </p>
+              </div>
+              <div className="rounded-lg border p-3 bg-muted/20">
+                <p className="text-xs text-muted-foreground uppercase font-medium">Accommodation Rent</p>
+                <p className="text-base font-bold mt-1">{emp.onBusinessRent ? formatINR(emp.rentAmount ?? 0) : "No Rent"}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {emp.onBusinessRent ? `Cycle: per ${emp.rentMode?.toLowerCase()}` : "Employee arranges own accommodation"}
+                </p>
+              </div>
+              <div className="rounded-lg border p-3 bg-muted/20">
+                <p className="text-xs text-muted-foreground uppercase font-medium">Contractor Commission</p>
+                <p className="text-base font-bold mt-1">{emp.hasContractor ? emp.contractorName : "Direct Employee"}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {emp.hasContractor ? `${formatINR(emp.contractorRateCut ?? 0)}/shift cut from payout` : "No contractor commission"}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className="text-sm">Terms & Pay Change History</CardTitle>
+              <CardDescription className="text-xs">
+                Audit trail of every rate, salary, or rent change made to this employee. Historical records preserve past rates.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-4 pt-0">
+              <DataTable
+                columns={[
+                  { key: "date", label: "Effective From", value: (r) => fmtDay(r.effectiveFrom), hideOnMobile: true },
+                  {
+                    key: "terms", label: "Terms Applied", primary: true,
+                    render: (r) => (
+                      <div className="min-w-0">
+                        <p className="font-medium text-xs">
+                          {r.employmentType === "SALARIED" ? `Salaried: ${formatINR(r.monthlySalary)}/mo` : `Per-Shift: ${formatINR(r.standardRate)}/shift`}
+                          {r.onBusinessRent && ` · Rent: ${formatINR(r.rentAmount)}`}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">{r.reason || "Terms updated"} · Effective {fmtDay(r.effectiveFrom)}</p>
+                      </div>
+                    ),
+                    value: (r) => r.employmentType,
+                  },
+                  { key: "by", label: "Changed By", value: (r) => r.changedByName ?? "Admin", hideOnMobile: true },
+                ]}
+                rows={data?.payHistory ?? []}
+                rowKey={(r) => r.id}
+                emptyIcon={ShieldCheck}
+                emptyTitle="No historical changes"
+                emptyDescription="Any rate or rent adjustments will be recorded in this audit log."
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* TAB 6: FULL PROFILE */}
         <TabsContent value="profile" className="mt-3">
           <Card>
             <CardContent className="p-4">
@@ -594,7 +1000,7 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
                 ] as [string, string | null | undefined][]).map(([k, v]) => (
                   <div key={k} className="min-w-0">
                     <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{k}</p>
-                    <p className="truncate text-sm" title={v ?? undefined}>{v || "—"}</p>
+                    <p className="truncate text-sm font-medium" title={v ?? undefined}>{v || "—"}</p>
                   </div>
                 ))}
               </div>
@@ -611,13 +1017,13 @@ export default function EmployeeDetailView({ params, navigate }: ViewProps) {
         </TabsContent>
       </Tabs>
 
+      {/* Dialogs */}
       <GiveAdvanceDialog open={advanceOpen} onOpenChange={setAdvanceOpen} defaultEmployeeId={id} employees={emp ? [{ id: emp.id, fullName: emp.fullName, code: emp.code, standardRate: emp.standardRate, advanceBalance: emp.advanceBalance }] : undefined} onDone={afterAdvance} />
       <AddAdjustmentDialog open={adjustOpen} onOpenChange={setAdjustOpen} employeeId={id} onDone={load} />
-
-      {/* Full-parity edit dialog — the SAME component the employees list uses,
-          so every field (employment type, salary, overtime, rent, contractor,
-          contact, bank) is editable from the detail page too. */}
       <EmployeeFormDialog open={editOpen} onOpenChange={setEditOpen} employee={emp ?? null} onDone={load} />
+
+      {/* [ADDED] Universal Formula Inspector Dialog */}
+      <FormulaInspectorDialog open={inspectorOpen} onOpenChange={setInspectorOpen} data={inspectorData} />
     </div>
   );
 }

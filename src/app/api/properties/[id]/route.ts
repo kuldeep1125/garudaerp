@@ -17,9 +17,17 @@ export const GET = handleRoute(async ({ params }) => {
     }),
     db.propertyPayment.findMany({ where: { propertyId: id }, orderBy: { date: "desc" }, take: 100 }),
   ]);
+  const staffCost = Math.round(deployments.reduce((s, d) => s + (d.payoutAmount ?? 0), 0) * 100) / 100;
+  const margin = Math.round((ledger.billed - staffCost) * 100) / 100;
   return {
     property,
-    ledger: { billed: ledger.billed, received: ledger.received, outstanding: ledger.outstanding },
+    ledger: {
+      billed: ledger.billed,
+      received: ledger.received,
+      outstanding: ledger.outstanding,
+      staffCost,
+      margin,
+    },
     deployments: deployments.map(serializeDeployment),
     payments,
     monthly: ledger.monthly,

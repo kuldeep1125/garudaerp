@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { api } from "@/lib/api-client";
 import { formatINR } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
@@ -12,6 +12,7 @@ import { RangeSelector, type RangeKey } from "@/components/shared/filters";
 import { MonthPicker, toMonth } from "@/components/shared/month-picker";
 import { t as tr, useLang } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -20,9 +21,14 @@ import {
   Users, Truck, Wallet, IndianRupee, Landmark, CalendarCheck, Receipt, HandCoins, ReceiptText,
   Route, AlertTriangle, AlertCircle, Info, ChevronRight, Building2, RefreshCw, Activity, PieChart as PieChartIcon, History,
   CalendarRange, TrendingUp, TrendingDown, Minus, Sparkles, CalendarDays, Printer, HardHat, Home,
+  Search, X, UserRound, ArrowRight, Calculator,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
-import { ErrorState, useAsync, AreaTrend, CHART_COLORS } from "./_shared";
+import { ErrorState, useAsync, AreaTrend, CHART_COLORS, useDebounced } from "./_shared";
+import {
+  FormulaInspectorDialog,
+  type FormulaInspectorData,
+} from "@/components/shared/formula-inspector-dialog";
 
 interface AttentionItem {
   key: string;
@@ -202,6 +208,194 @@ export default function DashboardView({ navigate }: ViewProps) {
     []
   );
 
+  // 360° Passbook Quick-Jump Search
+  const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearch = useDebounced(searchQuery, 250);
+  const [searchResults, setSearchResults] = useState<{
+    employees: Array<{ id: string; fullName: string; code: string; designation?: string | null; status: string }>;
+    properties: Array<{ id: string; name: string; brandName?: string | null; type?: string | null; status: string }>;
+    vehicles: Array<{ id: string; name: string; registrationNumber: string; make?: string | null }>;
+  } | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [inspectorData, setInspectorData] = useState<FormulaInspectorData | null>(null);
+
+  useEffect(() => {
+    if (!debouncedSearch.trim() || debouncedSearch.trim().length < 2) {
+      setSearchResults(null);
+      return;
+    }
+    let active = true;
+    setSearching(true);
+    api.get<{
+      employees: Array<{ id: string; fullName: string; code: string; designation?: string | null; status: string }>;
+      properties: Array<{ id: string; name: string; brandName?: string | null; type?: string | null; status: string }>;
+      vehicles: Array<{ id: string; name: string; registrationNumber: string; make?: string | null }>;
+    }>(`/api/search?q=${encodeURIComponent(debouncedSearch.trim())}`)
+      .then((res) => {
+        if (active) setSearchResults(res);
+      })
+      .catch(() => {
+        if (active) setSearchResults(null);
+      })
+      .finally(() => {
+        if (active) setSearching(false);
+      });
+    return () => { active = false; };
+  }, [debouncedSearch]);
+
+  const openInspector = (metric: "billing" | "collections" | "outstanding" | "payout" | "transport" | "net") => {
+    if (!data) return;
+    const m = data.manpower;
+    const t = data.transport;
+    const c = data.collections;
+    const rangeLabel = range.toUpperCase();
+
+    switch (metric) {
+      case "billing":
+        setInspectorData({
+          title: "Manpower Invoiced (Billing) Calculation",
+          subtitle: `Accrual Revenue (${rangeLabel} range)`,
+          resultLabel: "Manpower Billing",
+          resultValue: formatINR(m.expectedBilling),
+          formulaEquation: "Today Billing = ∑(Shift Deployments × Contract Billing Rate)",
+          steps: [
+            { label: "Total Shift Deployments", amount: m.deployments, operation: "info", detail: `${m.dayShifts || 0} Day · ${m.nightShifts || 0} Night shifts` },
+            { label: "Gross Billing Revenue", amount: m.expectedBilling, operation: "result", detail: "Invoiced value of manpower services" },
+          ],
+          notes: [
+            "This is ACCRUAL REVENUE: it counts all shifts serviced in this date window, regardless of whether the restaurant has paid yet.",
+            "Rates are locked at the contract rate set in each property agreement at the moment of deployment.",
+          ],
+        });
+        break;
+
+      case "collections":
+        setInspectorData({
+          title: "Collections Received Calculation",
+          subtitle: `Cash Flow Inflow (${rangeLabel} range)`,
+          resultLabel: "Total Collections",
+          resultValue: formatINR(m.received),
+          formulaEquation: "Collections = ∑(Property Payments Received in Range)",
+          steps: [
+            { label: "Total Payments Cleared", amount: m.received, operation: "result", detail: "Bank / UPI / Cash receipts" },
+          ],
+          notes: [
+            "This is a CASH FLOW metric: it reflects actual rupee inflows into your business accounts.",
+            "Collections may be for shifts worked today, or for settling invoices from prior weeks/months.",
+            "To reconcile which restaurant paid, check the Collections & Payments ledger.",
+          ],
+        });
+        break;
+
+      case "outstanding":
+        setInspectorData({
+          title: "Cumulative Outstanding Balance",
+          subtitle: "All Active & Inactive Properties (Lifetime Balance)",
+          resultLabel: "Outstanding Receivable",
+          resultValue: formatINR(c.totalOutstanding),
+          formulaEquation: "Total Outstanding = Total Billed (All Time) − Total Received (All Time)",
+          steps: [
+            { label: "Total Cumulative Invoiced", amount: c.totalBilled, operation: "add", detail: "All shifts ever billed" },
+            { label: "Total Cumulative Received", amount: c.totalReceived, operation: "subtract", detail: "All payments ever collected" },
+            { label: "Net Pending Collection", amount: c.totalOutstanding, operation: "result", detail: "Uncollected receivables" },
+          ],
+          sourceRows: (c.byProperty ?? []).slice(0, 8).map((p) => ({
+            id: p.propertyId,
+            title: p.propertyName,
+            amount: formatINR(p.outstanding),
+            badge: p.outstanding > 0 ? "Pending" : "Settled",
+            badgeTone: p.outstanding > 0 ? "red" : "emerald",
+            onClick: () => {
+              setInspectorData(null);
+              navigate("properties", { id: p.propertyId });
+            },
+          })),
+          sourceRowsTitle: "Top Properties with Outstanding Balances",
+          notes: [
+            "Click on any property in the list above to open its 360° Passbook Ledger.",
+            "Zero Mismatch Rule: The sum of individual property outstanding balances equals this total exactly.",
+          ],
+        });
+        break;
+
+      case "payout": {
+        const salaryAccrual = m.salary ?? 0;
+        const shiftAccrual = m.shiftPayout ?? m.payout;
+        const overtimeAccrual = m.overtime ?? 0;
+        const rentDeduction = m.rentIncome ?? 0;
+        const netPayout = m.payout;
+
+        setInspectorData({
+          title: "Employee Payout & Wage Liability",
+          subtitle: `Staff Compensation (${rangeLabel} range)`,
+          resultLabel: "Net Employee Payout",
+          resultValue: formatINR(netPayout),
+          formulaEquation: "Net Payout = (Salaries + Shift Wages + Overtime) − Rent Deductions",
+          steps: [
+            ...(salaryAccrual > 0 ? [{ label: "Monthly Base Salaries", amount: salaryAccrual, operation: "add" as const, detail: "Fixed salaried staff" }] : []),
+            { label: "Shift Payout Wages", amount: shiftAccrual, operation: "add", detail: `${m.deployments} shifts deployed` },
+            ...(overtimeAccrual > 0 ? [{ label: "Overtime Accruals", amount: overtimeAccrual, operation: "add" as const, detail: "Additional hours" }] : []),
+            ...(rentDeduction > 0 ? [{ label: "Accommodation Rent Deducted", amount: rentDeduction, operation: "subtract" as const, detail: "Company housing recovery" }] : []),
+            { label: "Net Payout Liability", amount: netPayout, operation: "result", detail: "Net wages payable to employees" },
+          ],
+          notes: [
+            "Represents the accrued labor cost of fulfilling manpower deployments in this period.",
+            "If an employee stays in business accommodation, their rent is deducted before final disbursement.",
+          ],
+        });
+        break;
+      }
+
+      case "transport":
+        setInspectorData({
+          title: "Transport Fleet Revenue",
+          subtitle: `Logistics & Vehicle Rentals (${rangeLabel} range)`,
+          resultLabel: "Transport Revenue",
+          resultValue: formatINR(t.revenue),
+          formulaEquation: "Transport Revenue = ∑(Vehicle Trip Invoices in Range)",
+          steps: [
+            { label: "Fleet Vehicles on Trip", amount: t.onTripVehicles, operation: "info", detail: `Out of ${t.availableVehicles + t.onTripVehicles} total vehicles` },
+            { label: "Total Rental Invoiced", amount: t.revenue, operation: "result", detail: "Gross transport revenue" },
+          ],
+          notes: [
+            "Generated by vehicle dispatch operations, car rentals, and trip bookings.",
+            "Operating expenses (fuel, tolls, EMI) are tracked separately under fleet costs.",
+          ],
+        });
+        break;
+
+      case "net": {
+        const manpowerRev = m.expectedBilling;
+        const transportRev = t.revenue;
+        const rentDeducted = m.rentIncome ?? 0;
+        const laborCost = m.payout;
+        const totalExpenses = (m.expenses ?? 0) + (t.expenses ?? 0);
+
+        setInspectorData({
+          title: "Net Operating Profit Breakdown",
+          subtitle: `Operating Performance (${rangeLabel} range)`,
+          resultLabel: "Net Result",
+          resultValue: formatINR(net),
+          formulaEquation: "Net Result = (Gross Inflows) − (Labor Liability + Operating Expenses)",
+          steps: [
+            { label: "Manpower Billing (Revenue)", amount: manpowerRev, operation: "add", detail: "Services billed to properties" },
+            { label: "Transport Revenue", amount: transportRev, operation: "add", detail: "Fleet rentals invoiced" },
+            ...(rentDeducted > 0 ? [{ label: "Accommodation Rent Recovered", amount: rentDeducted, operation: "add" as const, detail: "Deducted from staff wages" }] : []),
+            { label: "Employee Labor Wages", amount: laborCost, operation: "subtract", detail: "Direct staff compensation" },
+            { label: "Business Operating Expenses", amount: totalExpenses, operation: "subtract", detail: "Fuel, maintenance, office, overhead" },
+            { label: "Net Operating Result", amount: net, operation: "result", detail: net >= 0 ? "Operating Profit" : "Operating Loss" },
+          ],
+          notes: [
+            "This is Garuda's true ACCRUAL OPERATING PROFIT for the selected period.",
+            "It matches the Financial Reports P&L Statement 100%.",
+            "This calculation accounts for all work performed and costs incurred, even if cash collection is pending.",
+          ],
+        });
+        break;
+      }
+    }
+  };
+
   const m = data?.manpower;
   const t = data?.transport;
   const c = data?.collections;
@@ -235,6 +429,201 @@ export default function DashboardView({ navigate }: ViewProps) {
         }
       />
 
+      {/* Universal 360° Passbook Quick-Jump Search & Hub */}
+      <Card className="border-primary/20 bg-gradient-to-r from-primary/5 via-card to-card shadow-sm">
+        <CardContent className="p-3 sm:p-4">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden />
+              <Input
+                placeholder="Centralized 360° Passbook: Search employee, restaurant, vehicle…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 pr-8 h-10 bg-background/90 text-sm font-medium"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => { setSearchQuery(""); setSearchResults(null); }}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            {/* Quick 360 directory shortcuts */}
+            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1.5 text-xs font-medium"
+                onClick={() => navigate("employees")}
+              >
+                <Users className="h-3.5 w-3.5 text-primary" />
+                <span>Employees</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1.5 text-xs font-medium"
+                onClick={() => navigate("properties")}
+              >
+                <Building2 className="h-3.5 w-3.5 text-primary" />
+                <span>Restaurants</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1.5 text-xs font-medium"
+                onClick={() => navigate("payments")}
+              >
+                <Wallet className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>Collections</span>
+              </Button>
+            </div>
+          </div>
+
+          {/* Autocomplete Dropdown */}
+          {searchQuery.trim().length >= 2 && (
+            <div className="mt-3 pt-3 border-t grid gap-3 max-h-72 overflow-y-auto">
+              {searching ? (
+                <div className="py-4 text-center text-xs text-muted-foreground">Searching 360° database…</div>
+              ) : (
+                <>
+                  {/* Matching Employees */}
+                  {(searchResults?.employees?.length ?? 0) > 0 && (
+                    <div>
+                      <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                        <Users className="h-3.5 w-3.5 text-primary" />
+                        <span>Employee 360° Passbooks</span>
+                      </p>
+                      <div className="grid gap-1">
+                        {searchResults?.employees.map((emp) => (
+                          <div
+                            key={emp.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => {
+                              setSearchQuery("");
+                              setSearchResults(null);
+                              navigate("employees", { id: emp.id });
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                setSearchQuery("");
+                                setSearchResults(null);
+                                navigate("employees", { id: emp.id });
+                              }
+                            }}
+                            className="flex items-center justify-between p-2 rounded-lg hover:bg-muted/80 transition-colors cursor-pointer text-xs"
+                          >
+                            <div className="min-w-0">
+                              <p className="font-semibold text-foreground truncate">{emp.fullName} <span className="font-normal text-muted-foreground">({emp.code})</span></p>
+                              <p className="text-[11px] text-muted-foreground">{emp.designation || "Staff"} · {emp.status}</p>
+                            </div>
+                            <span className="text-[11px] text-primary font-medium shrink-0 flex items-center gap-1">
+                              Open Passbook <ArrowRight className="h-3 w-3" />
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Matching Properties */}
+                  {(searchResults?.properties?.length ?? 0) > 0 && (
+                    <div>
+                      <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                        <Building2 className="h-3.5 w-3.5 text-primary" />
+                        <span>Restaurant 360° Ledgers</span>
+                      </p>
+                      <div className="grid gap-1">
+                        {searchResults?.properties.map((prop) => (
+                          <div
+                            key={prop.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => {
+                              setSearchQuery("");
+                              setSearchResults(null);
+                              navigate("properties", { id: prop.id });
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                setSearchQuery("");
+                                setSearchResults(null);
+                                navigate("properties", { id: prop.id });
+                              }
+                            }}
+                            className="flex items-center justify-between p-2 rounded-lg hover:bg-muted/80 transition-colors cursor-pointer text-xs"
+                          >
+                            <div className="min-w-0">
+                              <p className="font-semibold text-foreground truncate">{prop.name}</p>
+                              <p className="text-[11px] text-muted-foreground">{prop.brandName || "Commercial Partner"} · {prop.type || "Property"}</p>
+                            </div>
+                            <span className="text-[11px] text-primary font-medium shrink-0 flex items-center gap-1">
+                              Open Ledger <ArrowRight className="h-3 w-3" />
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Matching Vehicles */}
+                  {(searchResults?.vehicles?.length ?? 0) > 0 && (
+                    <div>
+                      <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                        <Truck className="h-3.5 w-3.5 text-amber-600" />
+                        <span>Fleet Vehicles</span>
+                      </p>
+                      <div className="grid gap-1">
+                        {searchResults?.vehicles.map((veh) => (
+                          <div
+                            key={veh.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => {
+                              setSearchQuery("");
+                              setSearchResults(null);
+                              navigate("vehicles", { id: veh.id });
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                setSearchQuery("");
+                                setSearchResults(null);
+                                navigate("vehicles", { id: veh.id });
+                              }
+                            }}
+                            className="flex items-center justify-between p-2 rounded-lg hover:bg-muted/80 transition-colors cursor-pointer text-xs"
+                          >
+                            <div className="min-w-0">
+                              <p className="font-semibold text-foreground truncate">{veh.name} <span className="font-normal text-muted-foreground">({veh.registrationNumber})</span></p>
+                              <p className="text-[11px] text-muted-foreground">{veh.make || "Vehicle"}</p>
+                            </div>
+                            <span className="text-[11px] text-primary font-medium shrink-0 flex items-center gap-1">
+                              Open Vehicle <ArrowRight className="h-3 w-3" />
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* No Results */}
+                  {(!searchResults?.employees?.length && !searchResults?.properties?.length && !searchResults?.vehicles?.length) && (
+                    <div className="py-3 text-center text-xs text-muted-foreground">
+                      No entities matched &quot;{searchQuery}&quot;. Try searching by name, phone, or code.
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <RangeSelector value={range} onChange={setRange} />
 
       {error && <ErrorState message={error} onRetry={reload} />}
@@ -253,26 +642,54 @@ export default function DashboardView({ navigate }: ViewProps) {
 
       {!loading && data && !error && (
         <>
-          {/* Row 1 — headline stats */}
+          {/* Row 1 — headline stats (with click-to-inspect math formulas) */}
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6" role="list" aria-label="Key numbers">
-            <StatCard label="Today Billing" value={formatINR(m?.expectedBilling ?? 0, { compact: true })} icon={IndianRupee} onClick={() => navigate("manpower")} hint="Manpower expected" />
-            <StatCard label="Collections" value={formatINR(m?.received ?? 0, { compact: true })} icon={Wallet} tone="positive" onClick={() => navigate("payments")} hint="Received in range" />
-            <StatCard label="Outstanding" value={formatINR(c?.totalOutstanding ?? 0, { compact: true })} icon={Building2} tone="negative" onClick={() => navigate("payments")} hint="All properties" />
+            <StatCard
+              label="Today Billing"
+              value={formatINR(m?.expectedBilling ?? 0, { compact: true })}
+              icon={IndianRupee}
+              onClick={() => openInspector("billing")}
+              hint="Click to inspect formula"
+            />
+            <StatCard
+              label="Collections"
+              value={formatINR(m?.received ?? 0, { compact: true })}
+              icon={Wallet}
+              tone="positive"
+              onClick={() => openInspector("collections")}
+              hint="Click to inspect formula"
+            />
+            <StatCard
+              label="Outstanding"
+              value={formatINR(c?.totalOutstanding ?? 0, { compact: true })}
+              icon={Building2}
+              tone="negative"
+              onClick={() => openInspector("outstanding")}
+              hint="Click to inspect formula"
+            />
             <StatCard
               label="Employee Payout"
               value={formatINR(m?.payout ?? 0, { compact: true })}
               icon={Users}
-              onClick={() => navigate("manpower")}
-              hint={
-                (m?.rentIncome ?? 0) > 0
-                  ? `${m?.deployments ?? 0} deps · Net after −${formatINR(m?.rentIncome ?? 0, { compact: true })} rent`
-                  : (m?.deployments ?? 0) === 0 && (m?.salary ?? 0) > 0
-                  ? "Salaried accrual (0 deployments)"
-                  : `${m?.deployments ?? 0} deployments`
-              }
+              onClick={() => openInspector("payout")}
+              hint="Click to inspect formula"
             />
-            <StatCard label="Transport Revenue" value={formatINR(t?.revenue ?? 0, { compact: true })} icon={Truck} tone="transport" onClick={() => navigate("transport")} hint={`${t?.onTripVehicles ?? 0} on trip`} />
-            <StatCard label="Net Result" value={formatINR(net, { compact: true })} icon={Landmark} tone={net >= 0 ? "positive" : "negative"} onClick={() => navigate("reports")} hint="Revenue + employee rent − employee cost − expenses (same as Reports)" />
+            <StatCard
+              label="Transport Revenue"
+              value={formatINR(t?.revenue ?? 0, { compact: true })}
+              icon={Truck}
+              tone="transport"
+              onClick={() => openInspector("transport")}
+              hint="Click to inspect formula"
+            />
+            <StatCard
+              label="Net Result"
+              value={formatINR(net, { compact: true })}
+              icon={Landmark}
+              tone={net >= 0 ? "positive" : "negative"}
+              onClick={() => openInspector("net")}
+              hint="Click to inspect formula"
+            />
           </div>
 
           {/* First-run setup checklist — self-hides once the business is set up */}
@@ -744,6 +1161,15 @@ export default function DashboardView({ navigate }: ViewProps) {
           </section>
         </>
       )}
+
+      {/* Universal Formula Inspector Dialog */}
+      <FormulaInspectorDialog
+        open={Boolean(inspectorData)}
+        onOpenChange={(open) => {
+          if (!open) setInspectorData(null);
+        }}
+        data={inspectorData}
+      />
     </div>
   );
 }
