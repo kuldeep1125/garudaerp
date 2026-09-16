@@ -1,17 +1,15 @@
 import { db } from "@/lib/db";
-import { handleRoute } from "@/lib/api-helpers";
+import { handleRoute, monthBounds, toISTParts } from "@/lib/api-helpers";
 import { SHIFT_UNITS } from "@/app/api/_lib/engine";
 
 // GET /api/deployments/attendance?month=YYYY-MM
-// Attendance-style month grid: per-employee shift-unit counts for every day of
-// the month (DAY/NIGHT = 1 unit, FULL = 2 units — day + night). Rows are all
-// active employees, cells carry the number of shift units worked that day.
+// Returns a matrix of ACTIVE employees × days of the month with shift counts (1 for DAY/NIGHT, 2 for FULL).
 export const GET = handleRoute(async ({ req }) => {
   const sp = new URL(req.url).searchParams;
-  const now = new Date();
+  const nowParts = toISTParts(new Date());
   const monthParam = sp.get("month");
-  let year = now.getFullYear();
-  let month = now.getMonth(); // 0-based
+  let year = nowParts.y;
+  let month = nowParts.m; // 0-based
   if (monthParam && /^\d{4}-\d{2}$/.test(monthParam)) {
     const [y, m] = monthParam.split("-").map(Number);
     if (m >= 1 && m <= 12) {
@@ -20,13 +18,12 @@ export const GET = handleRoute(async ({ req }) => {
     }
   }
 
-  const from = new Date(year, month, 1);
-  const to = new Date(year, month + 1, 0, 23, 59, 59, 999);
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthStr = `${year}-${String(month + 1).padStart(2, "0")}`;
+  const { from, to } = monthBounds(monthStr);
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   const dates: string[] = [];
   for (let d = 1; d <= daysInMonth; d++) {
-    const dt = new Date(year, month, d);
-    dates.push(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+    dates.push(`${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
   }
 
   const [employees, deps] = await Promise.all([

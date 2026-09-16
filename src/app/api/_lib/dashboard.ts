@@ -2,7 +2,7 @@
 // Keeps the three dashboard endpoints consistent without duplicating aggregation logic.
 import { db } from "@/lib/db";
 import { round2 } from "@/lib/money";
-import { endOfDay } from "@/lib/api-helpers";
+import { endOfDay, toISTParts, istStartOfDay } from "@/lib/api-helpers";
 import {
   EPS,
   dayKey,
@@ -178,14 +178,16 @@ export async function collectionsBlock(): Promise<CollectionsBlock> {
   };
 }
 
-/** Last `days` days ending today (local midnight boundaries). */
+/** Last `days` days ending today (IST midnight boundaries). */
 export function lastNDays(days: number): { from: Date; to: Date; keys: string[] } {
   const now = new Date();
   const to = endOfDay(now);
-  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1));
+  const nowParts = toISTParts(now);
+  const from = istStartOfDay(nowParts.y, nowParts.m, nowParts.d - (days - 1));
   const keys: string[] = [];
   for (let i = 0; i < days; i++) {
-    keys.push(dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1 - i))));
+    const d = istStartOfDay(nowParts.y, nowParts.m, nowParts.d - (days - 1 - i));
+    keys.push(dayKey(d));
   }
   return { from, to, keys };
 }

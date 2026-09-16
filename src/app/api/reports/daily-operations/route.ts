@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { handleRoute, parseDate, endOfDay, HttpError } from "@/lib/api-helpers";
+import { handleRoute, parseDate, startOfDay, endOfDay, HttpError } from "@/lib/api-helpers";
 import { round2 } from "@/lib/money";
 import { dayKey } from "@/app/api/_lib/engine";
 
@@ -10,7 +10,7 @@ import { dayKey } from "@/app/api/_lib/engine";
 export const GET = handleRoute(async ({ req }) => {
   const sp = new URL(req.url).searchParams;
   const date = sp.get("date") ? parseDate(sp.get("date")) : new Date();
-  const from = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const from = startOfDay(date);
   const to = endOfDay(date);
   const propertyId = sp.get("propertyId");
 

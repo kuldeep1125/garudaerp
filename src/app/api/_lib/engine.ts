@@ -899,7 +899,8 @@ export async function vehicleStatsMap(vehicleIds: string[]): Promise<Map<string,
   if (!vehicleIds.length) return map;
   for (const id of vehicleIds) map.set(id, emptyVehicleStat());
   const now = new Date();
-  const mFrom = new Date(now.getFullYear(), now.getMonth(), 1);
+  const { y, m } = toISTParts(now);
+  const mFrom = istStartOfDay(y, m, 1);
   const mTo = endOfDay(now);
   const [trips, expenses] = await Promise.all([
     db.trip.findMany({
@@ -1053,7 +1054,7 @@ export async function computeNotifications(): Promise<AppNotification[]> {
   }
 
   // 3) Previous-month settlements not finalized
-  const prevMonth = monthKey(addMonths(new Date(now.getFullYear(), now.getMonth(), 1), -1));
+  const prevMonth = monthKey(addMonths(now, -1));
   const draftCount = await db.settlement.count({ where: { month: prevMonth, status: "DRAFT" } });
   if (draftCount > 0) {
     list.push({

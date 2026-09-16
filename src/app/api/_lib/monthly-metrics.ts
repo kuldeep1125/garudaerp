@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { round2 } from "@/lib/money";
+import { monthBounds, monthKey } from "@/lib/api-helpers";
 import { manpowerCostBreakdown } from "./engine";
 
 // Shared month-metrics engine — used by:
@@ -39,19 +40,18 @@ export interface MonthMetrics {
 export const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 export function boundsOf(month: string): { from: Date; to: Date } {
-  const [y, m] = month.split("-").map(Number);
-  return { from: new Date(y, m - 1, 1), to: new Date(y, m, 0, 23, 59, 59, 999) };
+  return monthBounds(month);
 }
 
 export function shiftMonth(month: string, delta: number): string {
   const [y, m] = month.split("-").map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const targetYear = y + Math.floor((m - 1 + delta) / 12);
+  const targetMonth = ((m - 1 + delta) % 12 + 12) % 12;
+  return `${targetYear}-${String(targetMonth + 1).padStart(2, "0")}`;
 }
 
 export function currentMonth(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  return monthKey(new Date());
 }
 
 /** "2026-09" → "Sep 2026" — friendly label for insight lines. */

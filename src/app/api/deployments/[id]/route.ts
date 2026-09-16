@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { handleRoute, readBody, HttpError } from "@/lib/api-helpers";
+import { handleRoute, readBody, startOfDay, endOfDay, HttpError } from "@/lib/api-helpers";
 import { logAudit } from "@/lib/audit";
 import { round2 } from "@/lib/money";
 import { recomputeDeploymentPaid, serializeDeployment, optionalAmount, SHIFT_UNITS, SHIFTS, assertDeploymentMonthUnlocked } from "@/app/api/_lib/engine";
@@ -25,8 +25,8 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
   // OTHER same-day rows at any property (FULL blocks everything; DAY+NIGHT is
   // the only same-day combination that can coexist).
   if (shift !== existing.shift) {
-    const dayStart = new Date(existing.date); dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(existing.date); dayEnd.setHours(23, 59, 59, 999);
+    const dayStart = startOfDay(existing.date);
+    const dayEnd = endOfDay(existing.date);
     const others = await db.deployment.findMany({
       where: { employeeId: existing.employeeId, date: { gte: dayStart, lte: dayEnd }, id: { not: id } },
       select: { shift: true, property: { select: { name: true } } },
