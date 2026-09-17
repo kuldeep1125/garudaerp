@@ -22,12 +22,15 @@ export const GET = handleRoute(async ({ req }) => {
   const needManpower = businesses.includes("MANPOWER");
   const needTransport = businesses.includes("TRANSPORT");
 
-  const [cost, mpExpAgg, trips, trExpAgg] = await Promise.all([
+  const [cost, mpExpAgg, mpRefAgg, trips, trExpAgg, trRefAgg] = await Promise.all([
     needManpower
       ? manpowerCostBreakdown(from, to)
       : Promise.resolve(null),
     needManpower
       ? db.expense.aggregate({ where: { business: "MANPOWER", kind: "OPERATING", date: { gte: from, lte: to } }, _sum: { amount: true } })
+      : Promise.resolve(null),
+    needManpower
+      ? db.expense.aggregate({ where: { business: "MANPOWER", kind: "REFUND", date: { gte: from, lte: to } }, _sum: { amount: true } })
       : Promise.resolve(null),
     needTransport
       ? db.trip.findMany({
@@ -37,6 +40,9 @@ export const GET = handleRoute(async ({ req }) => {
       : Promise.resolve([]),
     needTransport
       ? db.expense.aggregate({ where: { business: "TRANSPORT", kind: "OPERATING", date: { gte: from, lte: to } }, _sum: { amount: true } })
+      : Promise.resolve(null),
+    needTransport
+      ? db.expense.aggregate({ where: { business: "TRANSPORT", kind: "REFUND", date: { gte: from, lte: to } }, _sum: { amount: true } })
       : Promise.resolve(null),
   ]);
 
@@ -57,7 +63,7 @@ export const GET = handleRoute(async ({ req }) => {
     const billing = cost.billing;
     const employeeCost = cost.grossPayout; // [FIXED] gross employee cost (shift payouts + salary + overtime + extra contractor cuts)
     const rentIncome = cost.rentIncome;
-    const otherExpenses = round2(mpExpAgg._sum.amount ?? 0);
+    const otherExpenses = round2(Math.max(0, (mpExpAgg._sum.amount ?? 0) - (mpRefAgg?._sum.amount ?? 0)));
     rows.push({
       business: "MANPOWER",
       billing,
@@ -74,7 +80,7 @@ export const GET = handleRoute(async ({ req }) => {
   if (needTransport && trips && trExpAgg) {
     const billing = round2(trips.reduce((s, t) => s + tripTarget(t), 0));
     const employeeCost = 0;
-    const otherExpenses = round2(trExpAgg._sum.amount ?? 0);
+    const otherExpenses = round2(Math.max(0, (trExpAgg._sum.amount ?? 0) - (trRefAgg?._sum.amount ?? 0)));
     rows.push({
       business: "TRANSPORT",
       billing,

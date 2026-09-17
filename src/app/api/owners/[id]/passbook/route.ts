@@ -14,7 +14,7 @@ export const GET = handleRoute(async ({ params }) => {
 
   const [expenses, audits, totalCreatedCount] = await Promise.all([
     db.expense.findMany({
-      where: { spentById: id },
+      where: { spentById: id, isCommon: false },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       take: 200,
     }),
@@ -36,12 +36,13 @@ export const GET = handleRoute(async ({ params }) => {
   let totalContributions = 0;
   let totalDrawings = 0;
   let totalOutOfPocket = 0;
+  let totalRefunds = 0;
 
   interface PassbookEntry {
     id: string;
     date: string;
     createdAt: string;
-    type: "CONTRIBUTION" | "DRAWING" | "OUT_OF_POCKET";
+    type: "CONTRIBUTION" | "DRAWING" | "OUT_OF_POCKET" | "REFUND";
     title: string;
     subtitle: string;
     inflow: number;  // Money owner put in or spent on behalf of business (+)
@@ -57,7 +58,20 @@ export const GET = handleRoute(async ({ params }) => {
     const cat = (e.categoryName ?? "").trim().toUpperCase();
     const dateStr = e.date instanceof Date ? e.date.toISOString().slice(0, 10) : String(e.date).slice(0, 10);
 
-    if (e.kind === "CAPITAL") {
+    if (e.kind === "REFUND") {
+      totalRefunds = round2(totalRefunds + amount);
+      rawEntries.push({
+        id: `exp-${e.id}`,
+        date: dateStr,
+        createdAt: e.createdAt.toISOString(),
+        type: "REFUND",
+        title: "Expense Refund / Repayment",
+        subtitle: `${e.business} · ${e.description || e.categoryName || "Funds returned to company"}`,
+        inflow: 0,
+        outflow: amount,
+        notes: e.notes,
+      });
+    } else if (e.kind === "CAPITAL") {
       if (cat.includes("CONTRIBUTION") || cat.includes("DEPOSIT") || cat.includes("INVEST")) {
         totalContributions = round2(totalContributions + amount);
         rawEntries.push({
@@ -66,7 +80,7 @@ export const GET = handleRoute(async ({ params }) => {
           createdAt: e.createdAt.toISOString(),
           type: "CONTRIBUTION",
           title: "Capital Contribution (Deposit In)",
-          subtitle: e.description || `${e.categoryName} into business account`,
+          subtitle: e.description || `${e.categoryName || "Capital Deposit"} into business account`,
           inflow: amount,
           outflow: 0,
           notes: e.notes,
@@ -79,21 +93,21 @@ export const GET = handleRoute(async ({ params }) => {
           createdAt: e.createdAt.toISOString(),
           type: "DRAWING",
           title: "Personal Withdrawal (Drawing Out)",
-          subtitle: e.description || `${e.categoryName} taken from company funds`,
+          subtitle: e.description || `${e.categoryName || "Personal Drawing"} taken from company funds`,
           inflow: 0,
           outflow: amount,
           notes: e.notes,
         });
       }
     } else {
-      // OPERATING SPEND paid by owner out of personal funds
+      // OPERATING SPEND paid by owner out of personal funds (reimbursable)
       totalOutOfPocket = round2(totalOutOfPocket + amount);
       rawEntries.push({
         id: `exp-${e.id}`,
         date: dateStr,
         createdAt: e.createdAt.toISOString(),
         type: "OUT_OF_POCKET",
-        title: `Expense Paid: ${e.categoryName || "Operational Spend"}`,
+        title: `Out-of-Pocket: ${e.categoryName || "Operating Spend"}`,
         subtitle: `${e.business} · ${e.description || "Paid out-of-pocket on behalf of business"}`,
         inflow: amount, // Reimbursable credit to owner
         outflow: 0,
@@ -121,7 +135,7 @@ export const GET = handleRoute(async ({ params }) => {
   // Reverse for display (newest first)
   const passbook = [...chronologicalPassbook].reverse();
 
-  const netOwnerPosition = round2(totalContributions + totalOutOfPocket - totalDrawings);
+  const netOwnerPosition = round2(totalContributions + totalOutOfPocket - totalDrawings - totalRefunds);
 
   return {
     owner: {
@@ -132,6 +146,7 @@ export const GET = handleRoute(async ({ params }) => {
       contributions: totalContributions,
       drawings: totalDrawings,
       outOfPocketSpend: totalOutOfPocket,
+      refunds: totalRefunds,
       netBalance: netOwnerPosition,
       recordsCount: expenses.length,
     },

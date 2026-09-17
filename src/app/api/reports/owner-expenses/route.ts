@@ -52,12 +52,13 @@ export const GET = handleRoute(async ({ req }) => {
     if (e.kind === "OPERATING") {
       acc.operating = round2(acc.operating + amount);
       addBusinessSplit(acc, e.business, amount);
+    } else if (e.kind === "REFUND") {
+      acc.operating = round2(acc.operating - amount);
+      addBusinessSplit(acc, e.business, -amount);
     } else {
-      // CAPITAL — classified by the category snapshot stamped at write time.
-      // Business split intentionally NOT updated: the Manpower/Transport columns
-      // must reconcile with the Operating Spend column (capital is not spend).
+      // CAPITAL — classified by category snapshot stamped at write time
       const cat = (e.categoryName ?? "").trim().toUpperCase();
-      if (cat === "OWNER CONTRIBUTION") acc.deposits = round2(acc.deposits + amount);
+      if (cat.includes("CONTRIBUTION") || cat.includes("DEPOSIT") || cat.includes("INVEST")) acc.deposits = round2(acc.deposits + amount);
       else acc.withdrawals = round2(acc.withdrawals + amount);
     }
   }

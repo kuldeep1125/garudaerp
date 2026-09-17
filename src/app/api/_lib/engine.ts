@@ -532,21 +532,33 @@ export async function contractorNames(): Promise<string[]> {
   return [...new Set(rows.map((r) => r.contractorName as string))];
 }
 
-// ---------- owner capital movements (canonical predicate) ----------
+// ---------- owner capital movements & expense kinds (canonical predicates) ----------
 // Owner CONTRIBUTION (money in) / WITHDRAWAL (drawings) are capital movements,
 // NOT operating expenses. Every P&L aggregation must count OPERATING expenses
-// only — the Owner Breakdown surfaces capital flows separately. This constant
-// list is the single source of truth; Expense.kind is stamped from it on write.
+// only (less any REFUND offsets) — the Owner Breakdown surfaces capital flows separately.
+// This constant list is the single source of truth; Expense.kind is stamped from it on write.
 export const CAPITAL_CATEGORY_NAMES = ["OWNER CONTRIBUTION", "OWNER WITHDRAWAL"] as const;
-export const EXPENSE_KINDS = ["OPERATING", "CAPITAL"] as const;
+export const REFUND_CATEGORY_NAMES = ["EXPENSE REFUND", "REFUND", "EXPENSE REVERSAL"] as const;
+export const EXPENSE_KINDS = ["OPERATING", "CAPITAL", "REFUND"] as const;
 
 export function isCapitalCategoryName(name?: string | null): boolean {
-  return (CAPITAL_CATEGORY_NAMES as readonly string[]).includes((name ?? "").trim().toUpperCase());
+  const n = (name ?? "").trim().toUpperCase();
+  return (CAPITAL_CATEGORY_NAMES as readonly string[]).includes(n) || n.includes("WITHDRAWAL") || n.includes("CONTRIBUTION");
 }
 
-/** Canonical expense kind stamp: capital when the category is an owner capital movement. */
-export function expenseKindForCategory(categoryName?: string | null): (typeof EXPENSE_KINDS)[number] {
-  return isCapitalCategoryName(categoryName) ? "CAPITAL" : "OPERATING";
+export function isRefundCategoryName(name?: string | null): boolean {
+  const n = (name ?? "").trim().toUpperCase();
+  return (REFUND_CATEGORY_NAMES as readonly string[]).includes(n) || n.includes("REFUND") || n.includes("REVERSAL");
+}
+
+/** Canonical expense kind stamp: capital when owner capital movement, refund when refund category, else operating. */
+export function expenseKindForCategory(categoryName?: string | null, explicitKind?: string | null): (typeof EXPENSE_KINDS)[number] {
+  if (explicitKind === "REFUND" || explicitKind === "CAPITAL" || explicitKind === "OPERATING") {
+    return explicitKind;
+  }
+  if (isCapitalCategoryName(categoryName)) return "CAPITAL";
+  if (isRefundCategoryName(categoryName)) return "REFUND";
+  return "OPERATING";
 }
 
 export interface ExpenseAttribution {

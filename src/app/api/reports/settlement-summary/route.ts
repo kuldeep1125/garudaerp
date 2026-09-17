@@ -18,6 +18,7 @@ export const GET = handleRoute(async ({ req }) => {
 
   const rows = settlements.map((s) => ({
     id: s.id,
+    employeeId: s.employeeId,
     employeeName: s.employee.fullName,
     employeeCode: s.employee.code,
     employmentType: s.employee.employmentType === "SALARIED" ? "Salaried" : "Per-shift",

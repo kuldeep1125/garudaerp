@@ -16,22 +16,51 @@ export const GET = handleRoute(async ({ req }) => {
   const vehicleId = sp.get("vehicleId");
   const ownerId = sp.get("ownerId"); // spentBy filter — owner id | COMMON | NONE
   const kind = sp.get("kind");
+  const type = sp.get("type"); // OPERATING | DRAWING | DEPOSIT | REFUND | OUT_OF_POCKET
   const search = sp.get("search")?.trim();
   const from = sp.get("from");
   const to = sp.get("to");
+
   if (business) where.business = business.toUpperCase();
   if (categoryId) where.categoryId = categoryId;
   if (vehicleId) where.vehicleId = vehicleId;
-  if (ownerId === "COMMON") where.isCommon = true;
-  else if (ownerId === "NONE") where.spentById = null;
-  else if (ownerId) where.spentById = ownerId;
-  if (kind === "OPERATING" || kind === "CAPITAL") where.kind = kind;
-  if (search) where.description = { contains: search };
+
+  // Precise Owner attribution filter: Common vs individual personal spend
+  if (ownerId === "COMMON") {
+    where.isCommon = true;
+  } else if (ownerId === "NONE") {
+    where.spentById = null;
+    where.isCommon = false;
+  } else if (ownerId) {
+    where.spentById = ownerId;
+    where.isCommon = false;
+  }
+
+  // Type & Kind filters
+  if (type === "OPERATING") {
+    where.kind = "OPERATING";
+  } else if (type === "REFUND") {
+    where.kind = "REFUND";
+  } else if (type === "DRAWING") {
+    where.kind = "CAPITAL";
+    where.categoryName = { contains: "Withdrawal", mode: "insensitive" };
+  } else if (type === "DEPOSIT") {
+    where.kind = "CAPITAL";
+    where.categoryName = { contains: "Contribution", mode: "insensitive" };
+  } else if (type === "OUT_OF_POCKET") {
+    where.kind = "OPERATING";
+    where.isCommon = false;
+    where.spentById = { not: null };
+  } else if (kind === "OPERATING" || kind === "CAPITAL" || kind === "REFUND") {
+    where.kind = kind;
+  }
+
+  if (search) where.description = { contains: search, mode: "insensitive" };
   if (from && to) where.date = { gte: startOfDay(parseDate(from)), lte: endOfDay(parseDate(to)) };
   else if (from) where.date = { gte: startOfDay(parseDate(from)) };
   else if (to) where.date = { lte: endOfDay(parseDate(to)) };
 
-  const [rows, total, agg, byKind] = await Promise.all([
+  const [rows, total, allMatchingExpenses] = await Promise.all([
     db.expense.findMany({
       where,
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
@@ -39,26 +68,58 @@ export const GET = handleRoute(async ({ req }) => {
       take: pageSize,
     }),
     db.expense.count({ where }),
-    db.expense.aggregate({ where, _sum: { amount: true } }),
-    db.expense.groupBy({ by: ["kind", "isCommon"], where: business ? { business: business.toUpperCase() } : {}, _sum: { amount: true } }),
+    // Aggregate over the full filtered set for exact reconciliation
+    db.expense.findMany({
+      where,
+      select: { amount: true, kind: true, categoryName: true, isCommon: true },
+    }),
   ]);
 
-  // Range-wide split so every surface can reconcile: operating + capital = grand.
+  let totalAmount = 0;
   let operating = 0;
-  let capital = 0;
+  let refunds = 0;
+  let deposits = 0;
+  let withdrawals = 0;
   let common = 0;
-  for (const g of byKind) {
-    const amt = round2(g._sum.amount ?? 0);
-    if (g.isCommon) common = round2(common + amt);
-    if (g.kind === "OPERATING") operating = round2(operating + amt);
-    else capital = round2(capital + amt);
+
+  for (const e of allMatchingExpenses) {
+    const amt = round2(e.amount);
+    totalAmount = round2(totalAmount + amt);
+    if (e.isCommon) common = round2(common + amt);
+
+    if (e.kind === "REFUND") {
+      refunds = round2(refunds + amt);
+    } else if (e.kind === "CAPITAL") {
+      const cat = (e.categoryName ?? "").trim().toUpperCase();
+      if (cat.includes("CONTRIBUTION") || cat.includes("DEPOSIT") || cat.includes("INVEST")) {
+        deposits = round2(deposits + amt);
+      } else {
+        withdrawals = round2(withdrawals + amt);
+      }
+    } else {
+      operating = round2(operating + amt);
+    }
   }
+
+  const netOperating = round2(operating - refunds);
+  const netCapital = round2(deposits - withdrawals);
+
   return {
     items: rows,
     total,
     page,
     pageSize,
-    totals: { amount: round2(agg._sum.amount ?? 0), operating, capital, common },
+    totals: {
+      amount: totalAmount,
+      operating,
+      refunds,
+      netOperating,
+      capital: round2(deposits + withdrawals),
+      deposits,
+      withdrawals,
+      netCapital,
+      common,
+    },
   };
 });
 
@@ -91,9 +152,36 @@ export const POST = handleRoute(async ({ owner, req }) => {
     vehicleName = vehicle.name;
   }
 
-  // Who is the money attributed to (owner picker) + capital stamp from category.
-  const attribution = await resolveExpenseAttribution(body, owner);
-  const kind = expenseKindForCategory(categoryName);
+  const type = body.type ? String(body.type) : null;
+
+  // Auto-bind canonical categories for structured types if not explicitly set
+  if (type === "DRAWING" && !categoryName) {
+    categoryName = "Owner Withdrawal";
+    const cat = await db.expenseCategory.findFirst({ where: { name: "Owner Withdrawal" } });
+    if (cat) categoryId = cat.id;
+  } else if (type === "DEPOSIT" && !categoryName) {
+    categoryName = "Owner Contribution";
+    const cat = await db.expenseCategory.findFirst({ where: { name: "Owner Contribution" } });
+    if (cat) categoryId = cat.id;
+  } else if (type === "REFUND" && !categoryName) {
+    categoryName = "Expense Refund";
+    const cat = await db.expenseCategory.findFirst({ where: { name: "Expense Refund" } });
+    if (cat) categoryId = cat.id;
+  }
+
+  // Who is the money attributed to (owner picker) + capital/refund stamp
+  let attribution = await resolveExpenseAttribution(body, owner);
+  if (type === "DRAWING" || type === "DEPOSIT" || type === "OUT_OF_POCKET") {
+    attribution = { ...attribution, isCommon: false };
+  }
+
+  let explicitKind: string | null = null;
+  if (type === "REFUND") explicitKind = "REFUND";
+  else if (type === "DRAWING" || type === "DEPOSIT") explicitKind = "CAPITAL";
+  else if (type === "OPERATING" || type === "OUT_OF_POCKET") explicitKind = "OPERATING";
+  else if (body.kind) explicitKind = String(body.kind);
+
+  const kind = expenseKindForCategory(categoryName, explicitKind);
 
   const expense = await db.expense.create({
     data: {

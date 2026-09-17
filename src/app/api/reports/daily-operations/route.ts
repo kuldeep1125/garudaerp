@@ -32,6 +32,8 @@ export const GET = handleRoute(async ({ req }) => {
 
   const rows = deps.map((d) => ({
     id: d.id,
+    employeeId: d.employeeId,
+    propertyId: d.propertyId,
     propertyName: d.property.name,
     employeeName: d.employee.fullName,
     employeeCode: d.employee.code,

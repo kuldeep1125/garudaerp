@@ -50,10 +50,15 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
     }
   }
 
-  // Re-stamp capital/operating in the same pass that resolves business+category —
-  // kind depends only on the final category name, so it always ends up correct.
-  if (data.categoryName !== undefined) {
-    data.kind = expenseKindForCategory(data.categoryName as string | null);
+  // Re-stamp capital/operating/refund in the same pass that resolves business+category
+  if (data.categoryName !== undefined || body.kind !== undefined || body.type !== undefined) {
+    const finalCat = (data.categoryName !== undefined ? data.categoryName : existing.categoryName) as string | null;
+    let explicitKind: string | null = null;
+    if (body.type === "REFUND") explicitKind = "REFUND";
+    else if (body.type === "DRAWING" || body.type === "DEPOSIT") explicitKind = "CAPITAL";
+    else if (body.type === "OPERATING" || body.type === "OUT_OF_POCKET") explicitKind = "OPERATING";
+    else if (body.kind !== undefined) explicitKind = String(body.kind);
+    data.kind = expenseKindForCategory(finalCat, explicitKind);
   }
 
   if (body.vehicleId !== undefined) {

@@ -44,8 +44,9 @@ export const GET = handleRoute(async ({ req }) => {
     if (row) row.received = round2(p._sum.amount ?? 0);
   }
 
-  const rows = [...byProp.values()]
-    .map((r) => ({
+  const rows = [...byProp.entries()]
+    .map(([propertyId, r]) => ({
+      propertyId,
       propertyName: r.propertyName,
       employees: r.employees.size,
       shifts: r.shifts,

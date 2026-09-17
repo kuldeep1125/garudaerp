@@ -97,12 +97,14 @@ export const GET = handleRoute(async ({ req }) => {
       ownerRow.spent = round2(ownerRow.spent + amount);
       if (e.business === "MANPOWER") ownerRow.manpower = round2(ownerRow.manpower + amount);
       else if (e.business === "TRANSPORT") ownerRow.transport = round2(ownerRow.transport + amount);
-      addCat(ownerRow.categories, cat, amount);
       const capCat = cat.toUpperCase();
-      if (e.kind === "CAPITAL" && capCat === "OWNER CONTRIBUTION") {
+      if (e.kind === "REFUND") {
+        ownerRow.advances = round2(ownerRow.advances - amount);
+        dRow.operating = round2(dRow.operating - amount);
+      } else if (e.kind === "CAPITAL" && (capCat.includes("CONTRIBUTION") || capCat.includes("DEPOSIT") || capCat.includes("INVEST"))) {
         ownerRow.deposits = round2(ownerRow.deposits + amount);
         dRow.deposits = round2(dRow.deposits + amount);
-      } else if (e.kind === "CAPITAL" && capCat === "OWNER WITHDRAWAL") {
+      } else if (e.kind === "CAPITAL" && (capCat.includes("WITHDRAWAL") || capCat.includes("DRAWING"))) {
         ownerRow.withdrawals = round2(ownerRow.withdrawals + amount);
         dRow.withdrawals = round2(dRow.withdrawals + amount);
       } else {
@@ -126,9 +128,15 @@ export const GET = handleRoute(async ({ req }) => {
   const unattributedOperating = round2(
     rows
       .filter((e) => !e.isCommon && e.kind === "OPERATING" && (!e.spentById || !ownerMap.has(e.spentById)))
+      .reduce((s, e) => s + e.amount, 0) -
+    rows
+      .filter((e) => !e.isCommon && e.kind === "REFUND" && (!e.spentById || !ownerMap.has(e.spentById)))
       .reduce((s, e) => s + e.amount, 0),
   );
-  const commonOperating = round2(rows.filter((e) => e.isCommon && e.kind === "OPERATING").reduce((s, e) => s + e.amount, 0));
+  const commonOperating = round2(
+    rows.filter((e) => e.isCommon && e.kind === "OPERATING").reduce((s, e) => s + e.amount, 0) -
+    rows.filter((e) => e.isCommon && e.kind === "REFUND").reduce((s, e) => s + e.amount, 0)
+  );
 
   const totals = {
     deposits: round2(ownerRows.reduce((s, r) => s + r.deposits, 0)),
@@ -136,7 +144,7 @@ export const GET = handleRoute(async ({ req }) => {
     advances: round2(ownerRows.reduce((s, r) => s + r.advances, 0)),
     commonTotal: common.total,
     unattributed: unattributed.total,
-    // operating = owner advances + common operating + unattributed operating (mirrors kind=OPERATING)
+    // operating = owner advances + common operating + unattributed operating (mirrors net OPERATING)
     operating: round2(ownerRows.reduce((s, r) => s + r.advances, 0) + commonOperating + unattributedOperating),
     capital: round2(ownerRows.reduce((s, r) => s + r.deposits + r.withdrawals, 0)),
     grand: round2(rows.reduce((s, e) => s + e.amount, 0)),

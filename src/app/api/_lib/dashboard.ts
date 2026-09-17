@@ -58,7 +58,7 @@ export interface CollectionsBlock {
 
 /** Manpower KPI block for [from, to]. Pending = all-time FIFO outstanding. */
 export async function manpowerBlock(from: Date, to: Date): Promise<ManpowerBlock> {
-  const [deps, payAgg, advAgg, expAgg, ledgers, cost] = await Promise.all([
+  const [deps, payAgg, advAgg, expAgg, refAgg, ledgers, cost] = await Promise.all([
     db.deployment.findMany({
       where: { date: { gte: from, lte: to } },
       select: { employeeId: true, propertyId: true, shift: true, billingAmount: true, payoutAmount: true },
@@ -66,6 +66,7 @@ export async function manpowerBlock(from: Date, to: Date): Promise<ManpowerBlock
     db.propertyPayment.aggregate({ where: { date: { gte: from, lte: to } }, _sum: { amount: true } }),
     db.advance.aggregate({ where: { date: { gte: from, lte: to } }, _sum: { amount: true } }),
     db.expense.aggregate({ where: { business: "MANPOWER", kind: "OPERATING", date: { gte: from, lte: to } }, _sum: { amount: true } }),
+    db.expense.aggregate({ where: { business: "MANPOWER", kind: "REFUND", date: { gte: from, lte: to } }, _sum: { amount: true } }),
     loadAllLedgers(),
     // CANONICAL source for billing/payout/rent — the same function the Reports
     // page and monthly summary use, so the numbers can never disagree.
@@ -85,6 +86,7 @@ export async function manpowerBlock(from: Date, to: Date): Promise<ManpowerBlock
   }
   let pending = 0;
   for (const led of ledgers.map.values()) pending += led.outstanding;
+  const netExpenses = round2(Math.max(0, (expAgg._sum.amount ?? 0) - (refAgg._sum.amount ?? 0)));
   return {
     employeesDeployed: employeeIds.size,
     propertiesServed: propertyIds.size,
@@ -100,7 +102,7 @@ export async function manpowerBlock(from: Date, to: Date): Promise<ManpowerBlock
     received: round2(payAgg._sum.amount ?? 0),
     pending: round2(Math.max(0, pending)),
     advancesGiven: round2(advAgg._sum.amount ?? 0),
-    expenses: round2(expAgg._sum.amount ?? 0),
+    expenses: netExpenses,
     dayShifts,
     nightShifts,
     deployments: deps.length,
@@ -109,13 +111,14 @@ export async function manpowerBlock(from: Date, to: Date): Promise<ManpowerBlock
 
 /** Transport KPI block for [from, to]. Revenue/pending scoped to trips starting in range. */
 export async function transportBlock(from: Date, to: Date): Promise<TransportBlock> {
-  const [vehicles, trips, expAgg, stats] = await Promise.all([
+  const [vehicles, trips, expAgg, refAgg, stats] = await Promise.all([
     db.vehicle.findMany({ select: { id: true, name: true, status: true } }),
     db.trip.findMany({
       where: { startAt: { gte: from, lte: to }, status: { not: "CANCELLED" } },
       select: { vehicleId: true, finalAmount: true, agreedAmount: true, extraCharges: true, paidAmount: true },
     }),
     db.expense.aggregate({ where: { business: "TRANSPORT", kind: "OPERATING", date: { gte: from, lte: to } }, _sum: { amount: true } }),
+    db.expense.aggregate({ where: { business: "TRANSPORT", kind: "REFUND", date: { gte: from, lte: to } }, _sum: { amount: true } }),
     vehicleStatsMap((await db.vehicle.findMany({ select: { id: true } })).map((v) => v.id)),
   ]);
 
@@ -139,11 +142,13 @@ export async function transportBlock(from: Date, to: Date): Promise<TransportBlo
     .map(([vehicleId, r]) => ({ vehicleId, vehicleName: nameById.get(vehicleId) ?? "Unknown", revenue: r }))
     .sort((a, b) => b.revenue - a.revenue);
 
+  const netExpenses = round2(Math.max(0, (expAgg._sum.amount ?? 0) - (refAgg._sum.amount ?? 0)));
+
   return {
     availableVehicles: vehicles.filter((v) => v.status === "AVAILABLE").length,
     onTripVehicles: vehicles.filter((v) => v.status === "RENTED" || v.status === "TRIP").length,
     revenue: round2(revenue),
-    expenses: round2(expAgg._sum.amount ?? 0),
+    expenses: netExpenses,
     received: round2(revenue),
     pending: round2(pending),
     monthRevenue: round2(monthTotals.revenue),

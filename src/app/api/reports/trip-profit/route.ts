@@ -44,6 +44,7 @@ export const GET = handleRoute(async ({ req }) => {
       { key: "collectedPct", label: "Collected %", type: "number" },
     ],
     rows: rows.map((r) => ({
+      tripId: r.tripId,
       label: r.label,
       startAt: r.startAt,
       vehicle: r.vehicle,
