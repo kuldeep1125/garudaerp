@@ -102,8 +102,16 @@ function PropertyFormDialog({ open, onOpenChange, onDone }: {
   );
 }
 
-export default function PropertiesView({ navigate }: ViewProps) {
+export default function PropertiesView({ params, navigate }: ViewProps) {
   const { lang } = useLang();
+
+  // If a specific property ID is passed via navigation bridge, forward straight to detail
+  useEffect(() => {
+    if (params?.id) {
+      navigate("property-detail", { id: params.id });
+    }
+  }, [params?.id, navigate]);
+
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [addOpen, setAddOpen] = useState(false);

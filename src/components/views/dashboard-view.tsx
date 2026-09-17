@@ -249,7 +249,7 @@ export default function DashboardView({ navigate }: ViewProps) {
     return () => { active = false; };
   }, [debouncedSearch]);
 
-  const openInspector = (metric: "billing" | "collections" | "outstanding" | "payout" | "transport" | "net") => {
+  const openInspector = (metric: "billing" | "collections" | "outstanding" | "payout" | "transport" | "expenses" | "net") => {
     if (!data) return;
     const m = data.manpower;
     const t = data.transport;
@@ -257,6 +257,30 @@ export default function DashboardView({ navigate }: ViewProps) {
     const rangeLabel = range.toUpperCase();
 
     switch (metric) {
+      case "expenses": {
+        const manpowerExp = m.expenses ?? 0;
+        const transportExp = t.expenses ?? 0;
+        const totalExp = manpowerExp + transportExp;
+        setInspectorData({
+          title: "Operating Expenses Calculation",
+          subtitle: `Operating Overhead & Logistics (${rangeLabel} range)`,
+          resultLabel: "Net Operating Expenses",
+          resultValue: formatINR(totalExp),
+          formulaEquation: "Net Operating Expenses = Manpower Overhead + Transport Fleet Expenses (Net of Refunds)",
+          steps: [
+            { label: "Manpower Overhead Expenses", amount: manpowerExp, operation: "add", detail: "Supplies, office, utilities, field expenses" },
+            { label: "Transport Fleet Expenses", amount: transportExp, operation: "add", detail: "Fuel, vehicle repairs, maintenance, tolls" },
+            { label: "Total Net Operating Expenses", amount: totalExp, operation: "result", detail: "Recognized operational overhead feeding P&L" },
+          ],
+          notes: [
+            "Operating expenses count only business expenses (kind: OPERATING) net of any vendor/cash refunds (kind: REFUND).",
+            "Owner personal withdrawals (Drawings) and capital deposits (Contributions) are 100% excluded from operating expenses.",
+            "Click on 'Expenses' in the navigation to view the itemized categorized ledger.",
+          ],
+        });
+        break;
+      }
+
       case "billing":
         setInspectorData({
           title: "Manpower Invoiced (Billing) Calculation",
@@ -888,19 +912,31 @@ export default function DashboardView({ navigate }: ViewProps) {
                       {formatINR((m?.payout ?? 0) + (m?.expenses ?? 0) + (t?.expenses ?? 0))}
                     </p>
                     <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
-                      <div className="flex justify-between">
+                      <div className="flex justify-between py-0.5">
                         <span>Employee Net Payout:</span>
                         <span className="font-semibold text-foreground">{formatINR(m?.payout ?? 0)}</span>
                       </div>
-                      <div className="flex justify-between">
-                        <span>Fleet & Biz OpEx:</span>
-                        <span className="font-semibold text-foreground">{formatINR((m?.expenses ?? 0) + (t?.expenses ?? 0))}</span>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => { e.stopPropagation(); openInspector("expenses"); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); openInspector("expenses"); } }}
+                        className="flex justify-between py-0.5 hover:bg-rose-500/15 rounded px-1 -mx-1 transition-colors cursor-pointer"
+                        title="Click to inspect operating expenses"
+                      >
+                        <span className="underline decoration-dotted text-rose-700 dark:text-rose-300">Fleet & Biz OpEx:</span>
+                        <span className="font-semibold text-foreground flex items-center gap-1">
+                          {formatINR((m?.expenses ?? 0) + (t?.expenses ?? 0))}
+                          <ArrowRight className="h-3 w-3 text-rose-500" />
+                        </span>
                       </div>
                     </div>
                   </div>
-                  <div className="mt-3 pt-2 border-t border-rose-500/20 flex items-center justify-between text-[11px] text-rose-600 dark:text-rose-400 font-medium group-hover:underline">
-                    <span>Inspect wage breakdowns</span>
-                    <ArrowRight className="h-3 w-3" />
+                  <div className="mt-3 pt-2 border-t border-rose-500/20 flex items-center justify-between text-[11px] text-rose-600 dark:text-rose-400 font-medium">
+                    <span onClick={(e) => { e.stopPropagation(); openInspector("payout"); }} className="hover:underline cursor-pointer">Wages</span>
+                    <span>·</span>
+                    <span onClick={(e) => { e.stopPropagation(); openInspector("expenses"); }} className="hover:underline cursor-pointer">OpEx Math</span>
+                    <ArrowRight className="h-3 w-3 ml-auto" />
                   </div>
                 </div>
 

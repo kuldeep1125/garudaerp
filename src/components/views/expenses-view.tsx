@@ -33,6 +33,7 @@ import { useLang, t } from "@/lib/i18n";
 import {
   Receipt, Plus, MoreHorizontal, Pencil, Trash2, Repeat, ChevronDown, Play, Wallet, Hash, Download,
   Users, HandCoins, ArrowDownToLine, ArrowUpFromLine, Crown, Landmark, Building2, Check,
+  ArrowDownLeft, ArrowUpRight, CreditCard, RefreshCw, Info, RotateCcw,
 } from "lucide-react";
 import {
   type ExpenseRec, type VehicleRec, type Option, SelectInput, Field, ErrorState, MiniBars, MoneyInput,
@@ -145,20 +146,86 @@ function CommonBadge() {
   );
 }
 
+/** 5-in-1 Transaction Type Badge: Operating, Drawing, Deposit, Refund, Out-of-Pocket. */
+function TransactionTypeBadge({
+  kind,
+  categoryName,
+  isCommon,
+  spentById,
+}: {
+  kind?: string | null;
+  categoryName?: string | null;
+  isCommon?: boolean;
+  spentById?: string | null;
+}) {
+  const cat = (categoryName ?? "").trim().toUpperCase();
+  if (kind === "REFUND") {
+    return (
+      <Badge variant="outline" className="border-cyan-200 bg-cyan-50 text-[10px] font-medium text-cyan-700 dark:border-cyan-900 dark:bg-cyan-950 dark:text-cyan-300">
+        <RefreshCw className="mr-1 h-3 w-3" aria-hidden />Refund
+      </Badge>
+    );
+  }
+  if (kind === "CAPITAL") {
+    if (cat.includes("WITHDRAWAL") || cat.includes("DRAWING")) {
+      return (
+        <Badge variant="outline" className="border-amber-200 bg-amber-50 text-[10px] font-medium text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+          <ArrowUpRight className="mr-1 h-3 w-3" aria-hidden />Drawing
+        </Badge>
+      );
+    }
+    if (cat.includes("CONTRIBUTION") || cat.includes("DEPOSIT") || cat.includes("INVEST")) {
+      return (
+        <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
+          <ArrowDownLeft className="mr-1 h-3 w-3" aria-hidden />Deposit
+        </Badge>
+      );
+    }
+    return (
+      <Badge variant="outline" className="border-violet-200 bg-violet-50 text-[10px] font-medium text-violet-700 dark:border-violet-900 dark:bg-violet-950 dark:text-violet-300">
+        Capital
+      </Badge>
+    );
+  }
+  if (!isCommon && spentById) {
+    return (
+      <Badge variant="outline" className="border-purple-200 bg-purple-50 text-[10px] font-medium text-purple-700 dark:border-purple-900 dark:bg-purple-950 dark:text-purple-300">
+        <CreditCard className="mr-1 h-3 w-3" aria-hidden />Out-of-Pocket
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="border-slate-200 bg-slate-50 text-[10px] font-medium text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+      <Receipt className="mr-1 h-3 w-3" aria-hidden />Operating
+    </Badge>
+  );
+}
+
+export type ExpenseTxType = "OPERATING" | "DRAWING" | "DEPOSIT" | "REFUND" | "OUT_OF_POCKET";
+
+export interface ExpensePreset {
+  type?: ExpenseTxType;
+  categoryName?: string;
+  spentById?: string;
+  amount?: number;
+  description?: string;
+  reason?: string;
+}
+
 // ---------------------------------------------------------------------------
-// Add / edit expense dialog
+// Unified Financial Transaction Dialog (Expenses, Drawings, Deposits, Refunds)
 // ---------------------------------------------------------------------------
 
-function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, preset }: {
+export function ExpenseFormDialog({ open, onOpenChange, expense, vehicles = [], onDone, preset }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   expense: ExpenseRec | null;
-  vehicles: VehicleRec[];
+  vehicles?: VehicleRec[];
   onDone: () => void;
-  /** Optional pre-fill for quick actions (e.g. "Add deposit" opens the form with the Owner Contribution category). */
-  preset?: { categoryName?: string; spentById?: string } | null;
+  preset?: ExpensePreset | null;
 }) {
   const editing = Boolean(expense);
+  const [txType, setTxType] = useState<ExpenseTxType>("OPERATING");
   const [form, setForm] = useState({
     date: todayStr(), business: "MANPOWER", categoryId: "", amount: "", method: "Cash",
     description: "", vehicleId: "", notes: "", reason: "", spentById: "",
@@ -170,24 +237,50 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, pres
   const [newCatName, setNewCatName] = useState("");
   const { mutate, saving } = useMutation();
 
-  // Reset form each time the dialog opens (render-time state adjustment).
+  // Reset form each time the dialog opens
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
     setPrevOpen(open);
     if (open) {
       setNewCatOpen(false);
       setNewCatName("");
+
+      // Derive initial transaction type
+      let initialType: ExpenseTxType = "OPERATING";
+      if (preset?.type) {
+        initialType = preset.type;
+      } else if (preset?.categoryName === "Owner Contribution") {
+        initialType = "DEPOSIT";
+      } else if (preset?.categoryName === "Owner Withdrawal") {
+        initialType = "DRAWING";
+      } else if (preset?.categoryName?.toLowerCase().includes("refund")) {
+        initialType = "REFUND";
+      } else if (expense) {
+        if (expense.kind === "REFUND") initialType = "REFUND";
+        else if (expense.kind === "CAPITAL") {
+          const cat = (expense.categoryName ?? "").toUpperCase();
+          initialType = cat.includes("WITHDRAWAL") ? "DRAWING" : "DEPOSIT";
+        } else if (!expense.isCommon && expense.spentById) {
+          initialType = "OUT_OF_POCKET";
+        } else {
+          initialType = "OPERATING";
+        }
+      }
+      setTxType(initialType);
+
       setForm({
         date: expense?.date?.slice(0, 10) ?? todayStr(),
         business: expense?.business ?? "MANPOWER",
         categoryId: expense?.categoryId ?? "",
-        amount: expense ? String(expense.amount) : "",
+        amount: expense ? String(expense.amount) : (preset?.amount ? String(preset.amount) : ""),
         method: expense?.method ?? "Cash",
-        description: expense?.description ?? "",
+        description: expense?.description ?? (preset?.description || ""),
         vehicleId: expense?.vehicleId ?? "",
         notes: expense?.notes ?? "",
-        reason: expense?.reason ?? "",
-        spentById: expense ? (expense.isCommon ? "COMMON" : (expense.spentById ?? "")) : (preset?.spentById || ""),
+        reason: expense?.reason ?? (preset?.reason || ""),
+        spentById: expense
+          ? (expense.isCommon ? "COMMON" : (expense.spentById ?? ""))
+          : (preset?.spentById || ""),
       });
     }
   }
@@ -201,7 +294,7 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, pres
     return () => { cancelled = true; };
   }, [open, form.business]);
 
-  // Owners (who is taking out the money) + the acting user (default attribution).
+  // Owners list
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -214,8 +307,7 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, pres
     return () => { cancelled = true; };
   }, [open]);
 
-  // Quick-action preset: resolve the pre-filled category by NAME (render-time
-  // derivation — no setState inside an effect). Only for brand-new expenses.
+  // Pre-filled category name resolution
   const presetCategoryId = useMemo(() => {
     if (editing || !preset?.categoryName) return "";
     return categories.find((c) => c.name.toUpperCase() === preset.categoryName!.toUpperCase())?.id ?? "";
@@ -223,8 +315,6 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, pres
 
   const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
 
-  // Inactive categories stay out of the picker — except the one already on the
-  // record being edited, so edit never shows a blank where a category was.
   const categoryOptions = useMemo(() => {
     const selectedId = form.categoryId || presetCategoryId || expense?.categoryId || "";
     return categories
@@ -251,24 +341,30 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, pres
     const amt = parseAmount(form.amount);
     if (amt <= 0) { toast.error("Enter a valid amount"); return; }
     if (!form.date) { toast.error("Date is required"); return; }
+
+    // Validation for owner-specific flows
+    if ((txType === "DRAWING" || txType === "DEPOSIT" || txType === "OUT_OF_POCKET") && (!form.spentById || form.spentById === "COMMON")) {
+      toast.error("Please select a specific owner for this transaction");
+      return;
+    }
+
     const body = {
       date: form.date,
       business: form.business,
-      // Always send the selection: "" explicitly clears the category on PUT
-      // (e.g. after a business switch) — the API re-stamps kind in the same pass.
       categoryId: form.categoryId || presetCategoryId || "",
       amount: amt,
       method: form.method || undefined,
       description: form.description || undefined,
       notes: form.notes || undefined,
       reason: form.reason || undefined,
-      // "" → attribute to the acting user (API default); "COMMON" → shared by all owners.
-      spentById: form.spentById || meId || undefined,
+      spentById: txType === "OPERATING" && form.spentById === "COMMON" ? "COMMON" : (form.spentById || meId || undefined),
       vehicleId: form.business === "TRANSPORT" && form.vehicleId ? form.vehicleId : undefined,
+      type: txType,
     };
+
     const res = editing
-      ? await mutate(() => api.put(`/api/expenses/${expense!.id}`, body), "Expense updated", () => ({ module: "EXPENSE", recordId: expense!.id, onUndo: onDone }))
-      : await mutate(() => api.post("/api/expenses", body), "Expense recorded", (data) => ({ module: "EXPENSE", recordId: (data as { id: string }).id, onUndo: onDone }));
+      ? await mutate(() => api.put(`/api/expenses/${expense!.id}`, body), "Transaction updated", () => ({ module: "EXPENSE", recordId: expense!.id, onUndo: onDone }))
+      : await mutate(() => api.post("/api/expenses", body), "Transaction recorded", (data) => ({ module: "EXPENSE", recordId: (data as { id: string }).id, onUndo: onDone }));
     if (res.ok) { onOpenChange(false); onDone(); }
   };
 
@@ -278,91 +374,222 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, pres
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{editing ? "Edit Expense" : "Add Expense"}</DialogTitle>
-          <DialogDescription>Track who took the money, why, and which business it belongs to.</DialogDescription>
+          <DialogTitle>{editing ? "Edit Financial Entry" : "Record Financial Entry"}</DialogTitle>
+          <DialogDescription>Accurately categorize business costs, owner personal drawings, capital deposits, or refunds.</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
+
+        {/* 5-in-1 Transaction Type Segmented Bar */}
+        <div className="space-y-2">
+          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Transaction Nature</label>
+          <div className="grid grid-cols-2 gap-1.5 p-1 bg-muted/60 rounded-xl sm:grid-cols-5 text-xs">
+            <button
+              type="button"
+              onClick={() => setTxType("OPERATING")}
+              className={cn(
+                "flex items-center justify-center gap-1.5 py-2 px-1.5 rounded-lg font-medium transition-all text-center",
+                txType === "OPERATING" ? "bg-background text-foreground shadow-sm font-semibold" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <Receipt className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+              <span>Operating</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTxType("DRAWING")}
+              className={cn(
+                "flex items-center justify-center gap-1.5 py-2 px-1.5 rounded-lg font-medium transition-all text-center",
+                txType === "DRAWING" ? "bg-background text-amber-600 dark:text-amber-400 shadow-sm font-semibold" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <ArrowUpRight className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+              <span>Drawing</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTxType("DEPOSIT")}
+              className={cn(
+                "flex items-center justify-center gap-1.5 py-2 px-1.5 rounded-lg font-medium transition-all text-center",
+                txType === "DEPOSIT" ? "bg-background text-emerald-600 dark:text-emerald-400 shadow-sm font-semibold" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <ArrowDownLeft className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+              <span>Deposit</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTxType("REFUND")}
+              className={cn(
+                "flex items-center justify-center gap-1.5 py-2 px-1.5 rounded-lg font-medium transition-all text-center",
+                txType === "REFUND" ? "bg-background text-cyan-600 dark:text-cyan-400 shadow-sm font-semibold" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <RefreshCw className="h-3.5 w-3.5 text-cyan-500 shrink-0" />
+              <span>Refund</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTxType("OUT_OF_POCKET")}
+              className={cn(
+                "flex items-center justify-center gap-1.5 py-2 px-1.5 rounded-lg font-medium transition-all text-center col-span-2 sm:col-span-1",
+                txType === "OUT_OF_POCKET" ? "bg-background text-purple-600 dark:text-purple-400 shadow-sm font-semibold" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <CreditCard className="h-3.5 w-3.5 text-purple-500 shrink-0" />
+              <span>Out-of-Pocket</span>
+            </button>
+          </div>
+
+          {/* Contextual Accounting Guidance Banner */}
+          <div className={cn(
+            "p-3 rounded-xl border text-xs flex items-start gap-2.5 transition-colors",
+            txType === "OPERATING" && "bg-blue-50/70 dark:bg-blue-950/30 border-blue-200 dark:border-blue-900 text-blue-900 dark:text-blue-200",
+            txType === "DRAWING" && "bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900 text-amber-900 dark:text-amber-200",
+            txType === "DEPOSIT" && "bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 text-emerald-900 dark:text-emerald-200",
+            txType === "REFUND" && "bg-cyan-50/70 dark:bg-cyan-950/30 border-cyan-200 dark:border-cyan-900 text-cyan-900 dark:text-cyan-200",
+            txType === "OUT_OF_POCKET" && "bg-purple-50/70 dark:bg-purple-950/30 border-purple-200 dark:border-purple-900 text-purple-900 dark:text-purple-200",
+          )}>
+            <Info className="h-4 w-4 shrink-0 mt-0.5" aria-hidden />
+            <div>
+              {txType === "OPERATING" && "Company operating expenditure paid from business cash/bank. Feeds P&L operating expenses."}
+              {txType === "DRAWING" && "Owner took cash from company funds for personal use. Deducted from owner equity in passbook — never inflates business P&L expenses."}
+              {txType === "DEPOSIT" && "Owner deposited money into company bank or cash (capital injection or drawing repayment). Added to owner equity in passbook."}
+              {txType === "REFUND" && "Funds returned to company (unused cash returned or vendor refund). Directly offsets and reduces operating expenses on dashboards & P&L."}
+              {txType === "OUT_OF_POCKET" && "Owner paid for a business expense using their personal pocket. Company owes reimbursement; credited in owner passbook."}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 pt-1">
           <Field label="Date" required>
             <Input type="date" value={form.date} onChange={(e) => set("date")(e.target.value)} className="h-10" />
           </Field>
-          <Field label="Business" required>
-            <SelectInput
-              value={form.business}
-              onChange={(v) => setForm((f) => ({ ...f, business: v, categoryId: "", vehicleId: "" }))}
-              options={[{ label: "Manpower", value: "MANPOWER" }, { label: "Transport", value: "TRANSPORT" }]}
-            />
-          </Field>
+
+          {/* Business field — visible for OPERATING, REFUND, OUT_OF_POCKET */}
+          {txType !== "DRAWING" && txType !== "DEPOSIT" ? (
+            <Field label="Business Division" required>
+              <SelectInput
+                value={form.business}
+                onChange={(v) => setForm((f) => ({ ...f, business: v, categoryId: "", vehicleId: "" }))}
+                options={[{ label: "Manpower", value: "MANPOWER" }, { label: "Transport", value: "TRANSPORT" }]}
+              />
+            </Field>
+          ) : (
+            <Field label="Business Division">
+              <SelectInput
+                value={form.business}
+                onChange={(v) => setForm((f) => ({ ...f, business: v }))}
+                options={[{ label: "Manpower", value: "MANPOWER" }, { label: "Transport", value: "TRANSPORT" }]}
+              />
+            </Field>
+          )}
+
+          {/* Owner Selector with Contextual Labels */}
           <Field
-            label="Paid by / Owner"
-            required
-            hint={form.spentById === "COMMON" ? "Shared equally by all owners & the business" : `Attributed to ${selectedOwnerLabel}`}
+            label={
+              txType === "DRAWING" ? "Owner Withdrawing Cash" :
+              txType === "DEPOSIT" ? "Owner Depositing Capital / Repaying" :
+              txType === "OUT_OF_POCKET" ? "Owner Who Paid From Pocket" :
+              "Paid by / Attributed To"
+            }
+            required={txType === "DRAWING" || txType === "DEPOSIT" || txType === "OUT_OF_POCKET"}
+            hint={
+              txType === "DRAWING" ? "Owner whose equity will decrease" :
+              txType === "DEPOSIT" ? "Owner whose equity will increase" :
+              txType === "OUT_OF_POCKET" ? "Company will owe reimbursement to this owner" :
+              form.spentById === "COMMON" ? "Shared equally by all owners & the business" : `Attributed to ${selectedOwnerLabel}`
+            }
             className="sm:col-span-2"
           >
             <SelectInput
               value={form.spentById}
               onChange={set("spentById")}
-              placeholder={meId ? "Select who is taking the money…" : "Loading…"}
+              placeholder={txType === "OPERATING" ? "Select owner or Common…" : "Select owner…"}
               options={[
-                { label: "Common — shared by all owners & business", value: "COMMON" },
+                ...(txType === "OPERATING" ? [{ label: "Common — shared by all owners & business", value: "COMMON" }] : []),
                 ...owners.map((o) => ({ label: o.name, value: o.id })),
               ]}
             />
           </Field>
-          <Field label="Reason" hint="Why the money was taken / spent" className="sm:col-span-2">
+
+          {/* Reason / Detail */}
+          <Field
+            label={txType === "DRAWING" ? "Drawing Reason" : txType === "DEPOSIT" ? "Deposit Reason" : txType === "REFUND" ? "Refund Reason" : "Reason / Purpose"}
+            hint={
+              txType === "DRAWING" ? "e.g. Personal advance, salary withdrawal" :
+              txType === "DEPOSIT" ? "e.g. Repaying withdrawal, new equity investment" :
+              txType === "REFUND" ? "e.g. Returned unused generator cash, vendor credit" :
+              "Why the money was spent"
+            }
+            className="sm:col-span-2"
+          >
             <Input
               value={form.reason}
               onChange={(e) => set("reason")(e.target.value)}
               className="h-10"
-              placeholder="e.g. Diesel for generator · Salary withdrawal · Office tea"
+              placeholder={
+                txType === "DRAWING" ? "e.g. Personal cash withdrawal" :
+                txType === "DEPOSIT" ? "e.g. Repaying previous drawing" :
+                txType === "REFUND" ? "e.g. Returned excess cash from diesel" :
+                "e.g. Generator diesel · Office tea · Uniforms"
+              }
             />
           </Field>
-          <Field label="Category">
-            <SelectInput
-              value={form.categoryId || presetCategoryId}
-              onChange={set("categoryId")}
-              placeholder="Select category…"
-              options={categoryOptions}
-            />
-          </Field>
-          <div className="sm:col-span-1 sm:row-start-auto">
-            {!newCatOpen ? (
-              <Button
-                type="button" variant="outline" size="sm"
-                className="mt-1 h-9 w-full gap-1 text-xs sm:mt-6"
-                onClick={() => setNewCatOpen(true)}
-              >
-                <Plus className="h-3.5 w-3.5" aria-hidden />New category
-              </Button>
-            ) : (
-              <div className="mt-1 flex gap-1.5 sm:mt-6">
-                <Input
-                  value={newCatName}
-                  onChange={(e) => setNewCatName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void createCategory(); } }}
-                  className="h-9 text-xs"
-                  placeholder={`Category for ${form.business === "TRANSPORT" ? "Transport" : "Manpower"}`}
-                  aria-label="New category name"
-                  autoFocus
+
+          {/* Category — only relevant for OPERATING, REFUND, OUT_OF_POCKET */}
+          {txType !== "DRAWING" && txType !== "DEPOSIT" && (
+            <>
+              <Field label="Category">
+                <SelectInput
+                  value={form.categoryId || presetCategoryId}
+                  onChange={set("categoryId")}
+                  placeholder="Select category…"
+                  options={categoryOptions}
                 />
-                <Button type="button" size="sm" className="h-9 shrink-0 px-2.5" onClick={() => void createCategory()} disabled={saving} aria-label="Create category">
-                  <Check className="h-3.5 w-3.5" aria-hidden />
-                </Button>
-                <Button type="button" size="sm" variant="ghost" className="h-9 shrink-0 px-2.5" onClick={() => { setNewCatOpen(false); setNewCatName(""); }} aria-label="Cancel category creation">
-                  ✕
-                </Button>
+              </Field>
+              <div className="sm:col-span-1 sm:row-start-auto">
+                {!newCatOpen ? (
+                  <Button
+                    type="button" variant="outline" size="sm"
+                    className="mt-1 h-9 w-full gap-1 text-xs sm:mt-6"
+                    onClick={() => setNewCatOpen(true)}
+                  >
+                    <Plus className="h-3.5 w-3.5" aria-hidden />New category
+                  </Button>
+                ) : (
+                  <div className="mt-1 flex gap-1.5 sm:mt-6">
+                    <Input
+                      value={newCatName}
+                      onChange={(e) => setNewCatName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void createCategory(); } }}
+                      className="h-9 text-xs"
+                      placeholder={`Category for ${form.business === "TRANSPORT" ? "Transport" : "Manpower"}`}
+                      aria-label="New category name"
+                      autoFocus
+                    />
+                    <Button type="button" size="sm" className="h-9 shrink-0 px-2.5" onClick={() => void createCategory()} disabled={saving} aria-label="Create category">
+                      <Check className="h-3.5 w-3.5" aria-hidden />
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" className="h-9 shrink-0 px-2.5" onClick={() => { setNewCatOpen(false); setNewCatName(""); }} aria-label="Cancel category creation">
+                      ✕
+                    </Button>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </>
+          )}
+
           <Field label="Amount (₹)" required>
             <MoneyInput value={form.amount} onChange={set("amount")} min={1} className="h-10" />
           </Field>
-          <Field label="Method">
+
+          <Field label="Payment Method">
             <SelectInput value={form.method} onChange={set("method")} options={METHOD_OPTIONS} />
           </Field>
-          {form.business === "TRANSPORT" && (
-            <Field label="Vehicle">
+
+          {form.business === "TRANSPORT" && txType !== "DRAWING" && txType !== "DEPOSIT" && (
+            <Field label="Vehicle Asset">
               <SelectInput
                 value={form.vehicleId}
                 onChange={set("vehicleId")}
@@ -371,17 +598,19 @@ function ExpenseFormDialog({ open, onOpenChange, expense, vehicles, onDone, pres
               />
             </Field>
           )}
+
           <Field label="Description" className="sm:col-span-2">
-            <Input value={form.description} onChange={(e) => set("description")(e.target.value)} className="h-10" placeholder="What was this expense for?" />
+            <Input value={form.description} onChange={(e) => set("description")(e.target.value)} className="h-10" placeholder="Optional brief summary…" />
           </Field>
           <Field label="Notes" className="sm:col-span-2">
-            <Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} rows={2} placeholder="Optional" />
+            <Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} rows={2} placeholder="Optional extra remarks…" />
           </Field>
         </div>
+
         <DialogFooter className="gap-2">
           <Button variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button className="min-h-10 flex-1 sm:flex-none" onClick={submit} disabled={saving}>
-            {saving ? "Saving…" : editing ? "Save changes" : "Add expense"}
+            {saving ? "Saving…" : editing ? "Save changes" : "Record transaction"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1133,6 +1362,7 @@ export default function ExpensesView({ navigate }: ViewProps) {
   const [categoryId, setCategoryId] = useState("");
   const [vehicleId, setVehicleId] = useState("");
   const [ownerId, setOwnerId] = useState("");
+  const [expenseType, setExpenseType] = useState("");
   const [search, setSearch] = useState("");
   const searchDeb = useDebounced(search);
   const [rangeKey, setRangeKey] = useState<RangeKey>("month");
@@ -1151,18 +1381,31 @@ export default function ExpensesView({ navigate }: ViewProps) {
   const owners = useAsync<{ items: OwnerRec[] }>(() => api.get("/api/owners"), []);
 
   // Main list
-  const expenses = useAsync<ListResp<ExpenseRec> & { totals?: { amount: number; operating?: number; capital?: number; common?: number } }>(
+  const expenses = useAsync<ListResp<ExpenseRec> & {
+    totals?: {
+      amount: number;
+      operating?: number;
+      netOperating?: number;
+      capital?: number;
+      netCapital?: number;
+      common?: number;
+      refunds?: number;
+      deposits?: number;
+      withdrawals?: number;
+    };
+  }>(
     () => api.get("/api/expenses" + qs({
       business: business || undefined,
       categoryId: categoryId || undefined,
       vehicleId: vehicleId || undefined,
       ownerId: ownerId || undefined,
+      type: expenseType || undefined,
       from: eff.from || undefined,
       to: eff.to || undefined,
       search: searchDeb || undefined,
       pageSize: 200,
     })),
-    [business, categoryId, vehicleId, ownerId, eff.from, eff.to, searchDeb]
+    [business, categoryId, vehicleId, ownerId, expenseType, eff.from, eff.to, searchDeb]
   );
 
   // Recurring section
@@ -1182,11 +1425,25 @@ export default function ExpensesView({ navigate }: ViewProps) {
   const [deleteTarget, setDeleteTarget] = useState<ExpenseRec | null>(null);
   const [catManageOpen, setCatManageOpen] = useState(false);
 
-  // Quick actions from the Owner Breakdown tab open the Add Expense dialog
-  // pre-filled with the right capital category (and owner when focused).
-  const [addPreset, setAddPreset] = useState<{ categoryName: string; spentById?: string } | null>(null);
+  // Quick actions open the Add Expense dialog pre-filled with preset
+  const [addPreset, setAddPreset] = useState<ExpensePreset | null>(null);
   const openQuickCapital = (kind: QuickCapitalKind, ownerId?: string) => {
-    setAddPreset({ categoryName: kind === "deposit" ? "Owner Contribution" : "Owner Withdrawal", spentById: ownerId || undefined });
+    setAddPreset({
+      type: kind === "deposit" ? "DEPOSIT" : "DRAWING",
+      categoryName: kind === "deposit" ? "Owner Contribution" : "Owner Withdrawal",
+      spentById: ownerId || undefined,
+    });
+    setAddOpen(true);
+  };
+  const openQuickRefund = (r: ExpenseRec) => {
+    setAddPreset({
+      type: "REFUND",
+      categoryName: "Expense Refund",
+      amount: r.amount,
+      description: `Refund: ${r.description || r.categoryName || "Expense"}`,
+      reason: `Returned from ${fmtDay(r.date)} expense`,
+      spentById: r.spentById || undefined,
+    });
     setAddOpen(true);
   };
 
@@ -1347,11 +1604,11 @@ export default function ExpensesView({ navigate }: ViewProps) {
       key: "description", label: t(lang, "col.expense"), primary: true,
       render: (r) => (
         <div className="min-w-0">
-          <p className="flex items-center gap-1.5 truncate font-medium">
-            {r.description || r.categoryName || "Untitled expense"}
-            {r.kind === "CAPITAL" && <CapitalBadge />}
-          </p>
-          <p className="truncate text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="font-medium truncate">{r.description || r.categoryName || "Untitled expense"}</span>
+            <TransactionTypeBadge kind={r.kind} categoryName={r.categoryName} isCommon={r.isCommon} spentById={r.spentById} />
+          </div>
+          <p className="truncate text-[11px] text-muted-foreground mt-0.5">
             {fmtDay(r.date)} · {r.categoryName ?? "Uncategorized"}{r.reason ? ` · ${r.reason}` : ""}
           </p>
         </div>
@@ -1379,7 +1636,22 @@ export default function ExpensesView({ navigate }: ViewProps) {
     },
     {
       key: "amount", label: t(lang, "col.amount"), className: "text-right",
-      render: (r) => <span className="font-semibold tabular-nums">{formatINR(r.amount)}</span>,
+      render: (r) => {
+        const isRefund = r.kind === "REFUND";
+        const cat = (r.categoryName ?? "").toUpperCase();
+        const isDeposit = r.kind === "CAPITAL" && (cat.includes("CONTRIBUTION") || cat.includes("DEPOSIT") || cat.includes("INVEST"));
+        const isDrawing = r.kind === "CAPITAL" && (cat.includes("WITHDRAWAL") || cat.includes("DRAWING"));
+        return (
+          <span className={cn(
+            "font-semibold tabular-nums",
+            isRefund && "text-cyan-600 dark:text-cyan-400 font-bold",
+            isDeposit && "text-emerald-600 dark:text-emerald-400 font-bold",
+            isDrawing && "text-amber-600 dark:text-amber-400"
+          )}>
+            {isRefund || isDeposit ? `+${formatINR(r.amount)}` : formatINR(r.amount)}
+          </span>
+        );
+      },
       value: (r) => formatINR(r.amount),
     },
     {
@@ -1392,10 +1664,16 @@ export default function ExpensesView({ navigate }: ViewProps) {
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-36">
+            <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuItem onClick={() => setEditTarget(r)}>
                 <Pencil className="h-3.5 w-3.5" />Edit
               </DropdownMenuItem>
+              {r.kind === "OPERATING" && (
+                <DropdownMenuItem onClick={() => openQuickRefund(r)}>
+                  <RefreshCw className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
+                  <span>Record Refund / Return</span>
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem className="text-red-600 dark:text-red-400" onClick={() => setDeleteTarget(r)}>
                 <Trash2 className="h-3.5 w-3.5" />Delete
               </DropdownMenuItem>
@@ -1409,7 +1687,12 @@ export default function ExpensesView({ navigate }: ViewProps) {
 
   const totals = expenses.data?.totals;
   const operating = totals?.operating ?? 0;
+  const netOperating = totals?.netOperating ?? operating;
+  const refunds = totals?.refunds ?? 0;
   const capital = totals?.capital ?? 0;
+  const netCapital = totals?.netCapital ?? 0;
+  const deposits = totals?.deposits ?? 0;
+  const withdrawals = totals?.withdrawals ?? 0;
 
   return (
     <div className="space-y-4">
@@ -1459,8 +1742,21 @@ export default function ExpensesView({ navigate }: ViewProps) {
           {/* Filters */}
           <Card>
             <CardContent className="space-y-3 p-3 sm:p-4">
-              <div className="grid grid-cols-2 gap-2.5 sm:gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid grid-cols-2 gap-2.5 sm:gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 <SelectInput value={business} onChange={onBusinessChange} options={BUSINESS_OPTIONS} placeholder="All businesses" />
+                <SelectInput
+                  value={expenseType}
+                  onChange={setExpenseType}
+                  options={[
+                    { label: "All types", value: "" },
+                    { label: "Operating (Business costs)", value: "OPERATING" },
+                    { label: "Drawings (Owner withdrawals)", value: "DRAWING" },
+                    { label: "Deposits (Owner capital/repayments)", value: "DEPOSIT" },
+                    { label: "Refunds (Cash returned)", value: "REFUND" },
+                    { label: "Out-of-Pocket (Paid by owner)", value: "OUT_OF_POCKET" },
+                  ]}
+                  placeholder="All types"
+                />
                 <SelectInput
                   value={categoryId}
                   onChange={setCategoryId}
@@ -1517,32 +1813,38 @@ export default function ExpensesView({ navigate }: ViewProps) {
             </CardContent>
           </Card>
 
-          <StatGrid cols={2}>
+          <StatGrid cols={2} className="sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
-              label="Operating expenses"
-              value={formatINR(operating)}
+              label="Net Operating"
+              value={formatINR(netOperating)}
               icon={Wallet}
               tone="negative"
-              hint="Feeds profit & reports"
+              hint={refunds > 0 ? `Gross ${formatINR(operating)} − Refunds ${formatINR(refunds)}` : "Feeds profit & reports"}
             />
             <StatCard
-              label="Owner capital"
-              value={formatINR(capital)}
+              label="Refunds & Returns"
+              value={formatINR(refunds)}
+              icon={RefreshCw}
+              tone="positive"
+              hint="Offsets operating overhead"
+            />
+            <StatCard
+              label="Owner Capital Flow"
+              value={formatINR(netCapital)}
               icon={Landmark}
-              hint="Deposits + withdrawals (not expenses)"
+              hint={`Deposits ${formatINR(deposits)} | Drawings ${formatINR(withdrawals)}`}
             />
             <StatCard
-              label="Common (shared)"
+              label="Common & Total"
               value={formatINR(totals?.common ?? 0)}
               icon={Users}
-              hint="Shared by all owners & business"
+              hint={`${expenses.data?.total ?? items.length} records matching`}
             />
-            <StatCard label="Records" value={String(expenses.data?.total ?? items.length)} icon={Hash} hint="Matching current filters" />
           </StatGrid>
 
           {/* Reconciliation strip — visible guarantee the numbers always add up */}
           <p className="px-1 text-[11px] text-muted-foreground">
-            Reconciliation: operating {formatINR(operating)} + owner capital {formatINR(capital)} = total {formatINR(totals?.amount ?? 0)} across every surface.
+            Reconciliation: Gross operating {formatINR(operating)} − Refunds {formatINR(refunds)} = Net operating {formatINR(netOperating)}. Owner Capital: Deposits {formatINR(deposits)} − Drawings {formatINR(withdrawals)} = Net capital {formatINR(netCapital)}. Grand total of all rows: {formatINR(totals?.amount ?? 0)}.
           </p>
 
           <div className="grid gap-4 xl:grid-cols-3">

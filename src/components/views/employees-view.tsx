@@ -46,8 +46,16 @@ const TYPE_OPTIONS: Option[] = [
 
 const STATUS_VALUES = ["ACTIVE", "INACTIVE"];
 
-export default function EmployeesView({ navigate }: ViewProps) {
+export default function EmployeesView({ params, navigate }: ViewProps) {
   const { lang } = useLang();
+
+  // If a specific employee ID is passed via navigation bridge, forward straight to detail
+  useEffect(() => {
+    if (params?.id) {
+      navigate("employee-detail", { id: params.id });
+    }
+  }, [params?.id, navigate]);
+
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [employmentType, setEmploymentType] = useState("");

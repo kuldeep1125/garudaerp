@@ -90,12 +90,11 @@ function tripPaidPct(t: TripRec): number {
 
 export default function TripsView({ params, navigate }: ViewProps) {
   const { lang } = useLang();
-  void navigate; // reserved (vehicle-detail links here with vehicleId preselected)
   const { mutate, saving } = useMutation();
 
   // Filters
   const [vehicleId, setVehicleId] = useState(params?.vehicleId ?? "");
-  const [clientId, setClientId] = useState("");
+  const [clientId, setClientId] = useState(params?.clientId ?? "");
   const [status, setStatus] = useState("");
   const [paymentStatus, setPaymentStatus] = useState("");
   const [rangeKey, setRangeKey] = useState<RangeKey | "custom">("month");
@@ -364,7 +363,38 @@ export default function TripsView({ params, navigate }: ViewProps) {
               </DialogHeader>
 
               <div className="rounded-xl border bg-muted/30 px-3.5 py-2">
-                <KV label="Vehicle" value={detailTrip.vehicleReg ? `${detailTrip.vehicleName ?? ""} · ${detailTrip.vehicleReg}` : detailTrip.vehicleName ?? "—"} />
+                <KV
+                  label="Vehicle"
+                  value={
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                      onClick={() => {
+                        setDetailId(null);
+                        navigate("vehicle-detail", { id: detailTrip.vehicleId });
+                      }}
+                    >
+                      {detailTrip.vehicleReg ? `${detailTrip.vehicleName ?? ""} · ${detailTrip.vehicleReg}` : detailTrip.vehicleName ?? "—"}
+                      <span className="text-[10px] text-muted-foreground">↗</span>
+                    </button>
+                  }
+                />
+                <KV
+                  label="Client"
+                  value={
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                      onClick={() => {
+                        setDetailId(null);
+                        navigate("clients", { id: detailTrip.clientId });
+                      }}
+                    >
+                      {detailTrip.clientName ?? "—"}
+                      <span className="text-[10px] text-muted-foreground">↗</span>
+                    </button>
+                  }
+                />
                 <KV label="Period" value={`${fmtDay(detailTrip.startAt)} → ${detailTrip.endAt ? fmtDay(detailTrip.endAt) : "ongoing"}`} />
                 <KV label="Pickup" value={detailTrip.pickup || "—"} />
                 <KV label="Destination" value={detailTrip.destination || "—"} />

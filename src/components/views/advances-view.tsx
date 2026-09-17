@@ -18,6 +18,10 @@ import {
   fmtDay, useAsync, GiveAdvanceDialog, errMessage,
 } from "./_shared";
 import { toast } from "sonner";
+import {
+  TransactionLineageDialog,
+  type TransactionLineageData,
+} from "@/components/shared/transaction-lineage-dialog";
 
 interface BalanceRow {
   employeeId: string;
@@ -31,6 +35,7 @@ interface BalanceRow {
 export default function AdvancesView({ navigate }: ViewProps) {
   const [tab, setTab] = useState("balances");
   const [giveOpen, setGiveOpen] = useState(false);
+  const [lineageData, setLineageData] = useState<TransactionLineageData | null>(null);
 
   // ----- Balances -----
   const balances = useAsync<{ items: BalanceRow[]; total: number }>(() => api.get("/api/advances/balances"), []);
@@ -209,6 +214,47 @@ export default function AdvancesView({ navigate }: ViewProps) {
                     emptyIcon={HandCoins}
                     emptyTitle="No advances found"
                     emptyDescription="Adjust the filters or record a new advance."
+                    onRowClick={(r) => {
+                      setLineageData({
+                        id: `adv-${r.id}`,
+                        title: `Salary Advance: ${r.employeeName || "Employee"}`,
+                        type: "EMPLOYEE ADVANCE DISBURSEMENT",
+                        amount: r.amount,
+                        date: fmtDay(r.date),
+                        createdAt: String(r.date),
+                        createdByName: r.givenByName || "Accounts Admin",
+                        ruleExplanation: "Salary advance given to staff. Created as a short-term receivable asset against the employee, recovered through payroll deduction at month-end settlement.",
+                        impactedAccounts: [
+                          {
+                            account: `Employee Advance Asset: ${r.employeeName || "Staff"}`,
+                            type: "debit",
+                            amount: r.amount,
+                            description: "Disbursed advance due from staff",
+                          },
+                          {
+                            account: r.method ? `Cash / Bank (${r.method})` : "Company Liquidity Account",
+                            type: "credit",
+                            amount: r.amount,
+                            description: "Cash / UPI outflow paid to employee",
+                          },
+                        ],
+                        linkedEntities: [
+                          {
+                            label: "Recipient Staff Profile",
+                            name: r.employeeName || "Employee",
+                            onClick: () => {
+                              setLineageData(null);
+                              navigate("employee-detail", { id: r.employeeId });
+                            },
+                          },
+                        ],
+                        notes: [
+                          r.reason ? `Reason: ${r.reason}` : null,
+                          r.method ? `Mode: ${r.method}` : null,
+                          r.givenByName ? `Given by: ${r.givenByName}` : null,
+                        ].filter(Boolean).join(" · ") || undefined,
+                      });
+                    }}
                   />
                 </>
               )}
@@ -218,6 +264,12 @@ export default function AdvancesView({ navigate }: ViewProps) {
       </Tabs>
 
       <GiveAdvanceDialog open={giveOpen} onOpenChange={setGiveOpen} onDone={refreshAll} />
+
+      <TransactionLineageDialog
+        open={Boolean(lineageData)}
+        onOpenChange={(o) => { if (!o) setLineageData(null); }}
+        data={lineageData}
+      />
     </div>
   );
 }

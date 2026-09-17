@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, qs } from "@/lib/api-client";
 import { formatINR } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
@@ -52,8 +52,16 @@ function shortDay(dateStr?: string | null): string {
 // Main view
 // ---------------------------------------------------------------------------
 
-export default function VehiclesView({ navigate }: ViewProps) {
+export default function VehiclesView({ params, navigate }: ViewProps) {
   const { lang } = useLang();
+
+  // If a specific vehicle ID is passed via navigation bridge, forward straight to detail
+  useEffect(() => {
+    if (params?.id) {
+      navigate("vehicle-detail", { id: params.id });
+    }
+  }, [params?.id, navigate]);
+
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
   const searchDeb = useDebounced(search);

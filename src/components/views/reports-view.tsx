@@ -196,7 +196,7 @@ function metaText(meta: unknown): string | null {
 // View
 // ---------------------------------------------------------------------------
 
-export default function ReportsView(_props: ViewProps) {
+export default function ReportsView({ navigate }: ViewProps) {
   const [type, setType] = useState<string | null>(null);
   const [range, setRange] = useState<RangeKey>("month");
   const [custom, setCustom] = useState(false);
@@ -694,6 +694,18 @@ export default function ReportsView(_props: ViewProps) {
                       columns={columns}
                       rows={rows}
                       rowKey={(r) => String(r.__idx)}
+                      onRowClick={(r) => {
+                        const rec = r as Record<string, unknown>;
+                        if (rec.employeeId) {
+                          navigate("employee-detail", { id: String(rec.employeeId) });
+                        } else if (rec.propertyId) {
+                          navigate("property-detail", { id: String(rec.propertyId) });
+                        } else if (rec.vehicleId) {
+                          navigate("vehicle-detail", { id: String(rec.vehicleId) });
+                        } else if (rec.tripId) {
+                          navigate("trips", { id: String(rec.tripId) });
+                        }
+                      }}
                       loading={loading}
                       emptyIcon={BarChart3}
                       emptyTitle="No data for this period"
