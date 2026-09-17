@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -62,10 +63,10 @@ export function TransactionLineageDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md sm:max-w-lg p-0 gap-0 overflow-hidden">
+      <DialogContent className="max-w-md sm:max-w-lg p-0 gap-0 overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[88vh]">
         {/* Header with Type & ID */}
-        <DialogHeader className="p-5 pb-3 border-b bg-muted/20">
-          <div className="flex items-center justify-between gap-2">
+        <DialogHeader className="p-4 sm:p-5 pb-3 border-b bg-muted/20 shrink-0">
+          <div className="flex items-center justify-between gap-2 pr-6">
             <Badge variant="outline" className="text-[11px] font-semibold tracking-wide uppercase">
               {data.type}
             </Badge>
@@ -82,7 +83,7 @@ export function TransactionLineageDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1 min-h-0 pb-6">
           {/* Amount & Date Banner */}
           <div className="flex items-center justify-between p-3.5 rounded-xl bg-primary/5 border border-primary/15">
             <div>
@@ -200,6 +201,10 @@ export function TransactionLineageDialog({
             </div>
           )}
         </div>
+
+        <DialogFooter className="p-3 border-t bg-muted/20 shrink-0">
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Close Trail</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

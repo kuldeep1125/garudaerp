@@ -399,9 +399,9 @@ function ClientPassbookDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto p-0 gap-0">
-        <DialogHeader className="p-5 pb-3 border-b bg-muted/20">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <DialogContent className="max-w-4xl max-h-[92vh] sm:max-h-[88vh] overflow-hidden p-0 gap-0 flex flex-col">
+        <DialogHeader className="p-4 sm:p-5 pb-3 border-b bg-muted/20 shrink-0">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pr-6">
             <div>
               <div className="flex items-center gap-2">
                 <DialogTitle className="text-xl font-bold">{client.name}</DialogTitle>
@@ -451,7 +451,7 @@ function ClientPassbookDialog({
           </div>
         </DialogHeader>
 
-        <div className="p-5 space-y-4">
+        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1 min-h-0 pb-6">
           {/* Headline Stats with Click-to-Inspect Formula Math */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <StatCard
@@ -497,7 +497,7 @@ function ClientPassbookDialog({
             </TabsList>
 
             {/* TAB 1: STATEMENT LEDGER */}
-            <TabsContent value="statement" className="mt-3">
+            <TabsContent value="statement" className="mt-3 pb-6">
               <Card>
                 <CardContent className="p-0">
                   <DataTable
@@ -561,7 +561,7 @@ function ClientPassbookDialog({
             </TabsContent>
 
             {/* TAB 2: BOOKINGS LOG */}
-            <TabsContent value="bookings" className="mt-3">
+            <TabsContent value="bookings" className="mt-3 pb-6">
               <Card>
                 <CardContent className="p-0">
                   <DataTable
@@ -620,7 +620,7 @@ function ClientPassbookDialog({
             </TabsContent>
 
             {/* TAB 3: CLIENT PROFILE */}
-            <TabsContent value="profile" className="mt-3">
+            <TabsContent value="profile" className="mt-3 pb-6">
               <Card>
                 <CardContent className="p-4 space-y-3 text-sm">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -672,6 +672,10 @@ function ClientPassbookDialog({
           onOpenChange={(o) => { if (!o) setLineageData(null); }}
           data={lineageData}
         />
+
+        <DialogFooter className="p-3 border-t bg-muted/20 shrink-0">
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Close Passbook</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -681,7 +685,7 @@ function ClientPassbookDialog({
 // View
 // ---------------------------------------------------------------------------
 
-export default function ClientsView({ navigate }: ViewProps) {
+export default function ClientsView({ params, navigate }: ViewProps) {
   const { lang } = useLang();
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
@@ -694,6 +698,17 @@ export default function ClientsView({ navigate }: ViewProps) {
   );
 
   const clients = data?.items ?? [];
+
+  // Auto-open Client 360° Passbook if linked via navigation parameter id or clientId
+  useEffect(() => {
+    const targetId = params?.id || params?.clientId;
+    if (targetId && clients.length > 0) {
+      const match = clients.find((c) => c.id === targetId);
+      if (match) {
+        setSelectedClient(match);
+      }
+    }
+  }, [params?.id, params?.clientId, clients]);
 
   const columns: Column<ClientRec>[] = [
     {

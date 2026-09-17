@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { formatINR } from "@/lib/money";
 import type { ViewProps } from "@/components/view-types";
@@ -17,7 +17,7 @@ import { toast } from "sonner";
 import {
   CalendarRange, ClipboardCopy, Crown, EllipsisVertical, Info, KeyRound, Mail, MessageCircle, Minus, Pencil,
   Plus, Send, ShieldCheck, TrendingDown, TrendingUp, UserPlus, Wallet, IndianRupee, ArrowDownLeft, ArrowUpRight,
-  FileText, CheckCircle, Clock, GitCommit,
+  FileText, CheckCircle, Clock, GitCommit, RefreshCw,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -44,6 +44,7 @@ import {
   Field, InitialAvatar, ListResp, errMessage, fmtDay, useAsync, useMutation,
 } from "./_shared";
 import { useAuth } from "@/components/providers";
+import { ExpenseFormDialog, type ExpensePreset } from "./expenses-view";
 
 // ---------------------------------------------------------------------------
 // Owner row shape (GET /api/owners → { items })
@@ -274,6 +275,7 @@ interface OwnerPassbookResp {
     contributions: number;
     drawings: number;
     outOfPocketSpend: number;
+    refunds?: number;
     netBalance: number;
     recordsCount: number;
   };
@@ -281,7 +283,7 @@ interface OwnerPassbookResp {
     id: string;
     date: string;
     createdAt: string;
-    type: "CONTRIBUTION" | "DRAWING" | "OUT_OF_POCKET";
+    type: "CONTRIBUTION" | "DRAWING" | "OUT_OF_POCKET" | "REFUND";
     title: string;
     subtitle: string;
     inflow: number;
@@ -305,6 +307,37 @@ function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: (
   );
   const [inspectorData, setInspectorData] = useState<FormulaInspectorData | null>(null);
   const [lineageData, setLineageData] = useState<TransactionLineageData | null>(null);
+  const [expenseFormOpen, setExpenseFormOpen] = useState(false);
+  const [expensePreset, setExpensePreset] = useState<ExpensePreset | null>(null);
+
+  const openNewDeposit = () => {
+    setExpensePreset({
+      type: "DEPOSIT",
+      categoryName: "Owner Contribution",
+      spentById: target.id,
+      reason: `Capital deposit / repayment by ${target.name}`,
+    });
+    setExpenseFormOpen(true);
+  };
+
+  const openNewDrawing = () => {
+    setExpensePreset({
+      type: "DRAWING",
+      categoryName: "Owner Withdrawal",
+      spentById: target.id,
+      reason: `Personal drawing / cash withdrawal by ${target.name}`,
+    });
+    setExpenseFormOpen(true);
+  };
+
+  const openNewOutOfPocket = () => {
+    setExpensePreset({
+      type: "OUT_OF_POCKET",
+      spentById: target.id,
+      reason: `Business expense paid personally by ${target.name}`,
+    });
+    setExpenseFormOpen(true);
+  };
 
   const openInspector = (metric: "contributions" | "drawings" | "outofpocket" | "net") => {
     if (!data) return;
@@ -384,7 +417,7 @@ function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: (
     setLineageData({
       id: item.id,
       title: item.title,
-      type: item.type === "CONTRIBUTION" ? "Owner Contribution" : item.type === "DRAWING" ? "Owner Drawing" : "Out-of-Pocket Expense",
+      type: item.type === "CONTRIBUTION" ? "Owner Contribution" : item.type === "DRAWING" ? "Owner Drawing" : item.type === "REFUND" ? "Expense Refund" : "Out-of-Pocket Expense",
       amount: item.inflow > 0 ? item.inflow : item.outflow,
       date: fmtDay(item.date),
       createdAt: item.createdAt,
@@ -393,6 +426,8 @@ function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: (
         ? "Partner contributed personal funds into the business bank/cash account."
         : item.type === "DRAWING"
         ? "Partner withdrew company funds for personal use, reducing equity."
+        : item.type === "REFUND"
+        ? "Returned unused operational cash or vendor refund deposited back into company funds."
         : "Partner paid a legitimate operational expense on behalf of Garuda from personal funds.",
       impactedAccounts: item.type === "CONTRIBUTION" ? [
         { account: "Company Bank / Cash", type: "debit", amount: item.inflow, description: "Funds deposited" },
@@ -400,6 +435,9 @@ function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: (
       ] : item.type === "DRAWING" ? [
         { account: `Partner Capital (${target.name})`, type: "debit", amount: item.outflow, description: "Equity reduced" },
         { account: "Company Bank / Cash", type: "credit", amount: item.outflow, description: "Funds withdrawn" },
+      ] : item.type === "REFUND" ? [
+        { account: "Company Bank / Cash", type: "debit", amount: item.inflow, description: "Refund cash received" },
+        { account: "Operational Expense Offset", type: "credit", amount: item.inflow, description: "Credit against business expenses" },
       ] : [
         { account: "Business Operational Expense", type: "debit", amount: item.inflow, description: "Operating cost incurred" },
         { account: `Partner Reimbursable (${target.name})`, type: "credit", amount: item.inflow, description: "Credit owed to partner" },
@@ -412,10 +450,10 @@ function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: (
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden max-h-[90vh]">
+      <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[88vh]">
         {/* Header */}
-        <DialogHeader className="p-5 pb-3 border-b bg-muted/20">
-          <div className="flex items-center justify-between gap-2">
+        <DialogHeader className="p-4 sm:p-5 pb-3 border-b bg-muted/20 shrink-0">
+          <div className="flex items-center justify-between gap-2 pr-6">
             <div className="flex items-center gap-2">
               <Badge variant="outline" className="text-[11px] font-semibold tracking-wide">
                 Owner 360° Passbook
@@ -436,7 +474,7 @@ function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: (
           </DialogDescription>
         </DialogHeader>
 
-        <div className="p-5 space-y-4 overflow-y-auto max-h-[75vh]">
+        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1 min-h-0 pb-6">
           {loading && (
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -489,6 +527,38 @@ function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: (
                 />
               </div>
 
+              {/* Quick Actions Bar for Direct Capital & Expense Tracking */}
+              <div className="flex flex-wrap items-center gap-2 p-3 bg-muted/40 rounded-xl border">
+                <span className="text-xs font-semibold text-muted-foreground mr-1">Quick Actions:</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs text-emerald-700 dark:text-emerald-300 border-emerald-500/30 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 font-medium"
+                  onClick={openNewDeposit}
+                >
+                  <ArrowDownLeft className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>+ Deposit / Repay</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs text-amber-700 dark:text-amber-300 border-amber-500/30 hover:bg-amber-50 dark:hover:bg-amber-950/50 font-medium"
+                  onClick={openNewDrawing}
+                >
+                  <ArrowUpRight className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                  <span>− Personal Drawing</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs text-purple-700 dark:text-purple-300 border-purple-500/30 hover:bg-purple-50 dark:hover:bg-purple-950/50 font-medium"
+                  onClick={openNewOutOfPocket}
+                >
+                  <IndianRupee className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400" />
+                  <span>💳 Out-of-Pocket Spend</span>
+                </Button>
+              </div>
+
               {/* Tabs */}
               <Tabs defaultValue="passbook">
                 <TabsList className="w-full sm:w-auto">
@@ -503,7 +573,7 @@ function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: (
                 </TabsList>
 
                 {/* Tab 1: Passbook */}
-                <TabsContent value="passbook" className="mt-3 space-y-3">
+                <TabsContent value="passbook" className="mt-3 space-y-3 pb-6">
                   <div className="border rounded-xl divide-y overflow-hidden text-xs">
                     {data.passbook.length === 0 ? (
                       <div className="p-8 text-center text-muted-foreground">
@@ -517,7 +587,11 @@ function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: (
                           onClick={() => openLineage(item)}
                         >
                           <div className="min-w-0 flex items-start gap-2.5">
-                            {item.inflow > 0 ? (
+                            {item.type === "REFUND" ? (
+                              <div className="p-1.5 rounded-lg bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-300 shrink-0 mt-0.5">
+                                <RefreshCw className="h-3.5 w-3.5" />
+                              </div>
+                            ) : item.inflow > 0 ? (
                               <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 shrink-0 mt-0.5">
                                 <ArrowDownLeft className="h-3.5 w-3.5" />
                               </div>
@@ -535,7 +609,9 @@ function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: (
 
                           <div className="text-right shrink-0">
                             {item.inflow > 0 && (
-                              <p className="font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">+{formatINR(item.inflow)}</p>
+                              <p className={cn("font-semibold tabular-nums", item.type === "REFUND" ? "text-cyan-600 dark:text-cyan-400" : "text-emerald-600 dark:text-emerald-400")}>
+                                +{formatINR(item.inflow)}
+                              </p>
                             )}
                             {item.outflow > 0 && (
                               <p className="font-semibold text-amber-600 dark:text-amber-400 tabular-nums">−{formatINR(item.outflow)}</p>
@@ -551,7 +627,7 @@ function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: (
                 </TabsContent>
 
                 {/* Tab 2: Audit */}
-                <TabsContent value="audits" className="mt-3">
+                <TabsContent value="audits" className="mt-3 pb-6">
                   <div className="border rounded-xl divide-y overflow-hidden text-xs">
                     {data.audits.length === 0 ? (
                       <div className="p-8 text-center text-muted-foreground">No recent actions logged.</div>
@@ -582,10 +658,23 @@ function OwnerPassbookDialog({ target, onClose }: { target: OwnerRow; onClose: (
           )}
         </div>
 
-        <DialogFooter className="p-3 border-t bg-muted/20">
+        <DialogFooter className="p-3 border-t bg-muted/20 shrink-0">
           <Button variant="outline" size="sm" onClick={onClose}>Close Passbook</Button>
         </DialogFooter>
       </DialogContent>
+
+      {/* Unified Financial Entry Modal for Quick Actions */}
+      <ExpenseFormDialog
+        open={expenseFormOpen}
+        onOpenChange={(o) => {
+          setExpenseFormOpen(o);
+          if (!o) setExpensePreset(null);
+        }}
+        expense={null}
+        vehicles={[]}
+        onDone={() => void reload()}
+        preset={expensePreset}
+      />
 
       {/* Formula Inspector Modal */}
       <FormulaInspectorDialog
@@ -979,7 +1068,7 @@ function ResetPasswordDialog({ open, onOpenChange, target }: {
 // View
 // ---------------------------------------------------------------------------
 
-export default function OwnersView(_props: ViewProps) {
+export default function OwnersView({ params }: ViewProps) {
   const { owner: me } = useAuth();
   const { data, loading, error, reload } = useAsync<ListResp<OwnerRow>>(
     () => api.get<ListResp<OwnerRow>>("/api/owners"),
@@ -995,6 +1084,16 @@ export default function OwnersView(_props: ViewProps) {
   const { mutate, saving } = useMutation();
 
   const owners = data?.items ?? [];
+
+  // Auto-open 360° Passbook if linked via navigation parameter id
+  useEffect(() => {
+    if (params?.id && owners.length > 0) {
+      const match = owners.find((o) => o.id === params.id);
+      if (match) {
+        setPassbookTarget(match);
+      }
+    }
+  }, [params?.id, owners]);
 
   const activate = async (row: OwnerRow) => {
     const res = await mutate(() => api.put(`/api/owners/${row.id}`, { isActive: true }), `${row.name} activated`);

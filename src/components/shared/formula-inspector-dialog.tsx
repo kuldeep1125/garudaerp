@@ -7,10 +7,12 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Button } from "@/components/ui/button";
 import { formatINR } from "@/lib/money";
 import { Calculator, ArrowRight, Info, Plus, Minus, Equal } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -63,8 +65,8 @@ export function FormulaInspectorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] sm:max-w-xl overflow-hidden flex flex-col p-0">
-        <DialogHeader className="p-5 pb-3 border-b bg-muted/20">
+      <DialogContent className="max-h-[92vh] sm:max-h-[88vh] sm:max-w-xl overflow-hidden flex flex-col p-0">
+        <DialogHeader className="p-4 sm:p-5 pb-3 border-b bg-muted/20 shrink-0">
           <div className="flex items-center justify-between gap-2 pr-6">
             <div className="flex items-center gap-2">
               <div className="p-2 rounded-lg bg-primary/10 text-primary">
@@ -89,8 +91,8 @@ export function FormulaInspectorDialog({
           </div>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 p-5 overflow-y-auto max-h-[calc(85vh-130px)]">
-          <div className="space-y-4">
+        <ScrollArea className="flex-1 p-4 sm:p-5 overflow-y-auto min-h-0">
+          <div className="space-y-4 pb-4">
             {/* Visual Equation Card */}
             <Card className="bg-slate-50 dark:bg-slate-900/50 border-border/70 shadow-none">
               <CardContent className="p-3.5 space-y-2">
@@ -138,32 +140,31 @@ export function FormulaInspectorDialog({
                           {!isAdd && !isSub && !isResult && idx + 1}
                         </span>
                         <div className="min-w-0">
-                          <p className="truncate">{step.label}</p>
+                          <p className="font-medium text-foreground">{step.label}</p>
                           {step.detail && (
-                            <p className="text-[10px] text-muted-foreground truncate">
-                              {step.detail}
-                            </p>
+                            <p className="text-[10px] text-muted-foreground">{step.detail}</p>
                           )}
                         </div>
                       </div>
-                      <div
+                      <span
                         className={cn(
-                          "tabular-nums text-right font-medium shrink-0",
+                          "tabular-nums font-semibold shrink-0",
                           isAdd && "text-emerald-600 dark:text-emerald-400",
                           isSub && "text-rose-600 dark:text-rose-400",
-                          isResult && "text-foreground font-bold"
+                          isResult && "text-primary text-base"
                         )}
                       >
-                        {isSub ? "−" : isAdd ? "+" : ""}
-                        {typeof step.amount === "number" ? formatINR(Math.abs(step.amount)) : step.amount}
-                      </div>
+                        {isAdd && "+"}
+                        {isSub && "−"}
+                        {formatINR(step.amount)}
+                      </span>
                     </div>
                   );
                 })}
               </div>
             </div>
 
-            {/* Contributing Rows / Source Breakdown (if provided) */}
+            {/* Itemized Source Records */}
             {data.sourceRows && data.sourceRows.length > 0 && (
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs font-semibold text-muted-foreground uppercase tracking-wider">
@@ -184,7 +185,7 @@ export function FormulaInspectorDialog({
                     >
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <p className="font-medium truncate">{row.title}</p>
+                          <p className="font-medium text-foreground truncate">{row.title}</p>
                           {row.badge && (
                             <span
                               className={cn(
@@ -229,6 +230,10 @@ export function FormulaInspectorDialog({
             )}
           </div>
         </ScrollArea>
+
+        <DialogFooter className="p-3 border-t bg-muted/20 shrink-0">
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Close Inspector</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

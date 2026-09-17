@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -130,10 +131,10 @@ export function ReconciliationCenterDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl p-0 gap-0 overflow-hidden">
+      <DialogContent className="max-w-2xl p-0 gap-0 overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[88vh]">
         {/* Header */}
-        <DialogHeader className="p-5 pb-3 border-b bg-muted/20">
-          <div className="flex items-center justify-between gap-2">
+        <DialogHeader className="p-4 sm:p-5 pb-3 border-b bg-muted/20 shrink-0">
+          <div className="flex items-center justify-between gap-2 pr-6">
             <Badge
               variant="outline"
               className={cn(
@@ -219,7 +220,7 @@ export function ReconciliationCenterDialog({
           </div>
         </DialogHeader>
 
-        <div className="p-5 space-y-4 max-h-[72vh] overflow-y-auto">
+        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1 min-h-0 pb-6">
           {/* Status Banner */}
           <div
             className={cn(
@@ -452,6 +453,10 @@ export function ReconciliationCenterDialog({
             </div>
           )}
         </div>
+
+        <DialogFooter className="p-3 border-t bg-muted/20 shrink-0">
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Close Center</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
