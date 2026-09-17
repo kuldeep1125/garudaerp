@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react"; // [ADDED]
 import { api } from "@/lib/api-client";
-import { formatINR } from "@/lib/money";
+import { formatINR, round2 } from "@/lib/money"; // [ADDED] round2
 import type { ViewProps } from "@/components/view-types";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -23,6 +24,7 @@ const cellCls = "border border-neutral-300 px-2 py-1.5 print:border-neutral-500"
 
 export default function StatementView({ params, navigate }: ViewProps) {
   const id = params?.id ?? "";
+  const [viewMode, setViewMode] = useState<"EMPLOYEE" | "AGENCY">("EMPLOYEE"); // [FIXED] Move hook to top of component before early returns
 
   const { data, loading, error, reload } = useAsync<StatementResp>(
     () => api.get(`/api/settlements/${id}/statement`),
@@ -73,17 +75,91 @@ export default function StatementView({ params, navigate }: ViewProps) {
     return new Date(y, m - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
   })();
 
+  const hasContractorCut = (s.contractorCut ?? 0) > 0;
+  const isEmployeeMode = viewMode === "EMPLOYEE" && hasContractorCut;
+
+  // [ADDED] In Employee mode, gross reflects the net rate owed to the employee (e.g. ₹500/shift instead of ₹600)
+  // so the contractor fee is 100% confidential and omitted from the worker's payslip.
+  const displayGross = isEmployeeMode
+    ? Math.max(0, round2((s.grossEarnings ?? 0) - (s.contractorCut ?? 0)))
+    : (s.grossEarnings ?? 0);
+
+  // Distribute contractor cut across regular shift lines in employee mode so line item rates match the gross
+  const shiftLines = lines.filter((l) => l.shift !== "SALARY" && l.shift !== "OVERTIME" && l.shift !== "RENT");
+  const totalShiftUnits = shiftLines.reduce((sum, l) => sum + (l.shift === "FULL" ? 2 : 1), 0) || shiftLines.length || 1;
+  const cutPerUnit = hasContractorCut ? (s.contractorCut ?? 0) / totalShiftUnits : 0;
+
+  const displayLines = lines.map((l) => {
+    if (isEmployeeMode && l.shift !== "SALARY" && l.shift !== "OVERTIME" && l.shift !== "RENT") {
+      const units = l.shift === "FULL" ? 2 : 1;
+      const netRate = Math.max(0, round2(l.rate - cutPerUnit));
+      const netAmount = Math.max(0, round2(l.amount - (cutPerUnit * units)));
+      return { ...l, rate: netRate, amount: netAmount };
+    }
+    return l;
+  });
+
   return (
     <div className="space-y-4">
       {/* Toolbar (never printed) */}
-      <div className="no-print flex items-center justify-between gap-2">
+      <div className="no-print flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
         <Button variant="outline" className="min-h-10 gap-1.5" onClick={() => navigate("settlements")}>
           <ArrowLeft className="h-4 w-4" aria-hidden />Back
         </Button>
-        <Button className="min-h-10 gap-1.5" onClick={() => window.print()}>
-          <Printer className="h-4 w-4" aria-hidden />Print
-        </Button>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {hasContractorCut && (
+            <div className="flex items-center rounded-lg border border-border bg-muted/60 p-1 text-xs" role="tablist" aria-label="Statement format">
+              <button
+                type="button"
+                onClick={() => setViewMode("EMPLOYEE")}
+                className={cn(
+                  "rounded-md px-3 py-1.5 font-medium transition-colors",
+                  viewMode === "EMPLOYEE"
+                    ? "bg-background text-foreground shadow-xs font-semibold"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                title="Hides contractor cut, sets shift rate to net wage (₹500/shift) — safe to send to the worker"
+              >
+                Employee Slip (Confidential)
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("AGENCY")}
+                className={cn(
+                  "rounded-md px-3 py-1.5 font-medium transition-colors",
+                  viewMode === "AGENCY"
+                    ? "bg-background text-foreground shadow-xs font-semibold"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                title="Shows full breakdown with contractor commission — for contractor or internal records"
+              >
+                Contractor / Agency Copy
+              </button>
+            </div>
+          )}
+          <Button className="min-h-10 gap-1.5" onClick={() => window.print()}>
+            <Printer className="h-4 w-4" aria-hidden />Print / Save PDF
+          </Button>
+        </div>
       </div>
+
+      {/* Screen-only badge explaining active statement format */}
+      {hasContractorCut && (
+        <div className="no-print mx-auto max-w-3xl rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground flex items-center justify-between gap-2">
+          <span>
+            {isEmployeeMode ? (
+              <>
+                <strong className="text-foreground">Employee Payslip Active:</strong> Contractor cut is completely hidden; rates and gross reflect employee direct wage ({formatINR(displayGross)}). Ready to send to worker.
+              </>
+            ) : (
+              <>
+                <strong className="text-foreground">Contractor / Agency Copy Active:</strong> Full transparency showing {formatINR(s.grossEarnings)} gross and {formatINR(s.contractorCut ?? 0)} contractor cut.
+              </>
+            )}
+          </span>
+        </div>
+      )}
 
       {/* Print-ready statement */}
       <div
@@ -107,7 +183,9 @@ export default function StatementView({ params, navigate }: ViewProps) {
             </div>
           </div>
           <div className="sm:text-right">
-            <h2 className="font-serif text-base font-bold uppercase tracking-widest sm:text-lg">Employee Salary Statement</h2>
+            <h2 className="font-serif text-base font-bold uppercase tracking-widest sm:text-lg">
+              {isEmployeeMode ? "Employee Salary Payslip" : hasContractorCut ? "Agency & Contractor Statement" : "Employee Salary Statement"}
+            </h2>
             <p className="mt-1 text-sm font-semibold">{monthLabel}</p>
             <p className="text-xs text-neutral-600 print:text-black">Generated: {generatedAt}</p>
           </div>
@@ -134,7 +212,7 @@ export default function StatementView({ params, navigate }: ViewProps) {
         </div>
 
         {/* Work lines */}
-        <div className="mt-4 overflow-x-auto scroll-shadows">
+        <div className="mt-4 overflow-x-auto"> {/* [FIXED] remove scroll-shadows which injected dark-mode var(--card) black gradient on white statement document */}
           <table className="w-full min-w-[480px] border-collapse text-xs sm:text-sm">
             <thead>
               <tr className="bg-neutral-100 print:[background:none]">
@@ -146,10 +224,10 @@ export default function StatementView({ params, navigate }: ViewProps) {
               </tr>
             </thead>
             <tbody>
-              {lines.length === 0 && (
+              {displayLines.length === 0 && (
                 <tr><td className={cn(cellCls, "text-center")} colSpan={5}>No work lines recorded</td></tr>
               )}
-              {lines.map((l, i) => (
+              {displayLines.map((l, i) => (
                 <tr key={`${l.date}-${l.propertyName}-${i}`}>
                   <td className={cn(cellCls, "whitespace-nowrap tabular-nums")}>{fmtDay(l.date)}</td>
                   <td className={cellCls}>{l.propertyName}</td>
@@ -175,7 +253,7 @@ export default function StatementView({ params, navigate }: ViewProps) {
             </div>
             <div className="flex justify-between border-b border-neutral-300 py-1.5">
               <span className="text-neutral-600 print:text-black">Gross earnings</span>
-              <span className="font-semibold tabular-nums">{formatINR(s.grossEarnings ?? 0, { decimals: true })}</span>
+              <span className="font-semibold tabular-nums">{formatINR(displayGross, { decimals: true })}</span>
             </div>
             <div className="flex justify-between border-b border-neutral-300 py-1.5">
               <span className="text-neutral-600 print:text-black">Additions</span>
@@ -187,7 +265,7 @@ export default function StatementView({ params, navigate }: ViewProps) {
                 <span className="font-semibold tabular-nums text-teal-700 print:text-black">−{formatINR(s.rentDeducted ?? 0, { decimals: true })}</span>
               </div>
             )}
-            {(s.contractorCut ?? 0) > 0 && (
+            {!isEmployeeMode && (s.contractorCut ?? 0) > 0 && (
               <div className="flex justify-between border-b border-neutral-300 py-1.5">
                 <span className="text-neutral-600 print:text-black">Contractor commission</span>
                 <span className="font-semibold tabular-nums">−{formatINR(s.contractorCut ?? 0, { decimals: true })}</span>

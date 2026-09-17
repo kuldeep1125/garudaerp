@@ -23,7 +23,7 @@ export const GET = handleRoute(async ({ req }) => {
     }),
     db.settlement.findMany({
       where: { month },
-      select: { grossEarnings: true, advanceDeducted: true, netPayable: true, status: true },
+      select: { grossEarnings: true, rentDeducted: true, contractorCut: true, advanceDeducted: true, netPayable: true, status: true },
     }),
   ]);
   const withNames = items
@@ -37,6 +37,8 @@ export const GET = handleRoute(async ({ req }) => {
     items: withNames,
     totals: {
       gross: round2(all.reduce((t, s) => t + s.grossEarnings, 0)),
+      rent: round2(all.reduce((t, s) => t + s.rentDeducted, 0)), // [ADDED]
+      contractorCut: round2(all.reduce((t, s) => t + s.contractorCut, 0)), // [ADDED]
       advance: round2(all.reduce((t, s) => t + s.advanceDeducted, 0)),
       net: round2(all.reduce((t, s) => t + s.netPayable, 0)),
       count: all.length,

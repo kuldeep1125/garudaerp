@@ -189,6 +189,12 @@ export default function SettlementsView({ navigate }: ViewProps) {
       value: (r) => formatINR(r.rentDeducted ?? 0),
     },
     {
+      // [ADDED] Show contractor commission deduction explicitly so row arithmetic (Gross − Rent − Contractor − Advance = Net) balances
+      key: "contractorCut", label: "Contractor", className: "text-right", hideOnMobile: true,
+      render: (r) => (r.contractorCut ?? 0) > 0 ? <span className="tabular-nums text-amber-600 dark:text-amber-400">−{formatINR(r.contractorCut ?? 0)}</span> : <span className="text-muted-foreground">—</span>,
+      value: (r) => formatINR(r.contractorCut ?? 0),
+    },
+    {
       key: "advance", label: t(lang, "col.advance"), className: "text-right",
       render: (r) => <span className="tabular-nums text-red-600 dark:text-red-400">−{formatINR(r.advanceDeducted ?? 0)}</span>,
       value: (r) => formatINR(r.advanceDeducted ?? 0),
