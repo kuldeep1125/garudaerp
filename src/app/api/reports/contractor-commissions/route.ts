@@ -76,6 +76,7 @@ export const GET = handleRoute(async ({ req }) => {
     ],
     rows,
     totals,
+    contractorNames: Array.from(new Set(deps.map((d) => d.contractorName as string).filter(Boolean))).sort(),
     meta: { from: dayKey(from), to: dayKey(to) },
     note:
       "Commission = the contractor's per-shift cut × shift units, snapshotted on every deployment. The cut is paid out of the employee's payout, so the business total employee cost does not change — this report shows how that cost splits between employees and contractors.",
@@ -83,21 +84,23 @@ export const GET = handleRoute(async ({ req }) => {
 
   // Drill-down: one contractor's deployment-level sheet.
   if (focus) {
+    const focusDeps = deps.filter((d) => d.contractorName === focus);
     payload.contractor = focus;
-    payload.days = deps
-      .filter((d) => d.contractorName === focus)
-      .map((d) => ({
-        date: dayKey(d.date),
-        employeeName: d.employee.fullName,
-        propertyName: d.property.name,
-        shift: d.shift,
-        units: SHIFT_UNITS[d.shift.toUpperCase()] ?? 1,
-        rate: round2(d.contractorRateCut),
-        commission: round2(d.contractorCut),
-      }));
+    payload.days = focusDeps.map((d) => ({
+      date: dayKey(d.date),
+      employeeCode: d.employee.code,
+      employeeName: d.employee.fullName,
+      propertyName: d.property.name,
+      shift: d.shift,
+      units: SHIFT_UNITS[d.shift.toUpperCase()] ?? 1,
+      rate: round2(d.contractorRateCut),
+      commission: round2(d.contractorCut),
+    }));
     payload.dayTotals = {
-      deployments: totals.deployments,
-      commission: totals.commission,
+      deployments: focusDeps.length,
+      units: focusDeps.reduce((s, d) => s + (SHIFT_UNITS[d.shift.toUpperCase()] ?? 1), 0),
+      commission: round2(focusDeps.reduce((s, d) => s + d.contractorCut, 0)),
+      employees: new Set(focusDeps.map((d) => d.employee.code)).size,
     };
   }
 

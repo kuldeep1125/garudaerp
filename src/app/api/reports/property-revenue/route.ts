@@ -66,7 +66,15 @@ export const GET = handleRoute(async ({ req }) => {
     outstanding: round2(rows.reduce((s, r) => s + r.outstanding, 0)),
   };
 
-  return {
+  const focusId = sp.get("propertyId")?.trim();
+  const focusName = sp.get("propertyName")?.trim();
+  const matchedProp = focusId
+    ? rows.find((r) => r.propertyId === focusId)
+    : focusName
+    ? rows.find((r) => r.propertyName.toLowerCase() === focusName.toLowerCase())
+    : null;
+
+  const payload: Record<string, unknown> = {
     columns: [
       { key: "propertyName", label: "Property", type: "string" },
       { key: "employees", label: "Employees", type: "number" },
@@ -78,7 +86,69 @@ export const GET = handleRoute(async ({ req }) => {
     ],
     rows,
     totals,
+    properties: rows.map((r) => ({ id: r.propertyId, name: r.propertyName })),
     note: "Received is payments dated in the period and may include collections against earlier billings; Outstanding is clamped at ₹0 when a property is over-collected.",
     meta: { from: dayKey(from), to: dayKey(to) },
   };
+
+  // Drill-down: one property's detailed billing statement (deployments + payments)
+  if (matchedProp) {
+    const propId = matchedProp.propertyId;
+    const [property, itemizedDeps, itemizedPays] = await Promise.all([
+      db.property.findUnique({
+        where: { id: propId },
+        select: { id: true, name: true, contactPerson: true, contactNumber: true, address: true, billingRate: true },
+      }),
+      db.deployment.findMany({
+        where: { propertyId: propId, date: { gte: from, lte: to } },
+        select: {
+          date: true,
+          shift: true,
+          billingRate: true,
+          billingAmount: true,
+          employee: { select: { code: true, fullName: true, designation: true } },
+        },
+        orderBy: [{ date: "asc" }, { shift: "asc" }],
+      }),
+      db.propertyPayment.findMany({
+        where: { propertyId: propId, date: { gte: from, lte: to } },
+        select: { id: true, date: true, amount: true, method: true, reference: true },
+        orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+      }),
+    ]);
+
+    payload.property = property ? {
+      ...property,
+      phone: property.contactNumber,
+      defaultBillingRate: property.billingRate,
+    } : null;
+    payload.deployments = itemizedDeps.map((d) => ({
+      date: dayKey(d.date),
+      shift: d.shift,
+      employeeCode: d.employee.code,
+      employeeName: d.employee.fullName,
+      designation: d.employee.designation,
+      billingRate: round2(d.billingRate),
+      billingAmount: round2(d.billingAmount),
+    }));
+    payload.payments = itemizedPays.map((p) => ({
+      id: p.id,
+      date: dayKey(p.date),
+      amount: round2(p.amount),
+      paymentMode: p.method,
+      referenceNote: p.reference,
+    }));
+    payload.propertySummary = {
+      propertyId: propId,
+      propertyName: matchedProp.propertyName,
+      shifts: matchedProp.shifts,
+      employees: matchedProp.employees,
+      billing: matchedProp.billing,
+      received: matchedProp.received,
+      outstanding: matchedProp.outstanding,
+      collectionPct: matchedProp.collectionPct,
+    };
+  }
+
+  return payload;
 });

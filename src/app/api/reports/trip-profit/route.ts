@@ -13,7 +13,7 @@ export const GET = handleRoute(async ({ req }) => {
   const { from, to } = reportRange(sp);
 
   const all = await computeTripProfit(from, to);
-  const rows = all.slice(0, 40);
+  const rows = all;
 
   // Chart slice: top 8 winners + up to 2 worst losers (deduped, profit order).
   const losers = [...all].reverse().filter((r) => r.profit < 0).slice(0, 2);

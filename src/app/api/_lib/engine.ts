@@ -12,6 +12,7 @@ import {
   monthKey,
   monthBounds,
   parseDate,
+  parseRange,
   toISTParts,
   istStartOfDay,
   istEndOfDay,
@@ -624,11 +625,13 @@ export function addMonths(d: Date, n: number): Date {
   return istStartOfDay(targetYear, targetMonth, targetDay);
 }
 
-/** Range for reports: explicit from/to, else month param, else current month. */
+/** Range for reports: explicit from/to, else range param, else month param, else current month. */
 export function reportRange(sp: URLSearchParams): { from: Date; to: Date } {
   const from = sp.get("from");
   const to = sp.get("to");
   if (from && to) return { from: parseDate(from), to: endOfDay(parseDate(to)) };
+  const range = sp.get("range");
+  if (range) return parseRange(sp);
   const month = sp.get("month");
   if (month) return monthBounds(month);
   const { y, m, d } = toISTParts(new Date());

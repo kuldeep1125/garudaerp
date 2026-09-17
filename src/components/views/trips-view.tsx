@@ -63,6 +63,7 @@ function rangeDates(r: RangeKey): { from: string; to: string } {
   if (r === "week") return { from: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6)), to: f(now) };
   if (r === "lastweek") return { from: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 13)), to: f(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7)) };
   if (r === "lastmonth") return { from: f(new Date(now.getFullYear(), now.getMonth() - 1, 1)), to: f(new Date(now.getFullYear(), now.getMonth(), 0)) };
+  if (r === "all") return { from: "2020-01-01", to: f(new Date(now.getFullYear(), now.getMonth() + 1, 0)) };
   return { from: f(new Date(now.getFullYear(), now.getMonth(), 1)), to: f(new Date(now.getFullYear(), now.getMonth() + 1, 0)) };
 }
 

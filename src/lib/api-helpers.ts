@@ -177,6 +177,8 @@ export function parseRange(searchParams: URLSearchParams): { from: Date; to: Dat
         to: istEndOfDay(prevYear, prevMonth, prevMonthLastDay),
       };
     }
+    case "all":
+      return { from: istStartOfDay(2020, 0, 1), to: istEndOfDay(y, m, d) };
     case "today":
     default:
       return { from: istStartOfDay(y, m, d), to: istEndOfDay(y, m, d) };

@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { formatINR } from "@/lib/money";
 import { CalendarDays, Download, Search } from "lucide-react";
 
-export type RangeKey = "today" | "yesterday" | "week" | "lastweek" | "month" | "lastmonth" | "custom";
+export type RangeKey = "today" | "yesterday" | "week" | "lastweek" | "month" | "lastmonth" | "all" | "custom";
 
 export const RANGE_LABELS: { key: RangeKey; label: string }[] = [
   { key: "today", label: "Today" },
@@ -15,6 +15,7 @@ export const RANGE_LABELS: { key: RangeKey; label: string }[] = [
   { key: "lastweek", label: "Last Week" },
   { key: "month", label: "This Month" },
   { key: "lastmonth", label: "Last Month" },
+  { key: "all", label: "All Time" },
 ];
 
 // Horizontal scrollable date-range pill selector.
@@ -81,6 +82,9 @@ export function rangeKeyToBounds(key: RangeKey): { from: string; to: string } {
         to: ymd(new Date(now.getFullYear(), now.getMonth(), 0)),
       };
     }
+    case "all": {
+      return { from: "2020-01-01", to: ymd(now) };
+    }
     case "month":
     case "custom":
     default: {
@@ -97,6 +101,7 @@ export const RANGE_HINT: Record<RangeKey, string> = {
   lastweek: "prior week",
   month: "this month",
   lastmonth: "last month",
+  all: "all time",
   custom: "selected range",
 };
 

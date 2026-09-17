@@ -157,6 +157,7 @@ export default function DeploymentsView({ params, navigate }: ViewProps) {
     else if (r === "week") { setDate(""); setFromTo({ from: todayStr(-6), to: todayStr() }); }
     else if (r === "lastweek") { setDate(""); setFromTo({ from: todayStr(-13), to: todayStr(-7) }); }
     else if (r === "month") { setDate(""); setFromTo({ ...monthBounds(0), to: todayStr() }); }
+    else if (r === "all") { setDate(""); setFromTo({ from: "2020-01-01", to: todayStr() }); }
     else { setDate(""); setFromTo(monthBounds(-1)); }
   };
 

@@ -4,6 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import { api, downloadCSV, qs, toCSV } from "@/lib/api-client";
 import { formatINR } from "@/lib/money";
 import { buildPayslipHtml } from "@/lib/payslip";
+import {
+  buildContractorStatementHtml,
+  buildPropertyStatementHtml,
+  buildVehicleStatementHtml,
+} from "@/lib/report-statements";
 import type { ViewProps } from "@/components/view-types";
 import { PageHeader } from "@/components/shared/page-header";
 import { DataTable, type Column } from "@/components/shared/data-table";
@@ -17,8 +22,9 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  BarChart3, Building2, CalendarCheck, CarFront, Crown, Download, HardHat, Info, MapPin, Play, Printer,
-  Receipt, ReceiptText, Route, TrendingUp, Users, Wallet, type LucideIcon,
+  ArrowLeft, BarChart3, Building2, CalendarCheck, CarFront, CheckCircle2, ChevronRight, Crown, Download,
+  FileText, HardHat, Info, MapPin, Play, Printer, Receipt, ReceiptText, Route, Sparkles, TrendingUp,
+  Users, Wallet, X, type LucideIcon,
 } from "lucide-react";
 import {
   BarsCompare, CHART_COLORS, ErrorState, Field, Option, SelectInput, todayStr, useAsync,
@@ -75,11 +81,131 @@ interface ReportResp {
   meta?: unknown;
   note?: string;
   chart?: { label: string; revenue: number; cost: number; profit: number; marginPct: number }[] | null;
+
   // Drill-down extras (employee-earnings with employeeId)
   employee?: { id: string; fullName: string; code: string; designation: string | null; status: string } | null;
-  days?: { date: string; propertyName: string; shift: string; payoutRate: number; earnings: number }[];
-  dayTotals?: { daysWorked: number; shifts: number; earnings: number };
-  propertySummary?: { propertyName: string; shifts?: number; employees?: number; dayShifts: number; nightShifts: number; earnings?: number; billing?: number; payout?: number }[];
+  days?: {
+    date: string;
+    propertyName: string;
+    shift: string;
+    payoutRate?: number;
+    earnings?: number;
+    employeeCode?: string;
+    employeeName?: string;
+    units?: number;
+    rate?: number;
+    commission?: number;
+  }[];
+  dayTotals?: {
+    daysWorked?: number;
+    shifts?: number;
+    earnings?: number;
+    deployments?: number;
+    units?: number;
+    commission?: number;
+    employees?: number;
+  };
+  propertySummary?: {
+    propertyName: string;
+    shifts?: number;
+    employees?: number;
+    dayShifts: number;
+    nightShifts: number;
+    earnings?: number;
+    billing?: number;
+    payout?: number;
+  }[];
+
+  // Contractor drill-down & list
+  contractor?: string;
+  contractorNames?: string[];
+
+  // Property drill-down & list
+  property?: {
+    id: string;
+    name: string;
+    code?: string | null;
+    contactPerson?: string | null;
+    phone?: string | null;
+    address?: string | null;
+    defaultBillingRate?: number | null;
+  } | null;
+  properties?: { id: string; name: string }[];
+  deployments?: {
+    date: string;
+    shift: string;
+    employeeCode?: string;
+    employeeName: string;
+    designation?: string | null;
+    billingRate: number;
+    billingAmount: number;
+  }[];
+  payments?: {
+    id: string;
+    date: string;
+    amount: number;
+    paymentMode?: string | null;
+    referenceNote?: string | null;
+  }[];
+  propertySummaryData?: {
+    propertyId: string;
+    propertyName: string;
+    shifts: number;
+    employees: number;
+    billing: number;
+    received: number;
+    outstanding: number;
+    collectionPct: number;
+  };
+
+  // Vehicle drill-down & list
+  vehicle?: {
+    id: string;
+    name: string;
+    registrationNumber: string;
+    make?: string | null;
+    model?: string | null;
+    year?: number | null;
+    capacity?: number | null;
+  } | null;
+  vehicles?: { id: string; name: string; registrationNumber: string }[];
+  trips?: {
+    id: string;
+    date: string;
+    client: string;
+    route: string;
+    rentalType: string;
+    fare: number;
+    paidAmount: number;
+    status: string;
+  }[];
+  expenses?: {
+    id: string;
+    date: string;
+    categoryName: string;
+    description: string;
+    amount: number;
+    kind: string;
+  }[];
+  emis?: {
+    id: string;
+    month: string;
+    dueDate: string;
+    paidAt?: string | null;
+    amount: number;
+    isPaid: boolean;
+  }[];
+  vehicleSummary?: {
+    vehicleId: string;
+    name: string;
+    registrationNumber: string;
+    revenue: number;
+    operatingExpenses: number;
+    emi: number;
+    net: number;
+    tripsCount: number;
+    expensesCount: number;
+  };
 }
 
 interface PickerItem { id: string; name?: string; fullName?: string; code?: string }
@@ -121,6 +247,8 @@ function computeRange(range: RangeKey, customFrom: string, customTo: string): { 
       const last = new Date(now.getFullYear(), now.getMonth(), 0);
       return { from: ymd(first), to: ymd(last) };
     }
+    case "all":
+      return { from: "2020-01-01", to: t };
     case "custom": {
       let from = customFrom || t;
       let to = customTo || customFrom || t;
@@ -207,8 +335,10 @@ export default function ReportsView({ navigate }: ViewProps) {
   const [month, setMonth] = useState(toMonth());
   const [employeeId, setEmployeeId] = useState("");
   const [propertyId, setPropertyId] = useState("");
+  const [contractor, setContractor] = useState("");
+  const [vehicleId, setVehicleId] = useState("");
 
-  // Business name for the print letterhead / payslip header (silent — cosmetic).
+  // Business name for the print letterhead / statement header.
   const [businessName, setBusinessName] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -226,7 +356,7 @@ export default function ReportsView({ navigate }: ViewProps) {
     [def?.type]
   );
   const properties = useAsync<{ items: PickerItem[] }>(
-    () => (def?.type === "daily-operations" ? api.get("/api/properties?pageSize=200") : Promise.resolve({ items: [] })),
+    () => (def?.type === "daily-operations" || def?.type === "property-revenue" ? api.get("/api/properties?pageSize=200") : Promise.resolve({ items: [] })),
     [def?.type]
   );
 
@@ -238,8 +368,11 @@ export default function ReportsView({ navigate }: ViewProps) {
     const p: Record<string, string> = { from, to };
     if (def.config === "range-business" && business) p.business = business;
     if (def.type === "employee-earnings" && employeeId) p.employeeId = employeeId;
+    if (def.type === "contractor-commissions" && contractor) p.contractor = contractor;
+    if (def.type === "property-revenue" && propertyId) p.propertyId = propertyId;
+    if (def.type === "vehicle-profitability" && vehicleId) p.vehicleId = vehicleId;
     return p;
-  }, [def, range, custom, customFrom, customTo, business, date, month, employeeId, propertyId]);
+  }, [def, range, custom, customFrom, customTo, business, date, month, employeeId, propertyId, contractor, vehicleId]);
 
   const { data, loading, error, reload } = useAsync<ReportResp | null>(
     () => (def ? api.get<ReportResp>(`/api/reports/${def.type}${qs(params)}`) : Promise.resolve(null)),
@@ -276,6 +409,57 @@ export default function ReportsView({ navigate }: ViewProps) {
     []
   );
 
+  // Contractor breakdown columns
+  const contractorDayColumns = useMemo<Column<Record<string, unknown>>[]>(
+    () => [
+      { key: "date", label: "Date", primary: true, render: (r) => fmtDayText(String(r.date)), value: (r) => String(r.date) },
+      { key: "employeeName", label: "Employee", render: (r) => <span><strong>{String(r.employeeName)}</strong> {r.employeeCode ? <span className="text-muted-foreground text-xs">({String(r.employeeCode)})</span> : null}</span>, value: (r) => String(r.employeeName) },
+      { key: "propertyName", label: "Property", render: (r) => <span className="flex items-center gap-1"><MapPin className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />{String(r.propertyName)}</span>, value: (r) => String(r.propertyName) },
+      { key: "shift", label: "Shift", render: (r) => <ShiftPill shift={String(r.shift)} />, value: (r) => String(r.shift) },
+      { key: "units", label: "Units", hideOnMobile: true, className: "text-right", render: (r) => String(r.units ?? 1), value: (r) => String(r.units) },
+      { key: "rate", label: "Rate Cut", hideOnMobile: true, className: "text-right", render: (r) => formatINR(Number(r.rate)), value: (r) => String(r.rate) },
+      { key: "commission", label: "Commission", className: "text-right", render: (r) => <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(Number(r.commission))}</span>, value: (r) => String(r.commission) },
+    ],
+    []
+  );
+
+  // Property deployments columns
+  const propertyDepColumns = useMemo<Column<Record<string, unknown>>[]>(
+    () => [
+      { key: "date", label: "Date", primary: true, render: (r) => fmtDayText(String(r.date)), value: (r) => String(r.date) },
+      { key: "employeeName", label: "Employee", render: (r) => <span><strong>{String(r.employeeName)}</strong> {r.employeeCode ? <span className="text-muted-foreground text-xs">({String(r.employeeCode)})</span> : null}</span>, value: (r) => String(r.employeeName) },
+      { key: "designation", label: "Role", hideOnMobile: true, render: (r) => String(r.designation ?? "Staff"), value: (r) => String(r.designation ?? "") },
+      { key: "shift", label: "Shift", render: (r) => <ShiftPill shift={String(r.shift)} />, value: (r) => String(r.shift) },
+      { key: "billingRate", label: "Rate", hideOnMobile: true, className: "text-right", render: (r) => formatINR(Number(r.billingRate)), value: (r) => String(r.billingRate) },
+      { key: "billingAmount", label: "Billed", className: "text-right", render: (r) => <span className="font-semibold tabular-nums">{formatINR(Number(r.billingAmount))}</span>, value: (r) => String(r.billingAmount) },
+    ],
+    []
+  );
+
+  // Property payments columns
+  const propertyPayColumns = useMemo<Column<Record<string, unknown>>[]>(
+    () => [
+      { key: "date", label: "Date", primary: true, render: (r) => fmtDayText(String(r.date)), value: (r) => String(r.date) },
+      { key: "paymentMode", label: "Mode", render: (r) => <span className="rounded bg-muted px-2 py-0.5 text-xs font-medium">{String(r.paymentMode ?? "Bank")}</span>, value: (r) => String(r.paymentMode ?? "") },
+      { key: "referenceNote", label: "Reference / Notes", render: (r) => String(r.referenceNote || "Payment Received"), value: (r) => String(r.referenceNote ?? "") },
+      { key: "amount", label: "Received", className: "text-right", render: (r) => <span className="font-bold tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(Number(r.amount))}</span>, value: (r) => String(r.amount) },
+    ],
+    []
+  );
+
+  // Vehicle trips columns
+  const vehicleTripColumns = useMemo<Column<Record<string, unknown>>[]>(
+    () => [
+      { key: "date", label: "Date", primary: true, render: (r) => fmtDayText(String(r.date)), value: (r) => String(r.date) },
+      { key: "client", label: "Client", render: (r) => <strong>{String(r.client)}</strong>, value: (r) => String(r.client) },
+      { key: "route", label: "Route", render: (r) => <span className="text-xs">{String(r.route)}</span>, value: (r) => String(r.route) },
+      { key: "rentalType", label: "Type", hideOnMobile: true, render: (r) => <span className="rounded bg-muted px-2 py-0.5 text-xs">{String(r.rentalType)}</span>, value: (r) => String(r.rentalType) },
+      { key: "fare", label: "Trip Fare", className: "text-right", render: (r) => <span className="tabular-nums">{formatINR(Number(r.fare))}</span>, value: (r) => String(r.fare) },
+      { key: "paidAmount", label: "Collected", className: "text-right", render: (r) => <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{formatINR(Number(r.paidAmount))}</span>, value: (r) => String(r.paidAmount) },
+    ],
+    []
+  );
+
   const caption = metaText(data?.meta);
 
   const totalsNode =
@@ -300,6 +484,50 @@ export default function ReportsView({ navigate }: ViewProps) {
     toast.success("Report exported as CSV");
   };
 
+  const exportContractorCSV = () => {
+    if (!data?.days || data.days.length === 0) return;
+    const csv = toCSV(data.days, [
+      { key: "date", label: "Date" },
+      { key: "employeeName", label: "Employee" },
+      { key: "propertyName", label: "Property" },
+      { key: "shift", label: "Shift" },
+      { key: "units", label: "Units" },
+      { key: "rate", label: "Rate Cut" },
+      { key: "commission", label: "Commission" },
+    ]);
+    downloadCSV(`contractor-statement-${(data.contractor ?? "all").replace(/\s+/g, "_")}-${todayStr()}.csv`, csv);
+    toast.success("Contractor statement exported as CSV");
+  };
+
+  const exportPropertyCSV = () => {
+    if (!data?.deployments || data.deployments.length === 0) return;
+    const csv = toCSV(data.deployments, [
+      { key: "date", label: "Date" },
+      { key: "employeeName", label: "Employee" },
+      { key: "designation", label: "Role" },
+      { key: "shift", label: "Shift" },
+      { key: "billingRate", label: "Billing Rate" },
+      { key: "billingAmount", label: "Billing Amount" },
+    ]);
+    downloadCSV(`client-statement-${(data.property?.name ?? "all").replace(/\s+/g, "_")}-${todayStr()}.csv`, csv);
+    toast.success("Client statement exported as CSV");
+  };
+
+  const exportVehicleCSV = () => {
+    if (!data?.trips || data.trips.length === 0) return;
+    const csv = toCSV(data.trips, [
+      { key: "date", label: "Date" },
+      { key: "client", label: "Client" },
+      { key: "route", label: "Route" },
+      { key: "rentalType", label: "Type" },
+      { key: "fare", label: "Trip Fare" },
+      { key: "paidAmount", label: "Paid Amount" },
+      { key: "status", label: "Status" },
+    ]);
+    downloadCSV(`vehicle-statement-${(data.vehicle?.name ?? "all").replace(/\s+/g, "_")}-${todayStr()}.csv`, csv);
+    toast.success("Vehicle statement exported as CSV");
+  };
+
   // Human-readable period for the print header.
   const periodLabel = useMemo(() => {
     if (!def) return "";
@@ -309,8 +537,7 @@ export default function ReportsView({ navigate }: ViewProps) {
     return from === to ? from : `${from} → ${to}`;
   }, [def, date, month, custom, range, customFrom, customTo]);
 
-  // Standalone A4 payslip — opens a new window with the day-by-day sheet and
-  // prints it (Chromium: document.write + window.print on load).
+  // Standalone A4 payslip
   const downloadPayslip = () => {
     if (!data?.employee || !data.days) return;
     const empRow = data.rows.find((r) => String(r.employeeId) === employeeId) as
@@ -326,10 +553,16 @@ export default function ReportsView({ navigate }: ViewProps) {
         designation: data.employee.designation,
       },
       periodLabel,
-      days: data.days,
-      dayTotals: data.dayTotals ?? {
-        daysWorked: new Set(data.days.map((d) => d.date)).size,
-        shifts: data.days.length,
+      days: data.days.map((d) => ({
+        date: d.date,
+        propertyName: d.propertyName,
+        shift: d.shift,
+        payoutRate: d.payoutRate ?? 0,
+        earnings: d.earnings ?? 0,
+      })),
+      dayTotals: {
+        daysWorked: data.dayTotals?.daysWorked ?? new Set(data.days.map((d) => d.date)).size,
+        shifts: data.dayTotals?.shifts ?? data.days.length,
         earnings,
       },
       advances: Number(empRow?.advances ?? 0),
@@ -338,6 +571,119 @@ export default function ReportsView({ navigate }: ViewProps) {
     const w = window.open("", "_blank", "width=920,height=780");
     if (!w) {
       toast.error("Popup blocked — allow popups for this site to download the payslip.");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
+
+  // Standalone A4 Contractor Statement
+  const downloadContractorStatement = () => {
+    if (!data?.contractor || !data.days) return;
+    const totals = data.dayTotals ?? {
+      deployments: data.days.length,
+      units: data.days.reduce((s, d) => s + (d.units ?? 1), 0),
+      employees: new Set(data.days.map((d) => d.employeeName)).size,
+      commission: data.days.reduce((s, d) => s + (d.commission ?? 0), 0),
+    };
+    const html = buildContractorStatementHtml({
+      businessName,
+      contractorName: data.contractor,
+      periodLabel,
+      totals: {
+        deployments: totals.deployments ?? data.days.length,
+        units: totals.units ?? data.days.length,
+        employees: totals.employees ?? 1,
+        commission: totals.commission ?? 0,
+      },
+      days: data.days.map((d) => ({
+        date: d.date,
+        employeeCode: d.employeeCode,
+        employeeName: d.employeeName ?? "Staff",
+        propertyName: d.propertyName,
+        shift: d.shift,
+        units: d.units ?? 1,
+        rate: d.rate ?? 0,
+        commission: d.commission ?? 0,
+      })),
+    });
+    const w = window.open("", "_blank", "width=940,height=800");
+    if (!w) {
+      toast.error("Popup blocked — allow popups for this site to download the statement.");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
+
+  // Standalone A4 Property Billing Statement
+  const downloadPropertyStatement = () => {
+    if (!data?.property || !data.deployments) return;
+    const propRow = data.rows.find((r) => String(r.propertyId) === propertyId) as
+      | { shifts?: number; employees?: number; billing?: number; received?: number; outstanding?: number; collectionPct?: number }
+      | undefined;
+    const billing = propRow?.billing ?? data.deployments.reduce((s, d) => s + d.billingAmount, 0);
+    const received = propRow?.received ?? (data.payments ?? []).reduce((s, p) => s + p.amount, 0);
+    const outstanding = propRow?.outstanding ?? Math.max(0, billing - received);
+    const collectionPct = propRow?.collectionPct ?? (billing > 0 ? Math.round((received / billing) * 100) : 0);
+
+    const html = buildPropertyStatementHtml({
+      businessName,
+      property: data.property,
+      periodLabel,
+      summary: {
+        shifts: propRow?.shifts ?? data.deployments.length,
+        employees: propRow?.employees ?? new Set(data.deployments.map((d) => d.employeeName)).size,
+        billing,
+        received,
+        outstanding,
+        collectionPct,
+      },
+      deployments: data.deployments,
+      payments: data.payments ?? [],
+    });
+    const w = window.open("", "_blank", "width=940,height=800");
+    if (!w) {
+      toast.error("Popup blocked — allow popups for this site to download the statement.");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
+
+  // Standalone A4 Vehicle Statement
+  const downloadVehicleStatement = () => {
+    if (!data?.vehicle || !data.trips) return;
+    const vRow = data.rows.find((r) => String(r.vehicleId) === vehicleId) as
+      | { revenue?: number; operatingExpenses?: number; emi?: number; net?: number }
+      | undefined;
+    const revenue = vRow?.revenue ?? data.trips.reduce((s, t) => s + (t.fare ?? 0), 0);
+    const operatingExpenses = vRow?.operatingExpenses ?? (data.expenses ?? []).reduce((s, e) => s + e.amount, 0);
+    const emi = vRow?.emi ?? (data.emis ?? []).reduce((s, m) => s + m.amount, 0);
+    const net = vRow?.net ?? (revenue - operatingExpenses - emi);
+
+    const html = buildVehicleStatementHtml({
+      businessName,
+      vehicle: data.vehicle,
+      periodLabel,
+      summary: {
+        revenue,
+        operatingExpenses,
+        emi,
+        net,
+        tripsCount: data.trips.length,
+        expensesCount: (data.expenses ?? []).length,
+      },
+      trips: data.trips,
+      expenses: data.expenses ?? [],
+      emis: data.emis ?? [],
+    });
+    const w = window.open("", "_blank", "width=940,height=800");
+    if (!w) {
+      toast.error("Popup blocked — allow popups for this site to download the statement.");
       return;
     }
     w.document.open();
@@ -478,7 +824,58 @@ export default function ReportsView({ navigate }: ViewProps) {
                     placeholder="All employees"
                   />
                   <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
-                    Pick one employee to see every day: which property, which shift, how much earned.
+                    Select an employee to view their detailed earnings statement & shift breakdown.
+                  </p>
+                </Field>
+              )}
+
+              {def.type === "contractor-commissions" && (
+                <Field label="Contractor detail (optional)">
+                  <SelectInput
+                    value={contractor}
+                    onChange={setContractor}
+                    options={[
+                      { label: "All contractors", value: "" },
+                      ...((data?.contractorNames ?? []).map((c) => ({ label: c, value: c }))),
+                    ]}
+                    placeholder="All contractors"
+                  />
+                  <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+                    Select a contractor to view their official commission statement & itemized shifts.
+                  </p>
+                </Field>
+              )}
+
+              {def.type === "property-revenue" && (
+                <Field label="Property detail (optional)">
+                  <SelectInput
+                    value={propertyId}
+                    onChange={setPropertyId}
+                    options={[
+                      { label: "All properties", value: "" },
+                      ...((data?.properties ?? properties.data?.items ?? []).map((p) => ({ label: p.name ?? p.id, value: p.id }))),
+                    ]}
+                    placeholder="All properties"
+                  />
+                  <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+                    Select a client property to view their full billing ledger statement & collections.
+                  </p>
+                </Field>
+              )}
+
+              {def.type === "vehicle-profitability" && (
+                <Field label="Vehicle detail (optional)">
+                  <SelectInput
+                    value={vehicleId}
+                    onChange={setVehicleId}
+                    options={[
+                      { label: "All vehicles", value: "" },
+                      ...((data?.vehicles ?? []).map((v) => ({ label: `${v.name} (${v.registrationNumber})`, value: v.id }))),
+                    ]}
+                    placeholder="All vehicles"
+                  />
+                  <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+                    Select a vehicle to inspect trip earnings, fuel/service opex, EMI and net margin.
                   </p>
                 </Field>
               )}
@@ -556,61 +953,82 @@ export default function ReportsView({ navigate }: ViewProps) {
                 )}
                 {/* Employee day-by-day drill-down — Employee Earnings report */}
                 {def.type === "employee-earnings" && data?.employee && (
-                  <Card className="overflow-hidden print:break-inside-avoid">
-                    <div className="h-0.5 w-full bg-gradient-to-r from-emerald-500/70 via-amber-500/70 to-emerald-500/70" aria-hidden />
-                    <CardHeader className="pb-0">
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-                          <Users className="h-4 w-4 text-primary" aria-hidden />
-                          <span>{data.employee.fullName}</span>
-                          {data.employee.code && (
-                            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] tracking-tight text-muted-foreground">{data.employee.code}</span>
-                          )}
-                          {data.employee.designation && (
-                            <span className="text-xs font-normal text-muted-foreground">· {data.employee.designation}</span>
-                          )}
-                        </CardTitle>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="no-print h-8 shrink-0 gap-1.5"
-                          onClick={downloadPayslip}
-                          aria-label="Download payslip (printable A4)"
-                        >
-                          <Printer className="h-3.5 w-3.5" aria-hidden />
-                          Download payslip
-                        </Button>
+                  <Card className="overflow-hidden border-primary/40 shadow-sm print:break-inside-avoid">
+                    <div className="h-1 w-full bg-gradient-to-r from-emerald-500/70 via-amber-500/70 to-emerald-500/70" aria-hidden />
+                    <CardHeader className="pb-2">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <CardTitle className="flex flex-wrap items-center gap-2 text-base font-bold">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                              <Users className="h-4 w-4" aria-hidden />
+                            </span>
+                            <span>{data.employee.fullName}</span>
+                            {data.employee.code && (
+                              <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] tracking-tight text-muted-foreground">{data.employee.code}</span>
+                            )}
+                            {data.employee.designation && (
+                              <span className="text-xs font-normal text-muted-foreground">· {data.employee.designation}</span>
+                            )}
+                            <span className="rounded-full bg-emerald-100 dark:bg-emerald-950/80 px-2.5 py-0.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300">
+                              Employee Payslip
+                            </span>
+                          </CardTitle>
+                          <CardDescription className="mt-1 text-xs text-muted-foreground">
+                            Day-by-day movement — where worked, shift type and earnings · Period: {periodLabel}
+                          </CardDescription>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="no-print h-8 gap-1.5 border-primary/30 hover:bg-primary/5"
+                            onClick={downloadPayslip}
+                            aria-label="Download payslip (printable A4)"
+                          >
+                            <Printer className="h-3.5 w-3.5 text-primary" aria-hidden />
+                            Download Payslip
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="no-print h-8 gap-1 text-muted-foreground hover:text-foreground"
+                            onClick={() => setEmployeeId("")}
+                            aria-label="Close statement and view all employees"
+                          >
+                            <X className="h-3.5 w-3.5" aria-hidden />
+                            Show All
+                          </Button>
+                        </div>
                       </div>
-                      <CardDescription className="text-xs">
-                        Day-by-day movement — where the employee worked, which shift, what they earned
-                      </CardDescription>
                     </CardHeader>
-                    <CardContent className="space-y-3 pt-2">
+                    <CardContent className="space-y-3 pt-1">
                       {data.dayTotals && (
                         <div className="grid grid-cols-3 gap-2">
                           {[
                             { label: "Days worked", value: String(data.dayTotals.daysWorked) },
                             { label: "Shifts", value: String(data.dayTotals.shifts) },
-                            { label: "Earnings", value: formatINR(data.dayTotals.earnings) },
+                            { label: "Earnings", value: formatINR(data.dayTotals.earnings), highlight: true },
                           ].map((s) => (
-                            <div key={s.label} className="rounded-lg border bg-muted/40 px-2.5 py-2 text-center">
-                              <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{s.label}</p>
-                              <p className="mt-0.5 text-sm font-bold tabular-nums">{s.value}</p>
+                            <div key={s.label} className={cn("rounded-xl border px-3 py-2 text-center", s.highlight ? "border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20" : "bg-muted/40")}>
+                              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{s.label}</p>
+                              <p className={cn("mt-0.5 text-base font-extrabold tabular-nums", s.highlight ? "text-emerald-600 dark:text-emerald-400" : "text-foreground")}>{s.value}</p>
                             </div>
                           ))}
                         </div>
                       )}
-                      <DataTable
-                        columns={dayColumns}
-                        rows={(data.days ?? []).map((d, i) => ({ __idx: i, ...d }))}
-                        rowKey={(r) => String(r.__idx)}
-                        emptyIcon={CalendarCheck}
-                        emptyTitle="No shifts in this period"
-                        emptyDescription="This employee has no confirmed deployments in the selected range."
-                        className="max-h-72 overflow-y-auto"
-                      />
+                      <div className="rounded-xl border overflow-hidden">
+                        <DataTable
+                          columns={dayColumns}
+                          rows={(data.days ?? []).map((d, i) => ({ __idx: i, ...d }))}
+                          rowKey={(r) => String(r.__idx)}
+                          emptyIcon={CalendarCheck}
+                          emptyTitle="No shifts in this period"
+                          emptyDescription="This employee has no confirmed deployments in the selected range."
+                          className="max-h-72 overflow-y-auto"
+                        />
+                      </div>
                       {data.propertySummary && data.propertySummary.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5" aria-label="Per-property summary">
+                        <div className="flex flex-wrap gap-1.5 pt-1" aria-label="Per-property summary">
                           {data.propertySummary.map((p) => (
                             <span
                               key={p.propertyName}
@@ -623,6 +1041,383 @@ export default function ReportsView({ navigate }: ViewProps) {
                               </span>
                             </span>
                           ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Contractor Commission statement drill-down */}
+                {def.type === "contractor-commissions" && data?.contractor && data.days && (
+                  <Card className="overflow-hidden border-primary/40 shadow-sm print:break-inside-avoid">
+                    <div className="h-1 w-full bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600" aria-hidden />
+                    <CardHeader className="pb-2">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <CardTitle className="flex flex-wrap items-center gap-2 text-base font-bold">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                              <HardHat className="h-4 w-4" aria-hidden />
+                            </span>
+                            <span>{data.contractor}</span>
+                            <span className="rounded-full bg-amber-100 dark:bg-amber-950/80 px-2.5 py-0.5 text-xs font-semibold text-amber-800 dark:text-amber-300">
+                              Contractor Statement
+                            </span>
+                          </CardTitle>
+                          <CardDescription className="mt-1 text-xs text-muted-foreground">
+                            Official commission breakdown across deployments · Period: {periodLabel}
+                          </CardDescription>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="no-print h-8 gap-1.5 border-primary/30 hover:bg-primary/5"
+                            onClick={downloadContractorStatement}
+                            aria-label="Download or print contractor statement"
+                          >
+                            <Printer className="h-3.5 w-3.5 text-primary" aria-hidden />
+                            Print Statement
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="no-print h-8 gap-1.5"
+                            onClick={exportContractorCSV}
+                            aria-label="Export contractor breakdown as CSV"
+                          >
+                            <Download className="h-3.5 w-3.5" aria-hidden />
+                            Export CSV
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="no-print h-8 gap-1 text-muted-foreground hover:text-foreground"
+                            onClick={() => setContractor("")}
+                            aria-label="Close statement and view all contractors"
+                          >
+                            <X className="h-3.5 w-3.5" aria-hidden />
+                            Show All
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-3 pt-1">
+                      {data.dayTotals && (
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                          {[
+                            { label: "Deployments", value: String(data.dayTotals.deployments ?? data.days.length) },
+                            { label: "Shift Units", value: String(data.dayTotals.units ?? data.days.length) },
+                            { label: "Active Staff", value: String(data.dayTotals.employees ?? new Set(data.days.map((d) => d.employeeName)).size) },
+                            { label: "Total Commission", value: formatINR(Number(data.dayTotals.commission ?? 0)), highlight: true },
+                          ].map((s) => (
+                            <div
+                              key={s.label}
+                              className={cn(
+                                "rounded-xl border px-3 py-2 text-center",
+                                s.highlight ? "border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20" : "bg-muted/40"
+                              )}
+                            >
+                              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{s.label}</p>
+                              <p className={cn("mt-0.5 text-base font-extrabold tabular-nums", s.highlight ? "text-emerald-600 dark:text-emerald-400" : "text-foreground")}>
+                                {s.value}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="rounded-xl border overflow-hidden">
+                        <DataTable
+                          columns={contractorDayColumns}
+                          rows={data.days.map((d, i) => ({ __idx: i, ...d }))}
+                          rowKey={(r) => String(r.__idx)}
+                          emptyIcon={HardHat}
+                          emptyTitle="No deployments in this period"
+                          emptyDescription="No deployments under this contractor in the selected date range."
+                          className="max-h-80 overflow-y-auto"
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Property Billing Statement drill-down */}
+                {def.type === "property-revenue" && data?.property && data.deployments && (
+                  <Card className="overflow-hidden border-primary/40 shadow-sm print:break-inside-avoid">
+                    <div className="h-1 w-full bg-gradient-to-r from-teal-500 via-emerald-500 to-emerald-600" aria-hidden />
+                    <CardHeader className="pb-2">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <CardTitle className="flex flex-wrap items-center gap-2 text-base font-bold">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                              <Building2 className="h-4 w-4" aria-hidden />
+                            </span>
+                            <span>{data.property.name}</span>
+                            {data.property.code && (
+                              <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] tracking-tight text-muted-foreground">
+                                {data.property.code}
+                              </span>
+                            )}
+                            <span className="rounded-full bg-emerald-100 dark:bg-emerald-950/80 px-2.5 py-0.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300">
+                              Client Billing Statement
+                            </span>
+                          </CardTitle>
+                          <CardDescription className="mt-1 text-xs text-muted-foreground">
+                            {data.property.contactPerson ? `Contact: ${data.property.contactPerson} · ` : ""}
+                            {data.property.phone ? `Phone: ${data.property.phone} · ` : ""}
+                            Period: {periodLabel}
+                          </CardDescription>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="no-print h-8 gap-1.5 border-primary/30 hover:bg-primary/5"
+                            onClick={downloadPropertyStatement}
+                            aria-label="Download or print property statement"
+                          >
+                            <Printer className="h-3.5 w-3.5 text-primary" aria-hidden />
+                            Print Statement
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="no-print h-8 gap-1.5"
+                            onClick={exportPropertyCSV}
+                            aria-label="Export property deployments as CSV"
+                          >
+                            <Download className="h-3.5 w-3.5" aria-hidden />
+                            Export CSV
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="no-print h-8 gap-1 text-muted-foreground hover:text-foreground"
+                            onClick={() => setPropertyId("")}
+                            aria-label="Close statement and view all properties"
+                          >
+                            <X className="h-3.5 w-3.5" aria-hidden />
+                            Show All
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4 pt-1">
+                      {(() => {
+                        const propRow = data.rows.find((r) => String(r.propertyId) === propertyId) as
+                          | { shifts?: number; employees?: number; billing?: number; received?: number; outstanding?: number; collectionPct?: number }
+                          | undefined;
+                        const billing = propRow?.billing ?? data.deployments.reduce((s, d) => s + d.billingAmount, 0);
+                        const received = propRow?.received ?? (data.payments ?? []).reduce((s, p) => s + p.amount, 0);
+                        const outstanding = propRow?.outstanding ?? Math.max(0, billing - received);
+
+                        return (
+                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                            {[
+                              { label: "Shifts Delivered", value: String(propRow?.shifts ?? data.deployments.length) },
+                              { label: "Total Billed", value: formatINR(billing) },
+                              { label: "Total Received", value: formatINR(received), highlight: true },
+                              { label: "Net Outstanding", value: formatINR(outstanding), warning: outstanding > 0 },
+                            ].map((s) => (
+                              <div
+                                key={s.label}
+                                className={cn(
+                                  "rounded-xl border px-3 py-2 text-center",
+                                  s.highlight && "border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20",
+                                  s.warning && "border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20",
+                                  !s.highlight && !s.warning && "bg-muted/40"
+                                )}
+                              >
+                                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{s.label}</p>
+                                <p
+                                  className={cn(
+                                    "mt-0.5 text-base font-extrabold tabular-nums",
+                                    s.highlight && "text-emerald-600 dark:text-emerald-400",
+                                    s.warning && "text-amber-600 dark:text-amber-400"
+                                  )}
+                                >
+                                  {s.value}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+
+                      <div>
+                        <h4 className="mb-2 text-xs font-bold uppercase tracking-wide text-foreground">
+                          Shift Deployments ({data.deployments.length} records)
+                        </h4>
+                        <div className="rounded-xl border overflow-hidden">
+                          <DataTable
+                            columns={propertyDepColumns}
+                            rows={data.deployments.map((d, i) => ({ __idx: i, ...d }))}
+                            rowKey={(r) => String(r.__idx)}
+                            emptyIcon={Building2}
+                            emptyTitle="No deployments in this period"
+                            emptyDescription="No employee deployments recorded for this property in the range."
+                            className="max-h-72 overflow-y-auto"
+                          />
+                        </div>
+                      </div>
+
+                      {data.payments && data.payments.length > 0 && (
+                        <div>
+                          <h4 className="mb-2 text-xs font-bold uppercase tracking-wide text-foreground">
+                            Collections & Payments Received ({data.payments.length} records)
+                          </h4>
+                          <div className="rounded-xl border overflow-hidden">
+                            <DataTable
+                              columns={propertyPayColumns}
+                              rows={data.payments.map((p, i) => ({ __idx: i, ...p }))}
+                              rowKey={(r) => String(r.__idx)}
+                              emptyIcon={Wallet}
+                              emptyTitle="No payments recorded"
+                              emptyDescription="No collections logged for this property in the selected range."
+                              className="max-h-60 overflow-y-auto"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Vehicle Fleet Statement drill-down */}
+                {def.type === "vehicle-profitability" && data?.vehicle && data.trips && (
+                  <Card className="overflow-hidden border-primary/40 shadow-sm print:break-inside-avoid">
+                    <div className="h-1 w-full bg-gradient-to-r from-blue-500 via-indigo-500 to-indigo-600" aria-hidden />
+                    <CardHeader className="pb-2">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <CardTitle className="flex flex-wrap items-center gap-2 text-base font-bold">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                              <CarFront className="h-4 w-4" aria-hidden />
+                            </span>
+                            <span>{data.vehicle.name}</span>
+                            <span className="rounded bg-muted px-2 py-0.5 font-mono text-xs font-semibold">
+                              {data.vehicle.registrationNumber}
+                            </span>
+                            <span className="rounded-full bg-blue-100 dark:bg-blue-950/80 px-2.5 py-0.5 text-xs font-semibold text-blue-800 dark:text-blue-300">
+                              Fleet Statement
+                            </span>
+                          </CardTitle>
+                          <CardDescription className="mt-1 text-xs text-muted-foreground">
+                            {data.vehicle.make ? `${data.vehicle.make} ${data.vehicle.model ?? ""} · ` : ""}
+                            {data.vehicle.capacity ? `${data.vehicle.capacity} Seater · ` : ""}
+                            Period: {periodLabel}
+                          </CardDescription>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="no-print h-8 gap-1.5 border-primary/30 hover:bg-primary/5"
+                            onClick={downloadVehicleStatement}
+                            aria-label="Download or print vehicle statement"
+                          >
+                            <Printer className="h-3.5 w-3.5 text-primary" aria-hidden />
+                            Print Statement
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="no-print h-8 gap-1.5"
+                            onClick={exportVehicleCSV}
+                            aria-label="Export vehicle trips as CSV"
+                          >
+                            <Download className="h-3.5 w-3.5" aria-hidden />
+                            Export CSV
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="no-print h-8 gap-1 text-muted-foreground hover:text-foreground"
+                            onClick={() => setVehicleId("")}
+                            aria-label="Close statement and view all vehicles"
+                          >
+                            <X className="h-3.5 w-3.5" aria-hidden />
+                            Show All
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4 pt-1">
+                      {(() => {
+                        const vRow = data.rows.find((r) => String(r.vehicleId) === vehicleId) as
+                          | { revenue?: number; operatingExpenses?: number; emi?: number; net?: number }
+                          | undefined;
+                        const revenue = vRow?.revenue ?? data.trips.reduce((s, t) => s + (t.fare ?? 0), 0);
+                        const operatingExpenses = vRow?.operatingExpenses ?? (data.expenses ?? []).reduce((s, e) => s + e.amount, 0);
+                        const emi = vRow?.emi ?? (data.emis ?? []).reduce((s, m) => s + m.amount, 0);
+                        const net = vRow?.net ?? (revenue - operatingExpenses - emi);
+
+                        return (
+                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                            {[
+                              { label: "Trip Revenue", value: formatINR(revenue), highlight: true },
+                              { label: "Operating Expenses", value: formatINR(operatingExpenses) },
+                              { label: "EMI Deductions", value: formatINR(emi) },
+                              { label: "Net Profit / Loss", value: formatINR(net), highlight: net >= 0, warning: net < 0 },
+                            ].map((s) => (
+                              <div
+                                key={s.label}
+                                className={cn(
+                                  "rounded-xl border px-3 py-2 text-center",
+                                  s.highlight && "border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20",
+                                  s.warning && "border-red-500/30 bg-red-50/50 dark:bg-red-950/20",
+                                  !s.highlight && !s.warning && "bg-muted/40"
+                                )}
+                              >
+                                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{s.label}</p>
+                                <p
+                                  className={cn(
+                                    "mt-0.5 text-base font-extrabold tabular-nums",
+                                    s.highlight && "text-emerald-600 dark:text-emerald-400",
+                                    s.warning && "text-red-600 dark:text-red-400"
+                                  )}
+                                >
+                                  {s.value}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+
+                      <div>
+                        <h4 className="mb-2 text-xs font-bold uppercase tracking-wide text-foreground">
+                          Completed Trips ({data.trips.length} trips)
+                        </h4>
+                        <div className="rounded-xl border overflow-hidden">
+                          <DataTable
+                            columns={vehicleTripColumns}
+                            rows={data.trips.map((t, i) => ({ __idx: i, ...t }))}
+                            rowKey={(r) => String(r.__idx)}
+                            emptyIcon={CarFront}
+                            emptyTitle="No trips recorded in this period"
+                            emptyDescription="No trips logged for this vehicle in the selected date range."
+                            className="max-h-64 overflow-y-auto"
+                          />
+                        </div>
+                      </div>
+
+                      {data.expenses && data.expenses.length > 0 && (
+                        <div>
+                          <h4 className="mb-2 text-xs font-bold uppercase tracking-wide text-foreground">
+                            Operating Expenses (Fuel / Service) ({data.expenses.length} entries)
+                          </h4>
+                          <div className="rounded-xl border bg-muted/20 p-2.5 space-y-1.5 max-h-48 overflow-y-auto">
+                            {data.expenses.map((e) => (
+                              <div key={e.id} className="flex items-center justify-between text-xs py-1 border-b border-border/40 last:border-0">
+                                <div>
+                                  <span className="font-semibold">{e.categoryName}</span>
+                                  <span className="text-muted-foreground ml-2">{e.description}</span>
+                                  <span className="text-muted-foreground text-[10px] ml-2">({e.date})</span>
+                                </div>
+                                <span className="font-bold tabular-nums">{formatINR(e.amount)}</span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </CardContent>
@@ -687,23 +1482,40 @@ export default function ReportsView({ navigate }: ViewProps) {
                       />
                     </CardContent>
                   </Card>
- )}
+                )}
+
                 <Card>
-                  <CardContent className="p-3 sm:p-4">
+                  <CardContent className="p-3 sm:p-4 space-y-2">
+                    <div className="flex items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-xs text-primary">
+                      <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                      <span>Click any row in the table below to open its official itemized statement and printable slip</span>
+                    </div>
+
                     <DataTable
                       columns={columns}
                       rows={rows}
                       rowKey={(r) => String(r.__idx)}
                       onRowClick={(r) => {
                         const rec = r as Record<string, unknown>;
-                        if (rec.employeeId) {
-                          navigate("employee-detail", { id: String(rec.employeeId) });
-                        } else if (rec.propertyId) {
-                          navigate("property-detail", { id: String(rec.propertyId) });
-                        } else if (rec.vehicleId) {
-                          navigate("vehicle-detail", { id: String(rec.vehicleId) });
+                        if (def.type === "contractor-commissions" && rec.contractor) {
+                          setContractor(String(rec.contractor));
+                        } else if (def.type === "property-revenue" && rec.propertyId) {
+                          setPropertyId(String(rec.propertyId));
+                        } else if (def.type === "vehicle-profitability" && rec.vehicleId) {
+                          setVehicleId(String(rec.vehicleId));
+                        } else if (def.type === "employee-earnings" && rec.employeeId) {
+                          setEmployeeId(String(rec.employeeId));
+                        } else if (def.type === "settlement-summary" && rec.id) {
+                          navigate("statement", { settlementId: String(rec.id) });
+                        } else if (def.type === "collections" && rec.propertyId) {
+                          setType("property-revenue");
+                          setPropertyId(String(rec.propertyId));
+                        } else if (def.type === "daily-operations" && rec.propertyId) {
+                          setPropertyId(String(rec.propertyId));
                         } else if (rec.tripId) {
                           navigate("trips", { id: String(rec.tripId) });
+                        } else if (def.type === "expenses") {
+                          navigate("expenses");
                         }
                       }}
                       loading={loading}
