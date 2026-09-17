@@ -9,8 +9,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { toast } from "sonner";
-import { Field, MoneyInput, useMutation } from "@/components/views/_shared";
+import { toast } from "sonner"; // [FIXED] restore toast import
+import { Field, MoneyInput, toISTDateInput, useMutation } from "@/components/views/_shared"; // [ADDED] toISTDateInput
 import type { VehicleRec } from "@/components/views/_shared";
 
 /**
@@ -47,16 +47,16 @@ export function VehicleFormDialog({ open, onOpenChange, vehicle, onDone }: {
         model: vehicle.model ?? "",
         variant: vehicle.variant ?? "",
         year: vehicle.year ? String(vehicle.year) : "",
-        purchaseDate: vehicle.purchaseDate?.slice(0, 10) ?? "",
+        purchaseDate: toISTDateInput(vehicle.purchaseDate), // [FIXED] use toISTDateInput
         purchasePrice: vehicle.purchasePrice ? String(vehicle.purchasePrice) : "",
         loanAmount: vehicle.loanAmount ? String(vehicle.loanAmount) : "",
         monthlyEmi: vehicle.monthlyEmi ? String(vehicle.monthlyEmi) : "",
-        emiStartDate: vehicle.emiStartDate?.slice(0, 10) ?? "",
+        emiStartDate: toISTDateInput(vehicle.emiStartDate), // [FIXED] use toISTDateInput
         emiCount: vehicle.emiCount ? String(vehicle.emiCount) : "",
         insuranceCompany: vehicle.insuranceCompany ?? "",
         insuranceNumber: vehicle.insuranceNumber ?? "",
-        insuranceExpiry: vehicle.insuranceExpiry?.slice(0, 10) ?? "",
-        fitnessExpiry: vehicle.fitnessExpiry?.slice(0, 10) ?? "",
+        insuranceExpiry: toISTDateInput(vehicle.insuranceExpiry), // [FIXED] use toISTDateInput
+        fitnessExpiry: toISTDateInput(vehicle.fitnessExpiry), // [FIXED] use toISTDateInput
         permitInfo: vehicle.permitInfo ?? "",
         notes: vehicle.notes ?? "",
       } : blank);

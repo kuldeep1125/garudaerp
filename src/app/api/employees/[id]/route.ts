@@ -64,17 +64,24 @@ export const PUT = handleRoute(async ({ owner, params, req }) => {
   if (body.joiningDate !== undefined && body.joiningDate) {
     const joiningDate = parseDate(body.joiningDate as string);
     if (joiningDate.getTime() !== existing.joiningDate.getTime()) {
-      // Historical integrity: joiningDate is a financial-impacting historical
-      // fact (it anchors salary/rent proration). Once any record exists for the
-      // employee it can no longer be changed — edits must never rewrite history.
-      const [depC, advC, setC, adjC] = await Promise.all([
-        db.deployment.count({ where: { employeeId: id } }),
-        db.advance.count({ where: { employeeId: id } }),
-        db.settlement.count({ where: { employeeId: id } }),
-        db.adjustment.count({ where: { employeeId: id } }),
+      // [FIXED] Historical integrity: joiningDate cannot be changed if settled payroll exists,
+      // and cannot be placed AFTER any existing deployment or transaction. Safe corrections
+      // that precede all recorded activity are permitted.
+      const settledCount = await db.settlement.count({ where: { employeeId: id, status: "SETTLED" } });
+      if (settledCount > 0) {
+        throw new HttpError(409, "Joining date is locked — this employee has settled payroll settlements.");
+      }
+      const [earliestDep, earliestAdv, earliestAdj] = await Promise.all([
+        db.deployment.findFirst({ where: { employeeId: id }, orderBy: { date: "asc" }, select: { date: true } }),
+        db.advance.findFirst({ where: { employeeId: id }, orderBy: { date: "asc" }, select: { date: true } }),
+        db.adjustment.findFirst({ where: { employeeId: id }, orderBy: { date: "asc" }, select: { date: true } }),
       ]);
-      if (depC + advC + setC + adjC > 0) {
-        throw new HttpError(409, "Joining date is locked — this employee already has deployments/advances/settlements, so changing it would rewrite historical payroll.");
+      const earliestDates = [earliestDep?.date, earliestAdv?.date, earliestAdj?.date].filter(Boolean) as Date[];
+      if (earliestDates.length > 0) {
+        const minDate = new Date(Math.min(...earliestDates.map((d) => d.getTime())));
+        if (joiningDate > minDate) {
+          throw new HttpError(400, "Joining date cannot be after the employee's earliest deployment or transaction.");
+        }
       }
       data.joiningDate = joiningDate;
     }

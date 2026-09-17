@@ -368,10 +368,23 @@ export function useDebounced<T>(value: T, delay = 300): T {
   return v;
 }
 
+// [ADDED] Convert UTC ISO strings or Date instances safely to IST YYYY-MM-DD for <input type="date">
+export function toISTDateInput(s?: string | Date | null): string {
+  if (!s) return "";
+  if (typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = typeof s === "string" ? new Date(s) : s;
+  if (!d || Number.isNaN(d.getTime())) return "";
+  const ist = new Date(d.getTime() + 5.5 * 3600 * 1000);
+  const y = ist.getUTCFullYear();
+  const m = String(ist.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(ist.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function todayStr(offsetDays = 0): string {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const d = new Date(Date.now() + 5.5 * 3600 * 1000);
+  d.setUTCDate(d.getUTCDate() + offsetDays);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
 export function fmtDay(s?: string | null): string {

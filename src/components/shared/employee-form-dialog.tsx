@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { Field, MoneyInput, Option, SelectInput, todayStr, useMutation } from "@/components/views/_shared";
+import { Field, MoneyInput, Option, SelectInput, todayStr, toISTDateInput, useMutation } from "@/components/views/_shared"; // [ADDED] toISTDateInput
 import type { EmployeeRec } from "@/components/views/_shared";
 
 /**
@@ -47,7 +47,7 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, onDone }: {
         designation: employee?.designation ?? "",
         skills: employee?.skills ?? "",
         standardRate: employee?.standardRate ? String(employee.standardRate) : "",
-        joiningDate: employee?.joiningDate?.slice(0, 10) ?? todayStr(),
+        joiningDate: toISTDateInput(employee?.joiningDate) || todayStr(), // [FIXED] use toISTDateInput instead of slice(0, 10) to prevent UTC date rollback
         gender: employee?.gender ?? "",
         city: employee?.city ?? "",
         upiId: employee?.upiId ?? "",

@@ -38,7 +38,7 @@ import {
 import {
   type ExpenseRec, type VehicleRec, type Option, SelectInput, Field, ErrorState, MiniBars, MoneyInput,
   AreaTrend, BarsCompare, CHART_COLORS, type ListResp, useAsync, useMutation, useDebounced, fmtDay,
-  todayStr, undoRequest, UNDO_APPLIED_EVENT,
+  todayStr, toISTDateInput, undoRequest, UNDO_APPLIED_EVENT, // [ADDED] toISTDateInput
 } from "./_shared";
 import {
   TransactionLineageDialog,
@@ -269,7 +269,7 @@ export function ExpenseFormDialog({ open, onOpenChange, expense, vehicles = [], 
       setTxType(initialType);
 
       setForm({
-        date: expense?.date?.slice(0, 10) ?? todayStr(),
+        date: toISTDateInput(expense?.date) || todayStr(), // [FIXED] use toISTDateInput
         business: expense?.business ?? "MANPOWER",
         categoryId: expense?.categoryId ?? "",
         amount: expense ? String(expense.amount) : (preset?.amount ? String(preset.amount) : ""),
@@ -644,7 +644,7 @@ function RecurringFormDialog({ open, onOpenChange, recurring, onDone }: {
         business: recurring?.business ?? "MANPOWER",
         categoryId: recurring?.categoryId ?? "",
         amount: recurring ? String(recurring.amount) : "",
-        startDate: recurring?.startDate?.slice(0, 10) ?? todayStr(),
+        startDate: toISTDateInput(recurring?.startDate) || todayStr(), // [FIXED] use toISTDateInput
         method: recurring?.method ?? "Bank",
         notes: recurring?.notes ?? "",
       });
