@@ -6,16 +6,17 @@ import { cn } from "@/lib/utils";
 import { formatINR } from "@/lib/money";
 import { CalendarDays, Download, Search } from "lucide-react";
 
-export type RangeKey = "today" | "yesterday" | "week" | "lastweek" | "month" | "lastmonth" | "all" | "custom";
+export type RangeKey = "today" | "yesterday" | "week" | "lastweek" | "month" | "lastmonth" | "till-date" | "all" | "custom";
 
 export const RANGE_LABELS: { key: RangeKey; label: string }[] = [
-  { key: "today", label: "Today" },
-  { key: "yesterday", label: "Yesterday" },
-  { key: "week", label: "This Week" },
-  { key: "lastweek", label: "Last Week" },
   { key: "month", label: "This Month" },
   { key: "lastmonth", label: "Last Month" },
-  { key: "all", label: "All Time" },
+  { key: "till-date", label: "Till Date" },
+  { key: "all", label: "Lifetime" },
+  { key: "week", label: "This Week" },
+  { key: "lastweek", label: "Last Week" },
+  { key: "today", label: "Today" },
+  { key: "yesterday", label: "Yesterday" },
 ];
 
 // Horizontal scrollable date-range pill selector.
@@ -82,6 +83,9 @@ export function rangeKeyToBounds(key: RangeKey): { from: string; to: string } {
         to: ymd(new Date(now.getFullYear(), now.getMonth(), 0)),
       };
     }
+    case "till-date": {
+      return { from: "2020-01-01", to: ymd(now) };
+    }
     case "all": {
       return { from: "2020-01-01", to: ymd(now) };
     }
@@ -101,7 +105,8 @@ export const RANGE_HINT: Record<RangeKey, string> = {
   lastweek: "prior week",
   month: "this month",
   lastmonth: "last month",
-  all: "all time",
+  "till-date": "till date",
+  all: "lifetime",
   custom: "selected range",
 };
 

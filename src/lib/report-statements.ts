@@ -625,3 +625,833 @@ export function buildVehicleStatementHtml(data: VehicleStatementData): string {
 </body>
 </html>`;
 }
+
+// ---------------------------------------------------------------------------
+// Bank & Cash Book Statement HTML Generator
+// ---------------------------------------------------------------------------
+
+export interface BankLedgerPrintParams {
+  businessName: string;
+  periodLabel: string;
+  totals: { inflow: number; outflow: number; net: number; count: number };
+  rows: Array<{
+    date: string;
+    category: string;
+    entity: string;
+    description: string;
+    mode: string;
+    inflow: number;
+    outflow: number;
+    balance: number;
+  }>;
+  streams?: Array<{ category: string; inflow: number; outflow: number; count: number }>;
+}
+
+export function buildBankLedgerHtml(p: BankLedgerPrintParams): string {
+  const genAt = new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  const streamRows = (p.streams ?? []).map((s, idx) => `
+    <tr>
+      <td class="num">${idx + 1}</td>
+      <td><strong>${esc(s.category)}</strong></td>
+      <td class="num right">${esc(String(s.count))}</td>
+      <td class="num right" style="color: #059669">${esc(s.inflow > 0 ? inr(s.inflow) : "—")}</td>
+      <td class="num right" style="color: #dc2626">${esc(s.outflow > 0 ? inr(s.outflow) : "—")}</td>
+      <td class="num right"><strong>${esc(inr(s.inflow - s.outflow))}</strong></td>
+    </tr>
+  `).join("");
+
+  const ledgerRows = p.rows.map((r, idx) => `
+    <tr>
+      <td class="num">${idx + 1}</td>
+      <td>${esc(fmtDay(r.date))}</td>
+      <td><span class="badge ${r.inflow > 0 ? "badge-day" : "badge-night"}">${esc(r.category)}</span></td>
+      <td><strong>${esc(r.entity)}</strong></td>
+      <td>${esc(r.description)}</td>
+      <td><span class="badge badge-shift">${esc(r.mode)}</span></td>
+      <td class="num right" style="color: #059669; font-weight: 600">${esc(r.inflow > 0 ? inr(r.inflow) : "—")}</td>
+      <td class="num right" style="color: #dc2626; font-weight: 600">${esc(r.outflow > 0 ? inr(r.outflow) : "—")}</td>
+      <td class="num right" style="font-weight: 700">${esc(inr(r.balance))}</td>
+    </tr>
+  `).join("");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Bank & Cash Book — ${esc(p.periodLabel)}</title>
+  <style>${COMMON_STYLES}</style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="letterhead">
+      <div class="brand">
+        <div class="logo-badge">₹</div>
+        <div>
+          <div class="brand-name">${esc(p.businessName || "Garuda ERP Control Center")}</div>
+          <div class="brand-sub">Consolidated Cash & Bank Treasury Book</div>
+        </div>
+      </div>
+      <div class="doc-title-block">
+        <h1 class="doc-title">CASH & BANK STATEMENT</h1>
+        <p class="period">Period: ${esc(p.periodLabel)}</p>
+        <p class="generated">Generated: ${esc(genAt)}</p>
+      </div>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi-box highlight">
+        <div class="k">TOTAL INFLOWS (RECEIVED)</div>
+        <div class="v" style="color: #059669">${esc(inr(p.totals.inflow))}</div>
+      </div>
+      <div class="kpi-box warning">
+        <div class="k">TOTAL OUTFLOWS (DISBURSED)</div>
+        <div class="v" style="color: #dc2626">${esc(inr(p.totals.outflow))}</div>
+      </div>
+      <div class="kpi-box ${p.totals.net >= 0 ? "highlight" : "warning"}">
+        <div class="k">NET CASH FLOW</div>
+        <div class="v" style="color: ${p.totals.net >= 0 ? "#059669" : "#dc2626"}">${esc(inr(p.totals.net))}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="k">TRANSACTION COUNT</div>
+        <div class="v">${esc(String(p.totals.count))} entries</div>
+      </div>
+    </div>
+
+    ${p.streams && p.streams.length > 0 ? `
+    <div class="section-title">Cash Flow Stream Summary</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 32px">#</th>
+          <th>Stream / Flow Category</th>
+          <th class="right">Entries</th>
+          <th class="right">Total Inflow</th>
+          <th class="right">Total Outflow</th>
+          <th class="right">Net Contribution</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${streamRows}
+      </tbody>
+    </table>
+    ` : ""}
+
+    <div class="section-title">Chronological Transaction Register (${p.rows.length} records)</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 28px">#</th>
+          <th>Date</th>
+          <th>Category</th>
+          <th>Party / Entity</th>
+          <th>Description / Ref</th>
+          <th>Mode</th>
+          <th class="right">Inflow (+)</th>
+          <th class="right">Outflow (-)</th>
+          <th class="right">Running Net</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${ledgerRows}
+        <tr class="totals-row">
+          <td colspan="6"><strong>PERIOD TOTALS</strong></td>
+          <td class="num right" style="color: #059669; font-size: 13px;">${esc(inr(p.totals.inflow))}</td>
+          <td class="num right" style="color: #dc2626; font-size: 13px;">${esc(inr(p.totals.outflow))}</td>
+          <td class="num right" style="font-size: 13px; font-weight: 800">${esc(inr(p.totals.net))}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="footer">
+      <div>Garuda ERP Treasury Audit System • All transactions digitally stamped</div>
+      <div>Authorized Finance Controller: ________________________</div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
+// Executive Income Statement (P&L) HTML Generator
+// ---------------------------------------------------------------------------
+
+export interface ExecutivePnlPrintParams {
+  businessName: string;
+  periodLabel: string;
+  incomeStatement: {
+    revenue: {
+      manpowerBilling: number;
+      transportBilling: number;
+      rentIncome: number;
+      totalRevenue: number;
+    };
+    directCosts: {
+      perShiftWages: number;
+      salariedPayroll: number;
+      overtime: number;
+      contractorCommissions: number;
+      totalLaborCost: number;
+    };
+    grossProfit: number;
+    grossMarginPct: number;
+    operatingExpenses: {
+      categories: Array<{ category: string; amount: number; entriesCount: number }>;
+      totalOpex: number;
+    };
+    netProfit: number;
+    netMarginPct: number;
+  };
+}
+
+export function buildExecutivePnlHtml(p: ExecutivePnlPrintParams): string {
+  const genAt = new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const is = p.incomeStatement;
+
+  const opexCategoryRows = is.operatingExpenses.categories.map((c, idx) => `
+    <tr>
+      <td style="padding-left: 24px; color: #475569;">${idx + 1}. ${esc(c.category)} (${c.entriesCount} bills)</td>
+      <td class="num right">${esc(inr(c.amount))}</td>
+    </tr>
+  `).join("");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Executive Income Statement (P&L) — ${esc(p.periodLabel)}</title>
+  <style>
+    ${COMMON_STYLES}
+    .pnl-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    .pnl-table th, .pnl-table td { padding: 8px 12px; font-size: 12px; border-bottom: 1px solid #e2e8f0; }
+    .pnl-header { background: #0f172a; color: #fff; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; }
+    .pnl-section { background: #f8fafc; font-weight: 700; color: #0f172a; font-size: 13px; }
+    .pnl-subtotal { background: #f1f5f9; font-weight: 700; border-top: 1px solid #94a3b8; border-bottom: 2px solid #0f172a; }
+    .pnl-net { background: #ecfdf5; font-size: 14px; font-weight: 800; border-top: 2px solid #059669; border-bottom: 3px double #059669; }
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="letterhead">
+      <div class="brand">
+        <div class="logo-badge">P&L</div>
+        <div>
+          <div class="brand-name">${esc(p.businessName || "Garuda ERP")}</div>
+          <div class="brand-sub">Executive Financial Profit & Loss Statement</div>
+        </div>
+      </div>
+      <div class="doc-title-block">
+        <h1 class="doc-title">INCOME STATEMENT (P&L)</h1>
+        <p class="period">Accounting Period: ${esc(p.periodLabel)}</p>
+        <p class="generated">Report Date: ${esc(genAt)}</p>
+      </div>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi-box highlight">
+        <div class="k">TOTAL GROSS REVENUE</div>
+        <div class="v" style="color: #059669">${esc(inr(is.revenue.totalRevenue))}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="k">DIRECT LABOR &amp; COGS</div>
+        <div class="v">${esc(inr(is.directCosts.totalLaborCost))}</div>
+      </div>
+      <div class="kpi-box highlight">
+        <div class="k">GROSS MARGIN (${is.grossMarginPct}%)</div>
+        <div class="v" style="color: #059669">${esc(inr(is.grossProfit))}</div>
+      </div>
+      <div class="kpi-box ${is.netProfit >= 0 ? "highlight" : "warning"}">
+        <div class="k">NET PROFIT (${is.netMarginPct}%)</div>
+        <div class="v" style="color: ${is.netProfit >= 0 ? "#059669" : "#dc2626"}">${esc(inr(is.netProfit))}</div>
+      </div>
+    </div>
+
+    <table class="pnl-table">
+      <thead>
+        <tr class="pnl-header">
+          <th>Accounting Line Item</th>
+          <th class="right" style="width: 140px">Amount (INR)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- Revenue Section -->
+        <tr class="pnl-section">
+          <td colspan="2">1. OPERATING REVENUE</td>
+        </tr>
+        <tr>
+          <td style="padding-left: 24px">Manpower Client Deployments Billing</td>
+          <td class="num right">${esc(inr(is.revenue.manpowerBilling))}</td>
+        </tr>
+        <tr>
+          <td style="padding-left: 24px">Transport Vehicle Rental &amp; Trip Billings</td>
+          <td class="num right">${esc(inr(is.revenue.transportBilling))}</td>
+        </tr>
+        <tr>
+          <td style="padding-left: 24px">Staff Accommodation Business Rent Accruals</td>
+          <td class="num right">${esc(inr(is.revenue.rentIncome))}</td>
+        </tr>
+        <tr class="pnl-subtotal">
+          <td><strong>TOTAL OPERATING REVENUE</strong></td>
+          <td class="num right" style="color: #059669; font-size: 13px;">${esc(inr(is.revenue.totalRevenue))}</td>
+        </tr>
+
+        <!-- Direct Labor Costs Section -->
+        <tr class="pnl-section">
+          <td colspan="2">2. COST OF SERVICES &amp; DIRECT LABOR (COGS)</td>
+        </tr>
+        <tr>
+          <td style="padding-left: 24px">Per-Shift Employee Payouts (Hourly / Shift Wages)</td>
+          <td class="num right">${esc(inr(is.directCosts.perShiftWages))}</td>
+        </tr>
+        <tr>
+          <td style="padding-left: 24px">Fixed Monthly Salaried Staff Payroll Accrual</td>
+          <td class="num right">${esc(inr(is.directCosts.salariedPayroll))}</td>
+        </tr>
+        <tr>
+          <td style="padding-left: 24px">Salaried Overtime Deployments Accrual</td>
+          <td class="num right">${esc(inr(is.directCosts.overtime))}</td>
+        </tr>
+        <tr>
+          <td style="padding-left: 24px">Sub-Contractor Commission Cuts</td>
+          <td class="num right">${esc(inr(is.directCosts.contractorCommissions))}</td>
+        </tr>
+        <tr class="pnl-subtotal">
+          <td><strong>TOTAL DIRECT LABOR &amp; SERVICE COST</strong></td>
+          <td class="num right" style="font-size: 13px;">${esc(inr(is.directCosts.totalLaborCost))}</td>
+        </tr>
+
+        <!-- Gross Profit -->
+        <tr style="background: #f8fafc; font-weight: 800; font-size: 13px;">
+          <td>GROSS OPERATING PROFIT (Revenue − Labor)</td>
+          <td class="num right" style="color: #059669; font-size: 13px;">${esc(inr(is.grossProfit))}</td>
+        </tr>
+
+        <!-- Operating Expenses Section -->
+        <tr class="pnl-section">
+          <td colspan="2">3. OPERATING OVERHEADS &amp; EXPENSES (OPEX)</td>
+        </tr>
+        ${opexCategoryRows}
+        <tr class="pnl-subtotal">
+          <td><strong>TOTAL OPERATING EXPENSES</strong></td>
+          <td class="num right" style="color: #dc2626; font-size: 13px;">${esc(inr(is.operatingExpenses.totalOpex))}</td>
+        </tr>
+
+        <!-- Net Profit -->
+        <tr class="pnl-net">
+          <td><strong>NET OPERATING PROFIT / (LOSS)</strong></td>
+          <td class="num right" style="color: ${is.netProfit >= 0 ? "#059669" : "#dc2626"}; font-size: 15px;">
+            ${esc(inr(is.netProfit))}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="footer">
+      <div>Certified P&L Statement • Garuda Enterprise Reporting Core</div>
+      <div>Managing Partner / Director: ________________________</div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
+// Manpower Master Statement HTML Generator
+// ---------------------------------------------------------------------------
+
+export interface ManpowerMasterPrintParams {
+  businessName: string;
+  periodLabel: string;
+  totals: {
+    shifts: number;
+    headcount: number;
+    billing: number;
+    payout: number;
+    contractorCut: number;
+    margin: number;
+    marginPct: number;
+  };
+  rows: Array<{
+    propertyName: string;
+    shifts: number;
+    headcount: number;
+    billing: number;
+    payout: number;
+    contractorCut: number;
+    margin: number;
+    marginPct: number;
+  }>;
+  contractors?: Array<{ contractor: string; shifts: number; headcount: number; commission: number }>;
+}
+
+export function buildManpowerMasterHtml(p: ManpowerMasterPrintParams): string {
+  const genAt = new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  const propRows = p.rows.map((r, idx) => `
+    <tr>
+      <td class="num">${idx + 1}</td>
+      <td><strong>${esc(r.propertyName)}</strong></td>
+      <td class="num right">${esc(String(r.shifts))}</td>
+      <td class="num right">${esc(String(r.headcount))}</td>
+      <td class="num right font-semibold">${esc(inr(r.billing))}</td>
+      <td class="num right">${esc(inr(r.payout))}</td>
+      <td class="num right">${esc(inr(r.contractorCut))}</td>
+      <td class="num right" style="font-weight: 700; color: ${r.margin >= 0 ? "#059669" : "#dc2626"}">${esc(inr(r.margin))}</td>
+      <td class="num right">${esc(String(r.marginPct))}%</td>
+    </tr>
+  `).join("");
+
+  const contractorRows = (p.contractors ?? []).map((c, idx) => `
+    <tr>
+      <td class="num">${idx + 1}</td>
+      <td><strong>${esc(c.contractor)}</strong></td>
+      <td class="num right">${esc(String(c.shifts))}</td>
+      <td class="num right">${esc(String(c.headcount))}</td>
+      <td class="num right font-bold" style="color: #059669">${esc(inr(c.commission))}</td>
+    </tr>
+  `).join("");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Manpower Master Statement — ${esc(p.periodLabel)}</title>
+  <style>${COMMON_STYLES}</style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="letterhead">
+      <div class="brand">
+        <div class="logo-badge">M</div>
+        <div>
+          <div class="brand-name">${esc(p.businessName || "Garuda ERP")}</div>
+          <div class="brand-sub">Manpower Operational & Financial Master Statement</div>
+        </div>
+      </div>
+      <div class="doc-title-block">
+        <h1 class="doc-title">MANPOWER MASTER STATEMENT</h1>
+        <p class="period">Period: ${esc(p.periodLabel)}</p>
+        <p class="generated">Generated: ${esc(genAt)}</p>
+      </div>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi-box highlight">
+        <div class="k">TOTAL BILLING REVENUE</div>
+        <div class="v" style="color: #059669">${esc(inr(p.totals.billing))}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="k">EMPLOYEE PAYOUTS</div>
+        <div class="v">${esc(inr(p.totals.payout))}</div>
+      </div>
+      <div class="kpi-box warning">
+        <div class="k">CONTRACTOR COMMISSIONS</div>
+        <div class="v">${esc(inr(p.totals.contractorCut))}</div>
+      </div>
+      <div class="kpi-box ${p.totals.margin >= 0 ? "highlight" : "warning"}">
+        <div class="k">GROSS MARGIN (${p.totals.marginPct}%)</div>
+        <div class="v" style="color: ${p.totals.margin >= 0 ? "#059669" : "#dc2626"}">${esc(inr(p.totals.margin))}</div>
+      </div>
+    </div>
+
+    <div class="section-title">Property Performance &amp; Billings Breakdown</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 28px">#</th>
+          <th>Restaurant / Property</th>
+          <th class="right">Shifts</th>
+          <th class="right">Staff</th>
+          <th class="right">Billing</th>
+          <th class="right">Payouts</th>
+          <th class="right">Contractor Cut</th>
+          <th class="right">Gross Margin</th>
+          <th class="right">Margin %</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${propRows}
+        <tr class="totals-row">
+          <td colspan="2"><strong>TOTALS</strong></td>
+          <td class="num right">${esc(String(p.totals.shifts))}</td>
+          <td class="num right">${esc(String(p.totals.headcount))}</td>
+          <td class="num right font-bold">${esc(inr(p.totals.billing))}</td>
+          <td class="num right">${esc(inr(p.totals.payout))}</td>
+          <td class="num right">${esc(inr(p.totals.contractorCut))}</td>
+          <td class="num right font-bold" style="color: #059669">${esc(inr(p.totals.margin))}</td>
+          <td class="num right font-bold">${esc(String(p.totals.marginPct))}%</td>
+        </tr>
+      </tbody>
+    </table>
+
+    ${p.contractors && p.contractors.length > 0 ? `
+    <div class="section-title">Sub-Contractor Payouts Summary</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 28px">#</th>
+          <th>Contractor Partner</th>
+          <th class="right">Shifts Provided</th>
+          <th class="right">Workers Count</th>
+          <th class="right">Commission Payable</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${contractorRows}
+      </tbody>
+    </table>
+    ` : ""}
+
+    <div class="footer">
+      <div>Garuda ERP Manpower Operations • Official Record</div>
+      <div>Operations Head: ________________________</div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
+// Transport Master Statement HTML Generator
+// ---------------------------------------------------------------------------
+
+export interface TransportMasterPrintParams {
+  businessName: string;
+  periodLabel: string;
+  totals: {
+    tripsCount: number;
+    revenue: number;
+    collected: number;
+    pending: number;
+    opex: number;
+    emi: number;
+    net: number;
+    marginPct: number;
+  };
+  rows: Array<{
+    vehicleName: string;
+    registration: string;
+    tripsCount: number;
+    revenue: number;
+    opex: number;
+    emi: number;
+    net: number;
+    marginPct: number;
+  }>;
+  trips?: Array<{
+    date: string;
+    vehicle: string;
+    client: string;
+    rentalType: string;
+    fare: number;
+    paid: number;
+    pending: number;
+  }>;
+}
+
+export function buildTransportMasterHtml(p: TransportMasterPrintParams): string {
+  const genAt = new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  const vehicleRows = p.rows.map((v, idx) => `
+    <tr>
+      <td class="num">${idx + 1}</td>
+      <td><strong>${esc(v.vehicleName)}</strong> <span style="font-size: 10px; color: #64748b">(${esc(v.registration)})</span></td>
+      <td class="num right">${esc(String(v.tripsCount))}</td>
+      <td class="num right font-semibold">${esc(inr(v.revenue))}</td>
+      <td class="num right">${esc(inr(v.opex))}</td>
+      <td class="num right">${esc(inr(v.emi))}</td>
+      <td class="num right font-bold" style="color: ${v.net >= 0 ? "#059669" : "#dc2626"}">${esc(inr(v.net))}</td>
+      <td class="num right">${esc(String(v.marginPct))}%</td>
+    </tr>
+  `).join("");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Transport Master Statement — ${esc(p.periodLabel)}</title>
+  <style>${COMMON_STYLES}</style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="letterhead">
+      <div class="brand">
+        <div class="logo-badge">T</div>
+        <div>
+          <div class="brand-name">${esc(p.businessName || "Garuda ERP")}</div>
+          <div class="brand-sub">Transport Fleet Operational & Financial Statement</div>
+        </div>
+      </div>
+      <div class="doc-title-block">
+        <h1 class="doc-title">TRANSPORT MASTER STATEMENT</h1>
+        <p class="period">Period: ${esc(p.periodLabel)}</p>
+        <p class="generated">Generated: ${esc(genAt)}</p>
+      </div>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi-box highlight">
+        <div class="k">FLEET REVENUE</div>
+        <div class="v" style="color: #059669">${esc(inr(p.totals.revenue))}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="k">OPEX (FUEL / SERVICE)</div>
+        <div class="v">${esc(inr(p.totals.opex))}</div>
+      </div>
+      <div class="kpi-box warning">
+        <div class="k">VEHICLE LOAN EMIS</div>
+        <div class="v">${esc(inr(p.totals.emi))}</div>
+      </div>
+      <div class="kpi-box ${p.totals.net >= 0 ? "highlight" : "warning"}">
+        <div class="k">NET PROFIT (${p.totals.marginPct}%)</div>
+        <div class="v" style="color: ${p.totals.net >= 0 ? "#059669" : "#dc2626"}">${esc(inr(p.totals.net))}</div>
+      </div>
+    </div>
+
+    <div class="section-title">Fleet Vehicles Profitability Summary</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 28px">#</th>
+          <th>Vehicle</th>
+          <th class="right">Trips</th>
+          <th class="right">Revenue</th>
+          <th class="right">Fuel/Repairs</th>
+          <th class="right">Loan EMI</th>
+          <th class="right">Net Profit</th>
+          <th class="right">Margin %</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${vehicleRows}
+        <tr class="totals-row">
+          <td colspan="2"><strong>FLEET TOTALS</strong></td>
+          <td class="num right">${esc(String(p.totals.tripsCount))}</td>
+          <td class="num right font-bold">${esc(inr(p.totals.revenue))}</td>
+          <td class="num right">${esc(inr(p.totals.opex))}</td>
+          <td class="num right">${esc(inr(p.totals.emi))}</td>
+          <td class="num right font-bold" style="color: #059669">${esc(inr(p.totals.net))}</td>
+          <td class="num right font-bold">${esc(String(p.totals.marginPct))}%</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="footer">
+      <div>Garuda ERP Transport Logistics • Official Fleet Statement</div>
+      <div>Fleet Incharge: ________________________</div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
+// Comprehensive Period Closure Dossier HTML Generator
+// ---------------------------------------------------------------------------
+
+export interface PeriodClosureDossierPrintParams {
+  businessName: string;
+  closingCutoff: string;
+  period: string;
+  dossier: {
+    executiveSummary: {
+      totalRevenue: number;
+      manpowerBilling: number;
+      transportBilling: number;
+      rentIncome: number;
+      totalLaborCost: number;
+      grossProfit: number;
+      totalOpex: number;
+      netProfit: number;
+      netMarginPct: number;
+    };
+    cashLedger: {
+      totalInflow: number;
+      propertyCollections: number;
+      tripCollections: number;
+      totalOutflow: number;
+      advancesDisbursed: number;
+      settlementsPaid: number;
+      opexPaid: number;
+      emiPaid: number;
+      netCashFlow: number;
+    };
+    carriedForwardBalances: {
+      propertyReceivables: number;
+      unrecoveredAdvancesCount: number;
+      unrecoveredAdvancesTotal: number;
+      unrecoveredAdvancesList: Array<{
+        employeeName: string;
+        code: string;
+        amount: number;
+        recovered: number;
+        outstanding: number;
+        date: string;
+      }>;
+    };
+    archivableRecordCounts: {
+      deployments: number;
+      trips: number;
+      propertyPayments: number;
+      expenses: number;
+      settlements: number;
+    };
+  };
+}
+
+export function buildPeriodClosureDossierHtml(p: PeriodClosureDossierPrintParams): string {
+  const genAt = new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const d = p.dossier;
+
+  const advanceRows = d.carriedForwardBalances.unrecoveredAdvancesList.map((a, idx) => `
+    <tr>
+      <td class="num">${idx + 1}</td>
+      <td><strong>${esc(a.employeeName)}</strong> (${esc(a.code)})</td>
+      <td>${esc(fmtDay(a.date))}</td>
+      <td class="num right">${esc(inr(a.amount))}</td>
+      <td class="num right">${esc(inr(a.recovered))}</td>
+      <td class="num right font-bold" style="color: #dc2626">${esc(inr(a.outstanding))}</td>
+    </tr>
+  `).join("");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Period Closure Dossier — Through ${esc(p.closingCutoff)}</title>
+  <style>${COMMON_STYLES}</style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="letterhead">
+      <div class="brand">
+        <div class="logo-badge">🏛️</div>
+        <div>
+          <div class="brand-name">${esc(p.businessName || "Garuda ERP")}</div>
+          <div class="brand-sub">Official Historical Period Closing &amp; Reset Dossier</div>
+        </div>
+      </div>
+      <div class="doc-title-block">
+        <h1 class="doc-title">PERIOD CLOSURE DOSSIER</h1>
+        <p class="period">Closed Through Cutoff: ${esc(p.closingCutoff)}</p>
+        <p class="generated">Stamped: ${esc(genAt)}</p>
+      </div>
+    </div>
+
+    <div class="entity-card">
+      <div>
+        <p class="k">HISTORICAL PERIOD</p>
+        <p class="v">${esc(p.period)}</p>
+      </div>
+      <div>
+        <p class="k">NET HISTORICAL PROFIT</p>
+        <p class="v" style="color: ${d.executiveSummary.netProfit >= 0 ? "#059669" : "#dc2626"}">${esc(inr(d.executiveSummary.netProfit))}</p>
+      </div>
+      <div>
+        <p class="k">NET CASH GENERATED</p>
+        <p class="v">${esc(inr(d.cashLedger.netCashFlow))}</p>
+      </div>
+      <div>
+        <p class="k">CLOSING STATUS</p>
+        <p class="v" style="color: #059669">AUDITED &amp; SEALED</p>
+      </div>
+    </div>
+
+    <div class="section-title">1. Financial Performance Summary</div>
+    <table>
+      <tbody>
+        <tr>
+          <td><strong>Total Gross Revenue Generated</strong> (Manpower + Transport + Rent)</td>
+          <td class="num right font-bold" style="color: #059669">${esc(inr(d.executiveSummary.totalRevenue))}</td>
+        </tr>
+        <tr>
+          <td>&nbsp;&nbsp;· Manpower Shift Deployments Billing</td>
+          <td class="num right">${esc(inr(d.executiveSummary.manpowerBilling))}</td>
+        </tr>
+        <tr>
+          <td>&nbsp;&nbsp;· Transport Fleet Rental Billings</td>
+          <td class="num right">${esc(inr(d.executiveSummary.transportBilling))}</td>
+        </tr>
+        <tr>
+          <td>&nbsp;&nbsp;· Staff Accommodation Business Rent Accrual</td>
+          <td class="num right">${esc(inr(d.executiveSummary.rentIncome))}</td>
+        </tr>
+        <tr>
+          <td><strong>Total Labor &amp; Service Cost</strong> (Wages + Salary + Overtime + Contractor)</td>
+          <td class="num right font-semibold">${esc(inr(d.executiveSummary.totalLaborCost))}</td>
+        </tr>
+        <tr>
+          <td><strong>Total Operating Expenses &amp; EMIs</strong></td>
+          <td class="num right font-semibold">${esc(inr(d.executiveSummary.totalOpex))}</td>
+        </tr>
+        <tr class="totals-row">
+          <td><strong>FINAL NET PROFIT FOR CLOSED PERIOD</strong></td>
+          <td class="num right" style="color: ${d.executiveSummary.netProfit >= 0 ? "#059669" : "#dc2626"}; font-size: 14px;">
+            ${esc(inr(d.executiveSummary.netProfit))} (${d.executiveSummary.netMarginPct}%)
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="section-title">2. Carried Forward Balances Into New Period</div>
+    <p style="font-size: 11px; color: #475569; margin: -4px 0 8px;">
+      The following balances will be seamlessly carried forward into the fresh period to ensure zero financial loss.
+    </p>
+    <table>
+      <tbody>
+        <tr>
+          <td><strong>Outstanding Property Client Receivables</strong> (Carried as opening dues)</td>
+          <td class="num right font-bold" style="color: #d97706">${esc(inr(d.carriedForwardBalances.propertyReceivables))}</td>
+        </tr>
+        <tr>
+          <td><strong>Active Unrecovered Staff Advances</strong> (${d.carriedForwardBalances.unrecoveredAdvancesCount} employees preserved)</td>
+          <td class="num right font-bold" style="color: #dc2626">${esc(inr(d.carriedForwardBalances.unrecoveredAdvancesTotal))}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    ${advanceRows ? `
+    <div class="section-title">Preserved Advance Balances Detail</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 28px">#</th>
+          <th>Employee</th>
+          <th>Advance Date</th>
+          <th class="right">Total Given</th>
+          <th class="right">Recovered</th>
+          <th class="right">Carried Forward Due</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${advanceRows}
+      </tbody>
+    </table>
+    ` : ""}
+
+    <div class="section-title">3. Transaction Records to be Archived</div>
+    <table>
+      <tbody>
+        <tr>
+          <td>Deployment Shift Records: <strong>${d.archivableRecordCounts.deployments}</strong></td>
+          <td>Trip &amp; Rental Records: <strong>${d.archivableRecordCounts.trips}</strong></td>
+        </tr>
+        <tr>
+          <td>Property Payment Records: <strong>${d.archivableRecordCounts.propertyPayments}</strong></td>
+          <td>Operating Expense Records: <strong>${d.archivableRecordCounts.expenses}</strong></td>
+        </tr>
+        <tr>
+          <td colspan="2">Finalized Settlements: <strong>${d.archivableRecordCounts.settlements}</strong> (Master profiles preserved)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="footer">
+      <div>This document serves as the permanent legal historical record of Garuda ERP prior to period reset.</div>
+      <div>Authorized Signatory / Executive Partner: ________________________</div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+

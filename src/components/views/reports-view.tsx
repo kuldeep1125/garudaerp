@@ -8,6 +8,10 @@ import {
   buildContractorStatementHtml,
   buildPropertyStatementHtml,
   buildVehicleStatementHtml,
+  buildBankLedgerHtml,
+  buildExecutivePnlHtml,
+  buildManpowerMasterHtml,
+  buildTransportMasterHtml,
 } from "@/lib/report-statements";
 import type { ViewProps } from "@/components/view-types";
 import { PageHeader } from "@/components/shared/page-header";
@@ -16,22 +20,23 @@ import { RangeSelector, type RangeKey } from "@/components/shared/filters";
 import { MonthPicker, toMonth } from "@/components/shared/month-picker";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PrintLetterhead } from "@/components/shared/print-letterhead";
+import { PeriodClosingDialog } from "@/components/shared/period-closing-dialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  ArrowLeft, BarChart3, Building2, CalendarCheck, CarFront, CheckCircle2, ChevronRight, Crown, Download,
-  FileText, HardHat, Info, MapPin, Play, Printer, Receipt, ReceiptText, Route, Sparkles, TrendingUp,
-  Users, Wallet, X, type LucideIcon,
+  Archive, ArrowLeft, BarChart3, Briefcase, Building2, CalendarCheck, CarFront, CheckCircle2, ChevronRight, Crown, Download,
+  FileText, HardHat, Info, Landmark, MapPin, Play, Printer, Receipt, ReceiptText, RefreshCw, Route, Sparkles, TrendingUp,
+  Truck, Users, Wallet, X, type LucideIcon,
 } from "lucide-react";
 import {
   BarsCompare, CHART_COLORS, ErrorState, Field, Option, SelectInput, todayStr, useAsync,
 } from "./_shared";
 
 // ---------------------------------------------------------------------------
-// Report catalog
+// Report catalog — Complete Enterprise ERP Suite
 // ---------------------------------------------------------------------------
 
 type ReportConfig = "range" | "range-business" | "date" | "month";
@@ -45,16 +50,19 @@ interface ReportDef {
 }
 
 const REPORTS: ReportDef[] = [
+  { type: "profitability", title: "Executive P&L Statement", subtitle: "Multi-tier profit & loss with gross & net breakdown", icon: TrendingUp, config: "range-business" },
+  { type: "bank-ledger", title: "Cash & Bank Book", subtitle: "Complete ledger of all liquid money in vs money out", icon: Landmark, config: "range-business" },
+  { type: "manpower-statement", title: "Manpower Master Statement", subtitle: "Consolidated manpower operations & financials", icon: Briefcase, config: "range" },
+  { type: "transport-statement", title: "Transport Master Statement", subtitle: "Consolidated fleet trip ledger, revenue & costs", icon: Truck, config: "range" },
   { type: "employee-earnings", title: "Employee Earnings", subtitle: "Shifts, salary, advances & net pay by employee", icon: Users, config: "range" },
   { type: "property-revenue", title: "Property Revenue", subtitle: "Billing vs collections by property", icon: Building2, config: "range" },
-  { type: "collections", title: "Collections", subtitle: "Daily billed & received with outstanding", icon: Wallet, config: "range" },
-  { type: "expenses", title: "Expenses", subtitle: "Expense entries by category & business", icon: Receipt, config: "range-business" },
-  { type: "profitability", title: "Profitability", subtitle: "Billing, employee cost, rent & net margin", icon: TrendingUp, config: "range-business" },
+  { type: "collections", title: "Collections Ledger", subtitle: "Daily billed & received with outstanding", icon: Wallet, config: "range" },
+  { type: "expenses", title: "Expenses Analysis", subtitle: "Expense entries by category & business", icon: Receipt, config: "range-business" },
   { type: "contractor-commissions", title: "Contractor Commissions", subtitle: "Commission per contractor & month", icon: HardHat, config: "range" },
   { type: "vehicle-profitability", title: "Vehicle Profitability", subtitle: "Revenue, opex, EMI & net by vehicle", icon: CarFront, config: "range" },
   { type: "trip-profit", title: "Trip Profitability", subtitle: "Per-trip revenue, estimated cost & margin", icon: Route, config: "range" },
-  { type: "daily-operations", title: "Daily Operations", subtitle: "All deployments for a single day", icon: CalendarCheck, config: "date" },
-  { type: "owner-expenses", title: "Owner Expenses", subtitle: "Spending by owner with withdrawals", icon: Crown, config: "range" },
+  { type: "daily-operations", title: "Daily Operations Register", subtitle: "All deployments for a single day", icon: CalendarCheck, config: "date" },
+  { type: "owner-expenses", title: "Owner Capital & Drawing", subtitle: "Spending by owner with withdrawals & deposits", icon: Crown, config: "range" },
   { type: "settlement-summary", title: "Settlement Summary", subtitle: "Month payroll summary per employee", icon: ReceiptText, config: "month" },
 ];
 
@@ -115,6 +123,27 @@ interface ReportResp {
     billing?: number;
     payout?: number;
   }[];
+
+  // Treasury & Cash Book (bank-ledger)
+  streams?: { category: string; inflow: number; outflow: number; count: number }[];
+
+  // Executive P&L (profitability)
+  incomeStatement?: {
+    revenue: { manpowerBilling: number; transportBilling: number; rentIncome: number; totalRevenue: number };
+    directCosts: { perShiftWages: number; salariedPayroll: number; overtime: number; contractorCommissions: number; totalLaborCost: number };
+    grossProfit: number;
+    grossMarginPct: number;
+    operatingExpenses: { categories: Array<{ category: string; amount: number; entriesCount: number }>; totalOpex: number };
+    netProfit: number;
+    netMarginPct: number;
+  };
+  expenseBreakdown?: { category: string; amount: number; entriesCount: number }[];
+
+  // Manpower & Transport Master statements
+  summary?: Record<string, unknown>;
+  contractors?: Array<{ contractor: string; shifts: number; headcount: number; commission: number }>;
+  topEmployees?: Array<{ employeeId: string; employeeName: string; code: string; shifts: number; payout: number; properties: string }>;
+  clients?: Array<{ clientId: string; clientName: string; tripsCount: number; totalBilled: number; totalPaid: number; outstanding: number }>;
 
   // Contractor drill-down & list
   contractor?: string;
@@ -247,6 +276,7 @@ function computeRange(range: RangeKey, customFrom: string, customTo: string): { 
       const last = new Date(now.getFullYear(), now.getMonth(), 0);
       return { from: ymd(first), to: ymd(last) };
     }
+    case "till-date":
     case "all":
       return { from: "2020-01-01", to: t };
     case "custom": {
@@ -255,6 +285,8 @@ function computeRange(range: RangeKey, customFrom: string, customTo: string): { 
       if (from > to) [from, to] = [to, from];
       return { from, to };
     }
+    default:
+      return { from: `${t.slice(0, 7)}-01`, to: t };
   }
 }
 
@@ -370,9 +402,30 @@ export default function ReportsView({ navigate }: ViewProps) {
     if (def.type === "employee-earnings" && employeeId) p.employeeId = employeeId;
     if (def.type === "contractor-commissions" && contractor) p.contractor = contractor;
     if (def.type === "property-revenue" && propertyId) p.propertyId = propertyId;
-    if (def.type === "vehicle-profitability" && vehicleId) p.vehicleId = vehicleId;
+    if (def.type === "manpower-statement") {
+      if (propertyId) p.propertyId = propertyId;
+      if (contractor) p.contractor = contractor;
+    }
+    if (def.type === "transport-statement") {
+      if (vehicleId) p.vehicleId = vehicleId;
+    }
     return p;
   }, [def, range, custom, customFrom, customTo, business, date, month, employeeId, propertyId, contractor, vehicleId]);
+
+  const resetFilters = () => {
+    setRange("month");
+    setCustom(false);
+    setCustomFrom(todayStr(-29));
+    setCustomTo(todayStr());
+    setBusiness("");
+    setDate(todayStr());
+    setMonth(toMonth());
+    setEmployeeId("");
+    setPropertyId("");
+    setContractor("");
+    setVehicleId("");
+    toast.info("Filters reset to default");
+  };
 
   const { data, loading, error, reload } = useAsync<ReportResp | null>(
     () => (def ? api.get<ReportResp>(`/api/reports/${def.type}${qs(params)}`) : Promise.resolve(null)),
@@ -691,9 +744,138 @@ export default function ReportsView({ navigate }: ViewProps) {
     w.document.close();
   };
 
+  // Standalone A4 Bank & Cash Book Statement
+  const downloadBankLedger = () => {
+    if (!data) return;
+    const html = buildBankLedgerHtml({
+      businessName: businessName ?? "Garuda ERP Control Center",
+      periodLabel,
+      totals: {
+        inflow: Number(data.totals?.inflow ?? 0),
+        outflow: Number(data.totals?.outflow ?? 0),
+        net: Number(data.totals?.net ?? 0),
+        count: Number(data.totals?.count ?? data.rows.length),
+      },
+      rows: (data.rows as Record<string, unknown>[]).map((r) => ({
+        date: String(r.date ?? ""),
+        category: String(r.category ?? ""),
+        entity: String(r.entity ?? ""),
+        description: String(r.description ?? ""),
+        mode: String(r.mode ?? ""),
+        inflow: Number(r.inflow ?? 0),
+        outflow: Number(r.outflow ?? 0),
+        balance: Number(r.balance ?? 0),
+      })),
+      streams: data.streams,
+    });
+    const w = window.open("", "_blank", "width=940,height=800");
+    if (!w) {
+      toast.error("Popup blocked — allow popups for this site to download the statement.");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
+
+  // Standalone A4 Executive Income Statement (P&L)
+  const downloadExecutivePnl = () => {
+    if (!data?.incomeStatement) return;
+    const html = buildExecutivePnlHtml({
+      businessName: businessName ?? "Garuda ERP",
+      periodLabel,
+      incomeStatement: data.incomeStatement,
+    });
+    const w = window.open("", "_blank", "width=940,height=800");
+    if (!w) {
+      toast.error("Popup blocked — allow popups for this site to download the statement.");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
+
+  // Standalone A4 Manpower Master Statement
+  const downloadManpowerMaster = () => {
+    if (!data) return;
+    const html = buildManpowerMasterHtml({
+      businessName: businessName ?? "Garuda ERP",
+      periodLabel,
+      totals: {
+        shifts: Number(data.totals?.shifts ?? 0),
+        headcount: Number(data.totals?.headcount ?? 0),
+        billing: Number(data.totals?.billing ?? 0),
+        payout: Number(data.totals?.payout ?? 0),
+        contractorCut: Number(data.totals?.contractorCut ?? 0),
+        margin: Number(data.totals?.margin ?? 0),
+        marginPct: Number(data.totals?.marginPct ?? 0),
+      },
+      rows: (data.rows as Record<string, unknown>[]).map((r) => ({
+        propertyName: String(r.propertyName ?? ""),
+        shifts: Number(r.shifts ?? 0),
+        headcount: Number(r.headcount ?? 0),
+        billing: Number(r.billing ?? 0),
+        payout: Number(r.payout ?? 0),
+        contractorCut: Number(r.contractorCut ?? 0),
+        margin: Number(r.margin ?? 0),
+        marginPct: Number(r.marginPct ?? 0),
+      })),
+      contractors: data.contractors,
+    });
+    const w = window.open("", "_blank", "width=940,height=800");
+    if (!w) {
+      toast.error("Popup blocked — allow popups for this site to download the statement.");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
+
+  // Standalone A4 Transport Master Statement
+  const downloadTransportMaster = () => {
+    if (!data) return;
+    const html = buildTransportMasterHtml({
+      businessName: businessName ?? "Garuda ERP",
+      periodLabel,
+      totals: {
+        tripsCount: Number(data.totals?.tripsCount ?? 0),
+        revenue: Number(data.totals?.revenue ?? 0),
+        collected: Number(data.totals?.collected ?? 0),
+        pending: Number(data.totals?.pending ?? 0),
+        opex: Number(data.totals?.opex ?? 0),
+        emi: Number(data.totals?.emi ?? 0),
+        net: Number(data.totals?.net ?? 0),
+        marginPct: Number(data.totals?.marginPct ?? 0),
+      },
+      rows: (data.rows as Record<string, unknown>[]).map((r) => ({
+        vehicleName: String(r.vehicleName ?? ""),
+        registration: String(r.registration ?? ""),
+        tripsCount: Number(r.tripsCount ?? 0),
+        revenue: Number(r.revenue ?? 0),
+        opex: Number(r.opex ?? 0),
+        emi: Number(r.emi ?? 0),
+        net: Number(r.net ?? 0),
+        marginPct: Number(r.marginPct ?? 0),
+      })),
+    });
+    const w = window.open("", "_blank", "width=940,height=800");
+    if (!w) {
+      toast.error("Popup blocked — allow popups for this site to download the statement.");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
+
   return (
     <div className="space-y-4">
-      <PageHeader title="Reports" subtitle="Run, review and export business reports" icon={BarChart3} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <PageHeader title="Reports" subtitle="Enterprise reporting, audit statements & period closure" icon={BarChart3} />
+        <PeriodClosingDialog businessName={businessName} onPeriodClosed={() => void reload()} />
+      </div>
 
       {/* Report selector — 2 cols mobile, 3 cols tablet+ */}
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3" aria-label="Available reports">
@@ -919,6 +1101,14 @@ export default function ReportsView({ navigate }: ViewProps) {
                 >
                   <Printer className="h-4 w-4" aria-hidden />
                   Print / Save PDF
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="col-span-2 min-h-9 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={resetFilters}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+                  Reset / Clear Filters
                 </Button>
               </div>
             </CardContent>
@@ -1484,6 +1674,320 @@ export default function ReportsView({ navigate }: ViewProps) {
                   </Card>
                 )}
 
+                {/* Executive Income Statement (P&L) card */}
+                {def.type === "profitability" && data?.incomeStatement && (
+                  <Card className="overflow-hidden border-primary/40 shadow-sm print:break-inside-avoid">
+                    <div className="h-1 w-full bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-500" aria-hidden />
+                    <CardHeader className="pb-2">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <CardTitle className="flex flex-wrap items-center gap-2 text-base font-bold">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                              <TrendingUp className="h-4 w-4" aria-hidden />
+                            </span>
+                            <span>Executive Income Statement (P&L)</span>
+                            <span className="rounded-full bg-emerald-100 dark:bg-emerald-950/80 px-2.5 py-0.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300">
+                              Audited
+                            </span>
+                          </CardTitle>
+                          <CardDescription className="mt-1 text-xs text-muted-foreground">
+                            Multi-tier operating ledger: Gross Billings, Cost of Labor, Gross Margin, Itemized OPEX and Net Operating Profit · Period: {periodLabel}
+                          </CardDescription>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="no-print h-8 gap-1.5 border-primary/30 hover:bg-primary/5"
+                            onClick={downloadExecutivePnl}
+                            aria-label="Download or print Executive P&L statement"
+                          >
+                            <Printer className="h-3.5 w-3.5 text-primary" aria-hidden />
+                            Print Formal Statement
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4 pt-1">
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                        <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Total Revenue</p>
+                          <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{formatINR(data.incomeStatement.revenue.totalRevenue)}</p>
+                        </div>
+                        <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Cost of Labor</p>
+                          <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{formatINR(data.incomeStatement.directCosts.totalLaborCost)}</p>
+                        </div>
+                        <div className="rounded-xl border border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-2 text-center">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Gross Profit</p>
+                          <p className="mt-0.5 text-base font-extrabold tabular-nums text-emerald-600 dark:text-emerald-400">
+                            {formatINR(data.incomeStatement.grossProfit)} <span className="text-xs font-normal">({data.incomeStatement.grossMarginPct}%)</span>
+                          </p>
+                        </div>
+                        <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Operating OPEX</p>
+                          <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{formatINR(data.incomeStatement.operatingExpenses.totalOpex)}</p>
+                        </div>
+                        <div className={cn(
+                          "rounded-xl border px-3 py-2 text-center",
+                          data.incomeStatement.netProfit >= 0
+                            ? "border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20"
+                            : "border-red-500/30 bg-red-50/50 dark:bg-red-950/20"
+                        )}>
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Net Profit</p>
+                          <p className={cn(
+                            "mt-0.5 text-base font-extrabold tabular-nums",
+                            data.incomeStatement.netProfit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
+                          )}>
+                            {formatINR(data.incomeStatement.netProfit)} <span className="text-xs font-normal">({data.incomeStatement.netMarginPct}%)</span>
+                          </p>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Bank & Cash Book statement card */}
+                {def.type === "bank-ledger" && (
+                  <Card className="overflow-hidden border-primary/40 shadow-sm print:break-inside-avoid">
+                    <div className="h-1 w-full bg-gradient-to-r from-teal-500 via-blue-500 to-indigo-600" aria-hidden />
+                    <CardHeader className="pb-2">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <CardTitle className="flex flex-wrap items-center gap-2 text-base font-bold">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                              <Landmark className="h-4 w-4" aria-hidden />
+                            </span>
+                            <span>Cash & Bank Book Statement</span>
+                            <span className="rounded-full bg-blue-100 dark:bg-blue-950/80 px-2.5 py-0.5 text-xs font-semibold text-blue-800 dark:text-blue-300">
+                              Real-Time Ledger
+                            </span>
+                          </CardTitle>
+                          <CardDescription className="mt-1 text-xs text-muted-foreground">
+                            Complete chronological audit ledger of all bank and liquid cash movements · Period: {periodLabel}
+                          </CardDescription>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="no-print h-8 gap-1.5 border-primary/30 hover:bg-primary/5"
+                            onClick={downloadBankLedger}
+                            aria-label="Download or print Bank Ledger statement"
+                          >
+                            <Printer className="h-3.5 w-3.5 text-primary" aria-hidden />
+                            Print Bank Statement
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4 pt-1">
+                      {data?.totals && (
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                          <div className="rounded-xl border border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-2 text-center">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Total Liquid Inflow</p>
+                            <p className="mt-0.5 text-base font-extrabold tabular-nums text-emerald-600 dark:text-emerald-400">
+                              {formatINR(Number(data.totals.inflow ?? 0))}
+                            </p>
+                          </div>
+                          <div className="rounded-xl border border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 text-center">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Total Liquid Outflow</p>
+                            <p className="mt-0.5 text-base font-extrabold tabular-nums text-amber-600 dark:text-amber-400">
+                              {formatINR(Number(data.totals.outflow ?? 0))}
+                            </p>
+                          </div>
+                          <div className={cn(
+                            "rounded-xl border px-3 py-2 text-center",
+                            Number(data.totals.net ?? 0) >= 0
+                              ? "border-teal-500/30 bg-teal-50/50 dark:bg-teal-950/20"
+                              : "border-red-500/30 bg-red-50/50 dark:bg-red-950/20"
+                          )}>
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Net Cash Flow</p>
+                            <p className={cn(
+                              "mt-0.5 text-base font-extrabold tabular-nums",
+                              Number(data.totals.net ?? 0) >= 0 ? "text-teal-600 dark:text-teal-400" : "text-red-600 dark:text-red-400"
+                            )}>
+                              {formatINR(Number(data.totals.net ?? 0))}
+                            </p>
+                          </div>
+                          <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Transactions Logged</p>
+                            <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">
+                              {String(data.totals.count ?? data.rows.length)}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Manpower Master Statement card */}
+                {def.type === "manpower-statement" && (
+                  <Card className="overflow-hidden border-primary/40 shadow-sm print:break-inside-avoid">
+                    <div className="h-1 w-full bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600" aria-hidden />
+                    <CardHeader className="pb-2">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <CardTitle className="flex flex-wrap items-center gap-2 text-base font-bold">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                              <Briefcase className="h-4 w-4" aria-hidden />
+                            </span>
+                            <span>Manpower Master Statement</span>
+                            <span className="rounded-full bg-amber-100 dark:bg-amber-950/80 px-2.5 py-0.5 text-xs font-semibold text-amber-800 dark:text-amber-300">
+                              Consolidated
+                            </span>
+                          </CardTitle>
+                          <CardDescription className="mt-1 text-xs text-muted-foreground">
+                            Aggregated manpower delivery, client billings, employee payroll, contractor cuts & gross margin · Period: {periodLabel}
+                          </CardDescription>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="no-print h-8 gap-1.5 border-primary/30 hover:bg-primary/5"
+                            onClick={downloadManpowerMaster}
+                            aria-label="Download or print Manpower statement"
+                          >
+                            <Printer className="h-3.5 w-3.5 text-primary" aria-hidden />
+                            Print Master Statement
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4 pt-1">
+                      {data?.totals && (
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                          <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Shifts Delivered</p>
+                            <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{String(data.totals.shifts ?? 0)}</p>
+                          </div>
+                          <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Client Billing</p>
+                            <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{formatINR(Number(data.totals.billing ?? 0))}</p>
+                          </div>
+                          <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Staff Payout</p>
+                            <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{formatINR(Number(data.totals.payout ?? 0))}</p>
+                          </div>
+                          <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Contractor Cut</p>
+                            <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{formatINR(Number(data.totals.contractorCut ?? 0))}</p>
+                          </div>
+                          <div className="rounded-xl border border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-2 text-center">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Gross Agency Margin</p>
+                            <p className="mt-0.5 text-base font-extrabold tabular-nums text-emerald-600 dark:text-emerald-400">
+                              {formatINR(Number(data.totals.margin ?? 0))} <span className="text-xs font-normal">({String(data.totals.marginPct ?? 0)}%)</span>
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      {data?.contractors && data.contractors.length > 0 && (
+                        <div>
+                          <h4 className="mb-2 text-xs font-bold uppercase tracking-wide text-foreground">
+                            Contractor Commissions Rollup ({data.contractors.length} contractors)
+                          </h4>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                            {data.contractors.map((c) => (
+                              <div
+                                key={c.contractor}
+                                onClick={() => {
+                                  setType("contractor-commissions");
+                                  setContractor(c.contractor);
+                                }}
+                                className="cursor-pointer rounded-xl border p-2.5 transition-all hover:border-primary/40 hover:bg-muted/30"
+                              >
+                                <div className="flex items-center justify-between text-xs font-semibold">
+                                  <span className="truncate">{c.contractor}</span>
+                                  <span className="text-primary tabular-nums font-bold">{formatINR(c.commission)}</span>
+                                </div>
+                                <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                                  <span>{c.headcount} workers · {c.shifts} shifts</span>
+                                  <span className="text-[10px] text-primary underline">View Statement →</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Transport Master Statement card */}
+                {def.type === "transport-statement" && (
+                  <Card className="overflow-hidden border-primary/40 shadow-sm print:break-inside-avoid">
+                    <div className="h-1 w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600" aria-hidden />
+                    <CardHeader className="pb-2">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <CardTitle className="flex flex-wrap items-center gap-2 text-base font-bold">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+                              <Truck className="h-4 w-4" aria-hidden />
+                            </span>
+                            <span>Transport Master Statement</span>
+                            <span className="rounded-full bg-indigo-100 dark:bg-indigo-950/80 px-2.5 py-0.5 text-xs font-semibold text-indigo-800 dark:text-indigo-300">
+                              Fleet Rollup
+                            </span>
+                          </CardTitle>
+                          <CardDescription className="mt-1 text-xs text-muted-foreground">
+                            Consolidated fleet billing, trip earnings, fuel/maintenance opex, vehicle loans & net vehicle yield · Period: {periodLabel}
+                          </CardDescription>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="no-print h-8 gap-1.5 border-primary/30 hover:bg-primary/5"
+                            onClick={downloadTransportMaster}
+                            aria-label="Download or print Transport statement"
+                          >
+                            <Printer className="h-3.5 w-3.5 text-primary" aria-hidden />
+                            Print Transport Statement
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4 pt-1">
+                      {data?.totals && (
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                          <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Trips Completed</p>
+                            <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{String(data.totals.tripsCount ?? 0)}</p>
+                          </div>
+                          <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Total Billed</p>
+                            <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{formatINR(Number(data.totals.revenue ?? 0))}</p>
+                          </div>
+                          <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Fleet OPEX</p>
+                            <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{formatINR(Number(data.totals.opex ?? 0))}</p>
+                          </div>
+                          <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Vehicle EMIs</p>
+                            <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{formatINR(Number(data.totals.emi ?? 0))}</p>
+                          </div>
+                          <div className={cn(
+                            "rounded-xl border px-3 py-2 text-center",
+                            Number(data.totals.net ?? 0) >= 0
+                              ? "border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20"
+                              : "border-red-500/30 bg-red-50/50 dark:bg-red-950/20"
+                          )}>
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Net Fleet Margin</p>
+                            <p className={cn(
+                              "mt-0.5 text-base font-extrabold tabular-nums",
+                              Number(data.totals.net ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
+                            )}>
+                              {formatINR(Number(data.totals.net ?? 0))} <span className="text-xs font-normal">({String(data.totals.marginPct ?? 0)}%)</span>
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
                 <Card>
                   <CardContent className="p-3 sm:p-4 space-y-2">
                     <div className="flex items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-xs text-primary">
@@ -1512,6 +2016,12 @@ export default function ReportsView({ navigate }: ViewProps) {
                           setPropertyId(String(rec.propertyId));
                         } else if (def.type === "daily-operations" && rec.propertyId) {
                           setPropertyId(String(rec.propertyId));
+                        } else if (def.type === "manpower-statement" && rec.propertyId) {
+                          setType("property-revenue");
+                          setPropertyId(String(rec.propertyId));
+                        } else if (def.type === "transport-statement" && rec.vehicleId) {
+                          setType("vehicle-profitability");
+                          setVehicleId(String(rec.vehicleId));
                         } else if (rec.tripId) {
                           navigate("trips", { id: String(rec.tripId) });
                         } else if (def.type === "expenses") {

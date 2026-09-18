@@ -103,6 +103,54 @@ export const GET = handleRoute(async ({ req }) => {
     net: round2(rows.reduce((s, r) => s + r.net, 0)),
   };
 
+  // Fetch itemized operating expense breakdown by category for the period
+  const categoryExpenses = await db.expense.groupBy({
+    by: ["categoryName"],
+    where: {
+      date: { gte: from, lte: to },
+      kind: "OPERATING",
+      ...(businessFilter ? { business: businessFilter } : {}),
+    },
+    _sum: { amount: true },
+    _count: { id: true },
+  });
+
+  const expenseBreakdown = categoryExpenses.map((c) => ({
+    category: c.categoryName || "General Expenses",
+    amount: round2(c._sum.amount ?? 0),
+    entriesCount: c._count.id,
+  })).sort((a, b) => b.amount - a.amount);
+
+  const totalRevenue = round2(totals.billing + totals.rentIncome);
+  const totalDirectCost = round2(totals.employeeCost);
+  const grossProfit = round2(totalRevenue - totalDirectCost);
+  const grossMarginPct = totalRevenue > 0 ? Math.round((grossProfit / totalRevenue) * 100) : 0;
+  const netMarginPct = totalRevenue > 0 ? Math.round((totals.net / totalRevenue) * 100) : 0;
+
+  const incomeStatement = {
+    revenue: {
+      manpowerBilling: round2(rows.find((r) => r.business === "MANPOWER")?.billing ?? 0),
+      transportBilling: round2(rows.find((r) => r.business === "TRANSPORT")?.billing ?? 0),
+      rentIncome: round2(totals.rentIncome),
+      totalRevenue,
+    },
+    directCosts: {
+      perShiftWages: round2(cost?.shiftPayout ?? 0),
+      salariedPayroll: round2(cost?.salary ?? 0),
+      overtime: round2(cost?.overtime ?? 0),
+      contractorCommissions: round2(cost?.contractorCut ?? 0),
+      totalLaborCost: totalDirectCost,
+    },
+    grossProfit,
+    grossMarginPct,
+    operatingExpenses: {
+      categories: expenseBreakdown,
+      totalOpex: round2(totals.otherExpenses),
+    },
+    netProfit: totals.net,
+    netMarginPct,
+  };
+
   return {
     columns: [
       { key: "business", label: "Business", type: "string" },
@@ -117,8 +165,21 @@ export const GET = handleRoute(async ({ req }) => {
       { key: "contractorCommission", label: "· Contractor (in cost)", type: "currency" },
     ],
     rows,
-    totals,
-    meta: { from: dayKey(from), to: dayKey(to) },
+    totals: {
+      ...totals,
+      grossProfit,
+      grossMarginPct,
+      netMarginPct,
+    },
+    expenseBreakdown,
+    incomeStatement,
+    meta: {
+      from: dayKey(from),
+      to: dayKey(to),
+      totalRevenue,
+      grossProfit,
+      netProfit: totals.net,
+    },
     note:
       "Net = Billing + Rent income − Employee cost − Other expenses. Employee cost = per-shift payouts + salaried salary + overtime + contractor cuts beyond payout. Contractor commission is paid out of employee payouts (shown for reference, not double-counted); salary/overtime accrue daily for salaried employees.",
   };
