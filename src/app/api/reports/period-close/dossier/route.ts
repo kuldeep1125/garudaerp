@@ -61,7 +61,7 @@ export const GET = handleRoute(async ({ req }) => {
 
   const shiftPayouts = round2(deployments.reduce((s, d) => s + d.payoutAmount, 0));
   const contractorCuts = round2(deployments.reduce((s, d) => s + (d.contractorRateCut ?? 0) * (d.shift === "FULL" ? 2 : 1), 0));
-  const totalLaborCost = round2(cost?.grossPayout ?? (shiftPayouts + contractorCuts));
+  const totalLaborCost = round2(cost?.grossPayout ?? shiftPayouts);
 
   const grossProfit = round2(totalRevenue - totalLaborCost);
 

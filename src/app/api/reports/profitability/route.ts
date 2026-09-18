@@ -135,7 +135,7 @@ export const GET = handleRoute(async ({ req }) => {
       totalRevenue,
     },
     directCosts: {
-      perShiftWages: round2(cost?.shiftPayout ?? 0),
+      perShiftWages: round2(Math.max(0, (cost?.shiftPayout ?? 0) - (cost?.contractorCut ?? 0))),
       salariedPayroll: round2(cost?.salary ?? 0),
       overtime: round2(cost?.overtime ?? 0),
       contractorCommissions: round2(cost?.contractorCut ?? 0),

@@ -1868,7 +1868,7 @@ export default function ReportsView({ navigate }: ViewProps) {
                             <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{formatINR(Number(data.totals.billing ?? 0))}</p>
                           </div>
                           <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">
-                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Staff Payout</p>
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Staff Payout (Net)</p>
                             <p className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">{formatINR(Number(data.totals.payout ?? 0))}</p>
                           </div>
                           <div className="rounded-xl border bg-muted/40 px-3 py-2 text-center">

@@ -900,7 +900,7 @@ export function buildExecutivePnlHtml(p: ExecutivePnlPrintParams): string {
           <td colspan="2">2. COST OF SERVICES &amp; DIRECT LABOR (COGS)</td>
         </tr>
         <tr>
-          <td style="padding-left: 24px">Per-Shift Employee Payouts (Hourly / Shift Wages)</td>
+          <td style="padding-left: 24px">Per-Shift Net Employee Wages (after contractor cut)</td>
           <td class="num right">${esc(inr(is.directCosts.perShiftWages))}</td>
         </tr>
         <tr>
@@ -1041,7 +1041,7 @@ export function buildManpowerMasterHtml(p: ManpowerMasterPrintParams): string {
         <div class="v" style="color: #059669">${esc(inr(p.totals.billing))}</div>
       </div>
       <div class="kpi-box">
-        <div class="k">EMPLOYEE PAYOUTS</div>
+        <div class="k">STAFF NET PAYOUTS</div>
         <div class="v">${esc(inr(p.totals.payout))}</div>
       </div>
       <div class="kpi-box warning">
@@ -1063,7 +1063,7 @@ export function buildManpowerMasterHtml(p: ManpowerMasterPrintParams): string {
           <th class="right">Shifts</th>
           <th class="right">Staff</th>
           <th class="right">Billing</th>
-          <th class="right">Payouts</th>
+          <th class="right">Staff Payout (Net)</th>
           <th class="right">Contractor Cut</th>
           <th class="right">Gross Margin</th>
           <th class="right">Margin %</th>

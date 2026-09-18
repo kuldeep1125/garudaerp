@@ -64,11 +64,12 @@ export const GET = handleRoute(async ({ req }) => {
 
   for (const d of deps) {
     const billing = round2(d.billingAmount);
-    const payout = round2(d.payoutAmount);
+    const grossWage = round2(d.payoutAmount);
     const contractorCut = round2((d.contractorRateCut ?? 0) * (d.shift === "FULL" ? 2 : 1));
+    const netPayout = round2(Math.max(0, grossWage - contractorCut));
 
     totalBilling = round2(totalBilling + billing);
-    totalPayout = round2(totalPayout + payout);
+    totalPayout = round2(totalPayout + netPayout);
     totalContractorCut = round2(totalContractorCut + contractorCut);
 
     // Property rollup
@@ -84,7 +85,7 @@ export const GET = handleRoute(async ({ req }) => {
     prop.shifts += (d.shift === "FULL" ? 2 : 1);
     prop.employees.add(d.employeeId);
     prop.billing = round2(prop.billing + billing);
-    prop.payout = round2(prop.payout + payout);
+    prop.payout = round2(prop.payout + netPayout);
     prop.contractorCut = round2(prop.contractorCut + contractorCut);
     propertyMap.set(d.propertyId, prop);
 
@@ -113,7 +114,7 @@ export const GET = handleRoute(async ({ req }) => {
       properties: new Set<string>(),
     };
     emp.shifts += (d.shift === "FULL" ? 2 : 1);
-    emp.payout = round2(emp.payout + payout);
+    emp.payout = round2(emp.payout + netPayout);
     emp.properties.add(d.property.name);
     employeeMap.set(d.employeeId, emp);
   }
@@ -156,7 +157,7 @@ export const GET = handleRoute(async ({ req }) => {
       { key: "shifts", label: "Shifts Deployed", type: "number" },
       { key: "headcount", label: "Staff Count", type: "number" },
       { key: "billing", label: "Billing Revenue", type: "money" },
-      { key: "payout", label: "Employee Payouts", type: "money" },
+      { key: "payout", label: "Staff Payouts (Net)", type: "money" },
       { key: "contractorCut", label: "Contractor Cuts", type: "money" },
       { key: "margin", label: "Gross Margin", type: "money" },
       { key: "marginPct", label: "Margin %", type: "number" },
